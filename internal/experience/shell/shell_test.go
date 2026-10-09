@@ -163,6 +163,11 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { client.Close() })
+	// Issue #132: one 15s budget for the whole lifecycle starved later
+	// awaits whenever a loaded CI runner burned the budget early. Instead,
+	// give the program the test-scoped context (the model already bounds
+	// every IPC call with its own 3-10s deadline) and give each await its
+	// own deadline, so one slow stage cannot starve the rest.
 	ctx := t.Context()
 	m := &observedModel{Model: New(ctx, client, rt.Done()), results: make(chan resultMsg, 20), views: make(chan viewMsg, 10)}
 	output := &lockedBuffer{}
@@ -170,10 +175,17 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, err := p.Run(); done <- err }()
 	t.Cleanup(func() { p.Kill(); <-done })
-	const stepTimeout = 30 * time.Second
-	await := func() resultMsg {
+	// perStep must sit strictly above the model's largest production
+	// deadline on awaited paths (10s in Init/submit/presentation action) so
+	// a production failure surfaces as its real error (e.g.
+	// "ipc: context deadline exceeded") before the await's generic timeout
+	// fires. The await timer also starts earlier than the production timer
+	// (it is armed before tea dispatches the key), so headroom is required,
+	// not just >=.
+	const perStep = 30 * time.Second
+	await := func(step string) resultMsg {
 		t.Helper()
-		timer := time.NewTimer(stepTimeout)
+		timer := time.NewTimer(perStep)
 		defer timer.Stop()
 		select {
 		case r := <-m.results:
@@ -182,25 +194,25 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 			}
 			return r
 		case <-timer.C:
-			t.Fatal("Bubble Tea result timed out")
+			t.Fatalf("Bubble Tea result timed out after %v at step %q", perStep, step)
 			return resultMsg{}
 		}
 	}
-	await() // Init's app list.
+	await("init app list") // Init's app list.
 	p.Send(tea.WindowSizeMsg{Width: 80, Height: 24})
-	submit := func(line string) resultMsg {
+	submit := func(line, step string) resultMsg {
 		t.Helper()
 		p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(line)})
 		p.Send(tea.KeyMsg{Type: tea.KeyEnter})
-		return await()
+		return await(step)
 	}
-	if r := submit("apps"); !strings.Contains(r.text, "com.gostalgia.echo") {
+	if r := submit("apps", "apps"); !strings.Contains(r.text, "com.gostalgia.echo") {
 		t.Fatal("demo missing")
 	}
-	if r := submit("echo fabulous"); r.text != "fabulous   [echo #1]" {
+	if r := submit("echo fabulous", "echo fabulous"); r.text != "fabulous   [echo #1]" {
 		t.Fatal(r.text)
 	}
-	r := submit("call app/com.gostalgia.echo/identity")
+	r := submit("call app/com.gostalgia.echo/identity", "call identity")
 	var identity struct {
 		Capabilities []string `json:"capabilities"`
 	}
@@ -210,20 +222,20 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	if len(identity.Capabilities) != 1 || identity.Capabilities[0] != "ipc" {
 		t.Fatalf("demo grant = %v", identity.Capabilities)
 	}
-	submit("stop com.gostalgia.echo")
+	submit("stop com.gostalgia.echo", "stop")
 	if rt.Apps.IsRunning("com.gostalgia.echo") {
 		t.Fatal("stop left app running")
 	}
-	submit("launch com.gostalgia.echo")
+	submit("launch com.gostalgia.echo", "launch")
 	if !rt.Apps.IsRunning("com.gostalgia.echo") {
 		t.Fatal("launch failed")
 	}
-	if r := submit("echo renewed"); !strings.Contains(r.text, "echo #1") {
+	if r := submit("echo renewed", "echo renewed"); !strings.Contains(r.text, "echo #1") {
 		t.Fatal("instance state not reset")
 	}
-	awaitView := func() viewMsg {
+	awaitView := func(step string) viewMsg {
 		t.Helper()
-		timer := time.NewTimer(stepTimeout)
+		timer := time.NewTimer(perStep)
 		defer timer.Stop()
 		select {
 		case v := <-m.views:
@@ -232,44 +244,44 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 			}
 			return v
 		case <-timer.C:
-			t.Fatal("presentation timed out")
+			t.Fatalf("presentation timed out after %v at step %q", perStep, step)
 			return viewMsg{}
 		}
 	}
 	p.Send(tea.KeyMsg{Type: tea.KeyF4})
-	if v := awaitView(); v.data.Title != "Echo" || v.data.State != sdk.ViewReady {
+	if v := awaitView("open Echo view"); v.data.Title != "Echo" || v.data.State != sdk.ViewReady {
 		t.Fatal("Echo view did not open through the shell")
 	}
 	p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("from the app view")})
 	p.Send(tea.KeyMsg{Type: tea.KeyEnter})
-	if v := awaitView(); !v.action || v.data.Status != "2 echoes this launch" || v.data.Items[0].Detail != "from the app view" {
+	if v := awaitView("shell action through app view"); !v.action || v.data.Status != "2 echoes this launch" || v.data.Items[0].Detail != "from the app view" {
 		t.Fatal("shell action did not reach the owning app over IPC")
 	}
 	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
-	if r := submit("ps"); !strings.Contains(r.text, "com.gostalgia.echo") || !strings.Contains(r.text, "STATE / STATUS") {
+	if r := submit("ps", "ps"); !strings.Contains(r.text, "com.gostalgia.echo") || !strings.Contains(r.text, "STATE / STATUS") {
 		t.Fatalf("ps output unexpected: %s", r.text)
 	}
-	if r := submit("logs 1"); !strings.Contains(r.text, "PROCESS 1") {
+	if r := submit("logs 1", "logs"); !strings.Contains(r.text, "PROCESS 1") {
 		t.Fatalf("logs output unexpected: %s", r.text)
 	}
-	if r := submit(`cd C:\users\guest\documents`); r.cwd != "/users/guest/documents" {
+	if r := submit(`cd C:\users\guest\documents`, "cd"); r.cwd != "/users/guest/documents" {
 		t.Fatal(r.cwd)
 	}
-	submit("dir")
+	submit("dir", "dir")
 	p.Send(tea.KeyMsg{Type: tea.KeyF2})
 	// Filter the shelf to Echo: the first app by ID is not necessarily Echo.
 	p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("echo")})
 	p.Send(tea.KeyMsg{Type: tea.KeyF3})
-	await() // stop through the app shelf
+	await("shelf stop") // stop through the app shelf
 	p.Send(tea.KeyMsg{Type: tea.KeyEnter})
-	await() // relaunch through the app shelf
+	await("shelf relaunch") // relaunch through the app shelf
 	// The first Esc clears the shelf filter; the second returns to the prompt.
 	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
 	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
-	submit("exit")
+	submit("exit", "exit")
 	// Bubble Tea flushes its renderer on quit; verify the actual rendered UI.
-	timer := time.NewTimer(stepTimeout)
-	defer timer.Stop()
+	exitTimer := time.NewTimer(perStep)
+	defer exitTimer.Stop()
 	select {
 	case err := <-done:
 		if err != nil {
@@ -277,8 +289,8 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 		}
 		// Replace the cleanup's consumed channel result.
 		done <- nil
-	case <-timer.C:
-		t.Fatal("program did not exit")
+	case <-exitTimer.C:
+		t.Fatalf("program did not exit within %v", perStep)
 	}
 	if !strings.Contains(output.String(), "G O S T A L G I A") {
 		t.Fatal("Bubble Tea did not render the styled shell")
