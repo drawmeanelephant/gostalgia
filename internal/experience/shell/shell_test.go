@@ -545,6 +545,131 @@ func TestThemeCommandPersistsPreference(t *testing.T) {
 	}
 }
 
+// User themes live in /config/themes and resolve through the theme
+// service: `theme NAME` fetches the definition via theme/get, applies it,
+// and persists the canonical name; a bare `theme` lists user themes next
+// to the built-ins.
+func TestThemeCommandUserTheme(t *testing.T) {
+	ctx := context.Background()
+	var saved map[string]any
+	caller := callerFunc(func(ctx context.Context, method string, params, out any) error {
+		switch method {
+		case "theme/list":
+			return writeJSON(out, map[string]any{"themes": []map[string]any{
+				{"name": "nostalgia", "source": "builtin"},
+				{"name": "ocean", "source": "user"},
+			}})
+		case "theme/get":
+			return writeJSON(out, map[string]any{
+				"name": "ocean", "source": "user", "file": "ocean.json",
+				"definition": map[string]any{
+					"name": "ocean",
+					"palette": map[string]any{
+						"canvas": "#10202B", "surface": "#1A2E3C", "text": "#E8F1F2",
+						"muted": "#8FA6AD", "accent": "#4FB3BF", "border": "#3E5C66",
+						"header": "#14506B", "header_text": "#E8F1F2",
+					},
+				},
+			})
+		case "config/set":
+			raw, _ := json.Marshal(params)
+			_ = json.Unmarshal(raw, &saved)
+			return nil
+		}
+		return fmt.Errorf("unexpected method %s", method)
+	})
+	m := New(ctx, caller, nil)
+
+	// The bare command lists the user theme next to the built-ins.
+	res := execute(ctx, m.client, m.cwd, "theme")
+	m.Update(res)
+	foundList := false
+	for _, e := range m.transcript {
+		foundList = foundList || strings.Contains(e.text, "Available themes: nostalgia, ocean")
+	}
+	if !foundList {
+		t.Fatalf("theme list missing user theme: %v", m.transcript)
+	}
+
+	// Selecting it resolves via theme/get and persists the canonical name.
+	res = execute(ctx, m.client, m.cwd, "theme ocean")
+	if res.userTheme == nil {
+		t.Fatal("theme ocean did not resolve a user theme")
+	}
+	_, cmd := m.Update(res)
+	if m.Theme().Name != "ocean" {
+		t.Fatalf("theme name = %s, want ocean", m.Theme().Name)
+	}
+	if cmd == nil {
+		t.Fatal("user theme change returned no persist command")
+	}
+	if _, ok := cmd().(themeSavedMsg); !ok {
+		t.Fatal("persist cmd did not produce themeSavedMsg")
+	}
+	if saved["value"] != "ocean" {
+		t.Fatalf("config/set value = %v, want ocean", saved["value"])
+	}
+}
+
+// The config poll resolves a user theme asynchronously: a non-built-in
+// config value schedules theme/get and the resolved tokens apply when the
+// lookup returns.
+func TestConfigPollResolvesUserTheme(t *testing.T) {
+	ctx := context.Background()
+	caller := callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if method != "theme/get" {
+			return fmt.Errorf("unexpected method %s", method)
+		}
+		return writeJSON(out, map[string]any{
+			"name": "ocean", "source": "user",
+			"definition": map[string]any{
+				"name": "ocean",
+				"palette": map[string]any{
+					"canvas": "#10202B", "surface": "#1A2E3C", "text": "#E8F1F2",
+					"muted": "#8FA6AD", "accent": "#4FB3BF", "border": "#3E5C66",
+					"header": "#14506B", "header_text": "#E8F1F2",
+				},
+			},
+		})
+	})
+	m := New(ctx, caller, nil)
+
+	_, cmd := m.Update(configUpdateMsg{theme: "ocean"})
+	if cmd == nil {
+		t.Fatal("config poll did not schedule a user theme lookup")
+	}
+	msg, ok := cmd().(themeResolveMsg)
+	if !ok || msg.theme == nil {
+		t.Fatalf("lookup returned %+v", msg)
+	}
+	m.Update(msg)
+	if m.Theme().Name != "ocean" {
+		t.Fatalf("theme name = %s, want ocean", m.Theme().Name)
+	}
+
+	// A failed lookup is remembered: the name is not retried on every poll.
+	failed := callerFunc(func(ctx context.Context, method string, params, out any) error {
+		return fmt.Errorf("theme/get: unknown theme")
+	})
+	m.client = failed
+	m.pendingTheme = ""
+	_, cmd = m.Update(configUpdateMsg{theme: "ghost"})
+	if cmd == nil {
+		t.Fatal("unknown theme did not schedule a lookup")
+	}
+	m.Update(cmd())
+	if m.unresolvedTheme != "ghost" {
+		t.Fatalf("unresolvedTheme = %q, want ghost", m.unresolvedTheme)
+	}
+	_, cmd = m.Update(configUpdateMsg{theme: "ghost"})
+	if cmd != nil {
+		t.Fatal("unresolved theme was retried on the next poll")
+	}
+	if m.Theme().Name != "ocean" {
+		t.Fatalf("theme name = %s, want ocean still", m.Theme().Name)
+	}
+}
+
 func TestTerminalRestoration(t *testing.T) {
 	var buf bytes.Buffer
 	Restore(&buf)
