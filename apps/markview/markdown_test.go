@@ -148,15 +148,171 @@ func TestRenderRulesAndParagraphs(t *testing.T) {
 func TestRenderTable(t *testing.T) {
 	src := "| name | size |\n| --- | ---: |\n| a.md | 10 |\n| b.md | 20 |\n"
 	rows := render(t, src)
-	if len(rows) != 3 {
+	if len(rows) != 4 {
 		t.Fatalf("rows = %v", labels(rows))
 	}
-	if rows[0].label != "name │ size" || rows[1].label != "a.md │ 10" || rows[2].label != "b.md │ 20" {
-		t.Fatalf("labels = %v", labels(rows))
+	// Columns pad to the widest cell; the delimiter row renders as a
+	// separator carrying its own source line, and `---:` right-aligns.
+	want := []string{"name │ size", "─────┼────:", "a.md │   10", "b.md │   20"}
+	for i, w := range want {
+		if rows[i].label != w {
+			t.Fatalf("row %d label = %q, want %q (all: %v)", i, rows[i].label, w, labels(rows))
+		}
 	}
 	for _, r := range rows {
 		if r.kind != rowTable {
 			t.Fatalf("table row kind = %+v", r)
+		}
+	}
+	if rows[1].line != 2 {
+		t.Fatalf("separator row should map to the delimiter source line, got %d", rows[1].line)
+	}
+}
+
+func TestTableColumnAlignment(t *testing.T) {
+	src := "| left | center | right |\n| :--- | :----: | ---: |\n| a | b | c |\n"
+	rows := render(t, src)
+	want := []string{
+		"left │ center │ right",
+		":────┼─:────:─┼─────:",
+		"a    │   b    │     c",
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	for i, w := range want {
+		if rows[i].label != w {
+			t.Fatalf("row %d label = %q, want %q (all: %v)", i, rows[i].label, w, labels(rows))
+		}
+	}
+}
+
+func TestTableEscapedPipe(t *testing.T) {
+	// `\|` is a literal pipe inside its cell, not a column boundary.
+	src := "| a \\| b | c |\n| --- | --- |\n| 1 | 2 |\n"
+	rows := render(t, src)
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	if rows[0].label != "a | b │ c" {
+		t.Fatalf("header label = %q", rows[0].label)
+	}
+	if rows[2].label != "1     │ 2" {
+		t.Fatalf("body label = %q", rows[2].label)
+	}
+}
+
+func TestTableShortAndLongRows(t *testing.T) {
+	// GFM normalizes ragged rows: short rows pad with empty cells, excess
+	// cells drop.
+	src := "| a | b |\n| - | - |\n| 1 |\n| 1 | 2 | 3 |\n"
+	rows := render(t, src)
+	want := []string{"a │ b", "──┼──", "1 │", "1 │ 2"}
+	if len(rows) != len(want) {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	for i, w := range want {
+		if rows[i].label != w {
+			t.Fatalf("row %d label = %q, want %q (all: %v)", i, rows[i].label, w, labels(rows))
+		}
+	}
+}
+
+func TestLazyQuoteContinuation(t *testing.T) {
+	// A paragraph inside a quote keeps running on lines without `>` until
+	// a blank line or a new block start.
+	rows := render(t, "> quoted\nlazy line\n\noutside\n")
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	if rows[1].label != "│ lazy line" || rows[1].kind != rowQuote {
+		t.Fatalf("lazy quote row = %+v", rows[1])
+	}
+	if rows[2].kind == rowQuote {
+		t.Fatalf("blank line should close the quote: %+v", rows[2])
+	}
+	// A block start ends the quote instead of joining it.
+	rows = render(t, "> quoted\n- item\n")
+	if !hasLabel(rows, "• item") {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+}
+
+func TestListItemContinuation(t *testing.T) {
+	// A paragraph line under an item stays inside it without repeating the
+	// marker; blank-separated lines indented to the content column do too.
+	rows := render(t, "- one\nlazy tail\n\n  second para\n\nout\n")
+	if len(rows) != 4 {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	if rows[1].label != "  lazy tail" || rows[1].kind != rowList {
+		t.Fatalf("lazy continuation = %+v", rows[1])
+	}
+	if rows[2].label != "  second para" || rows[2].kind != rowList {
+		t.Fatalf("indented continuation = %+v", rows[2])
+	}
+	if rows[3].kind == rowList || rows[3].label != "out" {
+		t.Fatalf("dedented paragraph should leave the item: %+v", rows[3])
+	}
+}
+
+func TestIndentedCodeInsideListItem(t *testing.T) {
+	// Four columns past the item's content column is code inside the item,
+	// not a top-level code block.
+	rows := render(t, "- setup\n\n      make all\n      make test\n")
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	for _, want := range []string{"┃ make all", "┃ make test"} {
+		if !hasLabel(rows, want) {
+			t.Fatalf("missing %q in %v", want, labels(rows))
+		}
+	}
+	if k := kindOf(rows, "┃ make all"); k != rowCode {
+		t.Fatalf("item code kind = %v", k)
+	}
+}
+
+func TestNestedItemContinuation(t *testing.T) {
+	// Continuation indents track the innermost open item.
+	rows := render(t, "- outer\n  - inner\ntail\n")
+	if len(rows) != 3 {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	if rows[2].label != "    tail" || rows[2].kind != rowList {
+		t.Fatalf("nested continuation = %+v", rows[2])
+	}
+}
+
+func TestFencedCodeDedent(t *testing.T) {
+	// An indented opening fence dedents its body by up to the same indent.
+	rows := render(t, "  ```\n  x = 1\n    y = 2\n  ```\n")
+	if !hasLabel(rows, "┃ x = 1") || !hasLabel(rows, "┃   y = 2") {
+		t.Fatalf("dedented code rows = %v", labels(rows))
+	}
+}
+
+func TestLinkDefinitions(t *testing.T) {
+	rows := render(t, "See [ref].\n\n[ref]: https://example.com \"Title\"\n\nafter\n")
+	if !hasLabel(rows, "↳ [ref]: https://example.com \"Title\"") {
+		t.Fatalf("rows = %v", labels(rows))
+	}
+	if k := kindOf(rows, "↳ [ref]: https://example.com \"Title\""); k != rowDef {
+		t.Fatalf("linkdef kind = %v", k)
+	}
+	// A definition interrupts a pending paragraph rather than joining it.
+	rows = render(t, "para\n[id]: /x\n")
+	if len(rows) != 2 || rows[1].kind != rowDef {
+		t.Fatalf("rows = %+v", rows)
+	}
+	// `[]:` and `[id]:` with no destination are paragraph text.
+	rows = render(t, "[]: /x\n\n[nodest]:\n")
+	if hasLabel(rows, "↳ []: /x") || kindOf(rows, "[]: /x") == rowDef {
+		t.Fatalf("empty label parsed as linkdef: %v", labels(rows))
+	}
+	for _, r := range rows {
+		if r.kind == rowDef {
+			t.Fatalf("missing destination parsed as linkdef: %+v", r)
 		}
 	}
 }
