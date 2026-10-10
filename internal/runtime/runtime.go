@@ -390,6 +390,11 @@ func (rt *Runtime) Shutdown(reason string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
+		// Block new application launches for the whole sequence: a launch
+		// accepted now would land after the Running() snapshot and be
+		// orphaned. The process manager itself refuses registrations once
+		// flagged, so a racing launch can never outlive shutdown.
+		rt.Procs.BeginShutdown()
 		for id := range rt.Apps.Running() {
 			if err := rt.Apps.Stop(id, 5*time.Second); err != nil {
 				rt.Log.Warn("application shutdown problem", "app", id, "err", err)

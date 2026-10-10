@@ -302,10 +302,19 @@ func (m *Manager) publish(p *Process) {
 	})
 }
 
-func (m *Manager) add(p *Process) {
+// add registers p, or refuses once shutdown began. Checking while holding
+// the registry lock makes the decision atomic with List snapshots: a
+// process that slips past this check is always visible to StopAll, and one
+// refused here can never linger unseen. Callers must undo a refused start
+// (kill spawned children, cancel contexts).
+func (m *Manager) add(p *Process) bool {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.shuttingDown.Load() {
+		return false
+	}
 	m.procs[p.info.ID] = p
-	m.mu.Unlock()
+	return true
 }
 
 // StartInProc starts run as an environment process of kind "inproc". The
@@ -344,7 +353,11 @@ func (m *Manager) StartInProc(ctx context.Context, spec Spec, run func(p *Proces
 		Isolation: inprocIsolation,
 		Policy:    &spec.Policy,
 	}
-	m.add(p)
+	if !m.add(p) {
+		masterCancel()
+		runCancel()
+		return nil, errors.New("process: environment is shutting down")
+	}
 	m.publish(p) // starting
 	p.setState(StateRunning, nil)
 	m.publish(p)
@@ -704,7 +717,14 @@ func (m *Manager) StartChild(ctx context.Context, spec Spec) (*Process, error) {
 	p.cmd = cmd
 	p.pid = cmd.Process.Pid
 	p.info.State = StateRunning
-	m.add(p)
+	if !m.add(p) {
+		// Shutdown began while the child was being spawned: it is in no
+		// registry and no supervisor is watching, so kill it ourselves.
+		_ = platform.KillProcessTree(cmd)
+		masterCancel()
+		runCancel()
+		return nil, errors.New("process: environment is shutting down")
+	}
 	m.publish(p) // starting
 	m.publish(p) // running
 	m.log.Info("child process started", "pid", id, "name", spec.Name)
@@ -967,7 +987,7 @@ func (m *Manager) Stop(id int32, timeout time.Duration) error {
 // StopAll stops every live process, best effort. Used at shutdown.
 // It sets shuttingDown = true to ensure no supervised processes restart.
 func (m *Manager) StopAll(timeout time.Duration) {
-	m.shuttingDown.Store(true)
+	m.BeginShutdown()
 
 	for _, info := range m.List() {
 		if info.State != StateRunning && info.State != StateStarting && info.State != StateRestarting {
@@ -986,6 +1006,21 @@ func (m *Manager) Shutdown(timeout time.Duration) {
 
 func (m *Manager) isShuttingDown() bool {
 	return m.shuttingDown.Load()
+}
+
+// IsShuttingDown reports whether the manager is draining (set by
+// BeginShutdown or StopAll). Coordinated start paths — application launch —
+// consult it to refuse new work during the shutdown sequence.
+func (m *Manager) IsShuttingDown() bool {
+	return m.shuttingDown.Load()
+}
+
+// BeginShutdown marks the manager as draining before any process is
+// stopped: supervised processes stop restarting, StartInProc/StartChild
+// registrations are refused, and callers checking IsShuttingDown see the
+// shutdown across its whole sequence. StopAll implies it.
+func (m *Manager) BeginShutdown() {
+	m.shuttingDown.Store(true)
 }
 
 // Get returns a process by ID.

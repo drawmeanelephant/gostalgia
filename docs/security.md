@@ -58,7 +58,14 @@ The runtime distinguishes three classes of actors:
   Gostalgia.
 - **Authority:** Least privilege. Applications have **no ambient authority**.
   They cannot access the host filesystem, execute arbitrary processes, or
-  invoke privileged system methods (`sys/shutdown`, `proc/stop`, `fs/grant`).
+  invoke the operator-only grant-management methods (`fs/grant`,
+  `fs/grant/revoke`), and no route accepts the `admin` capability from an app
+  principal. Every route an app can reach is gated by a capability its
+  manifest must declare — **including lifecycle routes**: `shutdown` permits
+  `sys/shutdown` (terminates the entire environment), and `proc.stop` permits
+  `proc/stop` and `app/stop` against **any** runtime-managed process with no
+  per-app ownership scoping. These are high-impact grants; operators should
+  weigh them during package permission review.
 - **Capability Scoping:**
   - Manifest grants: Applications declare requested capabilities (`ipc`,
     `fs.read`, `fs.write`, `proc.list`, `proc.stop`, `app.list`, `app.launch`,
@@ -167,8 +174,8 @@ Gostalgia supports four explicit isolation levels declared in application manife
 |---|---|---|---|---|---|
 | `inproc` | Logical only (SDK capability filters) | Allowed (host) | N/A (same process) | Allowed (host) | None |
 | `trusted` | Process boundary (sanitized env, process group) | Allowed (host) | Allowed (supervised) | Permitted (user perms) | None |
-| `sandbox` | OS container / sandbox confinement | **Denied** (kernel/profile) | Allowed (supervised) | Restricted | Memory & FD caps |
-| `strict` | Maximal containment | **Denied** (kernel/profile) | **Denied** (blocked/killed) | **Denied** (read-only) | Strict memory, FDs, CPU |
+| `sandbox` | OS container / sandbox confinement | **Denied** (kernel/profile) | Allowed (supervised) | Restricted | FD, CPU, proc caps (Linux also memory) |
+| `strict` | Maximal containment | **Denied** (kernel/profile) | **Denied** (blocked/killed) | **Denied** (read-only) | Strict FDs, CPU, procs (Linux also memory) |
 
 ### Detailed Confinement Mechanics
 
@@ -217,6 +224,15 @@ Gostalgia supports four explicit isolation levels declared in application manife
     `require-not` filters. Host filesystem writes are permitted except into
     masked paths. The runtime's per-boot IPC socket directory is masked the
     same way, so a confined app cannot discover or unlink live socket files.
+  - Resource limits are applied by a self-limiting trampoline: macOS has no
+    `prlimit64` and Seatbelt cannot set rlimits, so the confined child is
+    launched as a re-exec of the runtime binary inside the sandbox
+    (`GOSTALGIA_SANDBOX_INIT` payload). The trampoline applies the
+    enforceable limits (`RLIMIT_NOFILE`, `RLIMIT_CPU`, `RLIMIT_NPROC`) to
+    itself and then execs the app; any failure aborts the launch.
+    **`MaxMemoryBytes` is not enforceable on macOS** — XNU rejects
+    `setrlimit` for `RLIMIT_AS`/`RLIMIT_DATA` — so it is ignored, and
+    `GetHostSecurityCapabilities` honestly reports `ResourceLimits=false`.
   - The declared boundary is enforced, not merely documented: if the host
     lacks `sandbox-exec` the launch fails closed.
 
@@ -241,9 +257,12 @@ Gostalgia supports four explicit isolation levels declared in application manife
       namespace; `AllowedPaths` are re-mounted writable. `MaskedPaths` stay
       hidden.
   - **Tighter Resource Limits:**
-    - Maximum file descriptors capped at 512 (`RLIMIT_NOFILE`).
-    - Virtual memory capped at 2 GB (`RLIMIT_AS`).
-    - CPU execution budget enforced via `RLIMIT_CPU`.
+    - Linux (`prlimit64`): maximum file descriptors capped at 512
+      (`RLIMIT_NOFILE`), virtual memory capped at 2 GB (`RLIMIT_AS`), and
+      CPU execution budget enforced via `RLIMIT_CPU`.
+    - macOS (launch trampoline): `RLIMIT_NOFILE` capped at 512 plus any
+      configured `RLIMIT_CPU`/`RLIMIT_NPROC`; `RLIMIT_AS` does not exist
+      on XNU, so memory caps are not enforced (see limitation 8).
 
 ### Fail-Closed Execution Guarantee
 
@@ -352,6 +371,17 @@ explicitly outside Gostalgia's protection guarantees:
    A confined app can `stat()` those directories — learning names and
    attributes one level up the whitelist trees — but cannot list them or
    read contents. Directory listing (`file-read-data`) remains denied.
+
+8. **macOS Memory Limits Unenforceable:**
+   XNU does not implement `RLIMIT_AS` or `RLIMIT_DATA` (`setrlimit` returns
+   `EINVAL`), Seatbelt exposes no resource-limit operation, and macOS has no
+   `prlimit64`-style API for imposing limits on another process.
+   `ExecutionPolicy.MaxMemoryBytes` is therefore ignored on macOS, and
+   `GetHostSecurityCapabilities().ResourceLimits` reports `false` on darwin
+   so the capability matrix never promises a limit the host cannot enforce.
+   The limits XNU does honor (`MaxOpenFiles` → `RLIMIT_NOFILE`,
+   `MaxCPUSeconds` → `RLIMIT_CPU`, `MaxProcesses` → `RLIMIT_NPROC`) are
+   applied inside the sandbox by the launch trampoline.
 
 ---
 
