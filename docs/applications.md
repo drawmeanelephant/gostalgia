@@ -335,7 +335,7 @@ builtin manifests are approved by compilation/registration.
 | `fs.write` | `fs/write` | `{path,data_base64}` | `{path,written}` |
 | `fs.write` | `fs/mkdir`, `fs/remove` | `{path}` | `{path,created:true}` / `{path,removed:true}` |
 | `proc.list` | `proc/list` | none | array `{id,name,kind,state,caps,...}` |
-| `proc.stop` | `proc/stop` | `{id,timeout_seconds?}` (default 5) | `{id,stopped:true}` |
+| `proc.stop` | `proc/stop` | `{id,timeout_seconds?}` (default 5, max 60) | `{id,stopped:true}` |
 | `app.list` | `app/list` | none | array `{manifest,running,pid?}` |
 | `app.launch` | `app/launch` | `{"id":"com.example.counter"}` | `{id,pid}` |
 | `proc.stop` | `app/stop` | `{id}` (app ID string) | `{id,stopped:true}` |
