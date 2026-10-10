@@ -5,21 +5,69 @@ package platform
 import (
 	"crypto/rand"
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"syscall"
 )
 
+var (
+	ipcDirOnce sync.Once
+	ipcDirPath string
+	ipcDirErr  error
+)
+
+// ipcSocketDir returns the private directory that holds every unix socket
+// the runtime binds. It is created once per process under os.TempDir() with
+// owner-only permissions, so nothing outside the runtime can predict a
+// socket path, pre-plant an occupant, or unlink a live socket from under
+// the listener — the shared-temp-dir boot DoS and IPC-outage vectors.
+// POSIX permissions cannot exclude same-uid processes, so sandbox launch
+// policies also mask the directory (see IPCSocketDir callers).
+func ipcSocketDir() (string, error) {
+	ipcDirOnce.Do(func() {
+		ipcDirPath, ipcDirErr = os.MkdirTemp("", "gostalgia-ipc-")
+		if ipcDirErr != nil {
+			return
+		}
+		if err := os.Chmod(ipcDirPath, 0o700); err != nil {
+			_ = os.Remove(ipcDirPath)
+			ipcDirPath = ""
+			ipcDirErr = err
+		}
+	})
+	return ipcDirPath, ipcDirErr
+}
+
+// IPCSocketDir returns the private per-process directory that holds the
+// runtime's unix socket files, creating it on first call. It is exported so
+// sandbox policies can mask it for confined children. Empty on error.
+func IPCSocketDir() string {
+	dir, err := ipcSocketDir()
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
 // ListenIPC opens the environment's local IPC listener. Unix-like hosts
-// use a domain socket whose path is derived from the environment root.
-// The path is kept short deliberately: domain socket paths are limited to
-// about 104 bytes on macOS, and environment roots can live deep in temp
-// or home directories.
+// use a domain socket inside a private per-boot directory, named by a hash
+// of the environment root. The name is kept short deliberately: domain
+// socket paths are limited to about 104 bytes on macOS, and environment
+// roots can live deep in temp or home directories.
 func ListenIPC(root string) (net.Listener, string, error) {
+	dir, err := ipcSocketDir()
+	if err != nil {
+		return nil, "", fmt.Errorf("platform: ipc socket dir: %w", err)
+	}
 	sum := sha1.Sum([]byte(root))
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("gostalgia-%x.sock", sum[:5]))
+	path := filepath.Join(dir, fmt.Sprintf("gostalgia-%x.sock", sum[:5]))
+	// Only this process can write the directory, so a path occupant can
+	// only be a stale socket of ours: safe to replace, and a remove
+	// failure is a real error, not an attacker-planted boot blocker.
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return nil, "", err
 	}
@@ -35,24 +83,36 @@ func ListenIPC(root string) (net.Listener, string, error) {
 }
 
 // ListenChildIPC creates a dedicated IPC socket for a child application process.
-// The socket is created in os.TempDir() with a short name and 0600 permissions.
+// The socket is created inside the private IPC directory with a random name
+// and 0600 permissions. A name collision yields a fresh name rather than an
+// unlink of whatever holds the path.
 func ListenChildIPC(appID string) (net.Listener, string, error) {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return nil, "", fmt.Errorf("platform: rand: %w", err)
-	}
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("gs-app-%x.sock", b))
-	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	dir, err := ipcSocketDir()
 	if err != nil {
-		return nil, "", fmt.Errorf("platform: listen child unix %s: %w", path, err)
+		return nil, "", fmt.Errorf("platform: ipc socket dir: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
-		_ = os.Remove(path)
-		return nil, "", err
+	const attempts = 8
+	for i := 0; i < attempts; i++ {
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err != nil {
+			return nil, "", fmt.Errorf("platform: rand: %w", err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("gs-app-%x.sock", b))
+		ln, err := net.Listen("unix", path)
+		if err != nil {
+			if errors.Is(err, syscall.EADDRINUSE) && i < attempts-1 {
+				continue
+			}
+			return nil, "", fmt.Errorf("platform: listen child unix %s: %w", path, err)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			ln.Close()
+			_ = os.Remove(path)
+			return nil, "", err
+		}
+		return ln, "unix://" + path, nil
 	}
-	return ln, "unix://" + path, nil
+	return nil, "", fmt.Errorf("platform: listen child unix: exhausted name retries")
 }
 
 // ChildIPC returns a pre-connected anonymous IPC channel for a sandboxed

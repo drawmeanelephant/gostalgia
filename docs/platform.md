@@ -7,7 +7,7 @@ abstract, kept deliberately thin.
 
 | Concern | macOS/Linux | Windows |
 |---|---|---|
-| IPC listener | unix domain socket (`$TMPDIR/gostalgia-<hash>.sock`, derived from the root to respect the 104-byte socket path limit) | loopback TCP, ephemeral port |
+| IPC listener | unix domain socket inside a private per-boot directory (`$TMPDIR/gostalgia-ipc-*/gostalgia-<hash>.sock`, mode `0700`; the hash derives from the root to respect the 104-byte socket path limit) | loopback TCP, ephemeral port |
 | IPC dial | `unix://` scheme | `tcp://` scheme |
 | Shutdown signal set | `os.Interrupt`, `SIGTERM` | `os.Interrupt` only (Ctrl-C / console close) |
 | Host clipboard | Darwin: `pbcopy`/`pbpaste`; Linux: `wl-copy`/`xclip`/`xsel` | Pure Go Win32 API (`user32.dll` / `kernel32.dll`) |
@@ -30,6 +30,14 @@ set lives behind build tags here.
 ### Network egress adapter
 
 `platform.NetworkAdapter` provides outbound network transport (`platform/network.go`). In conjunction with `internal/services.NetService`, it enforces explicit `net.egress` capability checks and operator-configured destination whitelisting, port filtering, and HTTPS transport rules.
+
+### Host sandbox enforcement
+
+`platform.ConfigureSandbox` confines external child processes per `ExecutionPolicy`, and `platform.GetHostSecurityCapabilities` reports what the host can actually enforce:
+
+- **Linux:** unprivileged user/mount/network namespaces plus `prlimit64` resource ceilings applied post-start; a re-exec init hook (`GOSTALGIA_SANDBOX_INIT`) programs the mount namespace.
+- **macOS:** an Apple Seatbelt profile via `/usr/bin/sandbox-exec`. Limits that XNU honors (`MaxOpenFiles`, `MaxCPUSeconds`, `MaxProcesses`) are applied by a self-limiting trampoline — the runtime binary re-executed inside the sandbox via `GOSTALGIA_SANDBOX_INIT` — because macOS offers no `prlimit64`-style API for another process. `MaxMemoryBytes` is not enforceable (`setrlimit` rejects `RLIMIT_AS`/`RLIMIT_DATA`), so `ResourceLimits` reports `false` on darwin.
+- **Windows:** unsupported; sandboxed isolation fails closed with `ErrSandboxUnsupported`.
 
 ## Rules
 
