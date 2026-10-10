@@ -58,7 +58,14 @@ The runtime distinguishes three classes of actors:
   Gostalgia.
 - **Authority:** Least privilege. Applications have **no ambient authority**.
   They cannot access the host filesystem, execute arbitrary processes, or
-  invoke privileged system methods (`sys/shutdown`, `proc/stop`, `fs/grant`).
+  invoke the operator-only grant-management methods (`fs/grant`,
+  `fs/grant/revoke`), and no route accepts the `admin` capability from an app
+  principal. Every route an app can reach is gated by a capability its
+  manifest must declare — **including lifecycle routes**: `shutdown` permits
+  `sys/shutdown` (terminates the entire environment), and `proc.stop` permits
+  `proc/stop` and `app/stop` against **any** runtime-managed process with no
+  per-app ownership scoping. These are high-impact grants; operators should
+  weigh them during package permission review.
 - **Capability Scoping:**
   - Manifest grants: Applications declare requested capabilities (`ipc`,
     `fs.read`, `fs.write`, `proc.list`, `proc.stop`, `app.list`, `app.launch`,
