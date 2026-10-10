@@ -1,6 +1,7 @@
 package security
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -151,8 +152,9 @@ func TestAuditTokenStoreConcurrentChurn(t *testing.T) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
+			appID := fmt.Sprintf("com.test.churn.w%d", w)
 			for i := 0; i < 300; i++ {
-				tok, err := ts.IssueAppToken("com.test.churn", int32(w*10000+i), "sess", user, CapIPC)
+				tok, err := ts.IssueAppToken(appID, int32(w*10000+i), "sess", user, CapIPC)
 				if err != nil {
 					t.Errorf("IssueAppToken: %v", err)
 					return
@@ -164,7 +166,7 @@ func TestAuditTokenStoreConcurrentChurn(t *testing.T) {
 				}
 				ts.Revoke(tok)
 				if i%97 == 0 {
-					ts.RevokeApp("com.test.churn")
+					ts.RevokeApp(appID)
 				}
 				if i%89 == 0 {
 					ts.RevokeProcess(int32(w*10000 + i))
