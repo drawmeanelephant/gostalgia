@@ -226,6 +226,15 @@ func (s *ConfigService) unset(ctx context.Context, req ipc.Request) (any, error)
 		}
 	}
 
+	// App principals may only address their own app layer, matching
+	// config/set and the read routes.
+	if principal.IsApp() {
+		if p.AppID != "" && p.AppID != principal.AppID {
+			return nil, errors.New("config/unset: cannot modify preferences for another application")
+		}
+		p.AppID = principal.AppID
+	}
+
 	opts := config.QueryOpts{
 		AppID: p.AppID,
 		Layer: targetLayer,
@@ -264,6 +273,15 @@ func (s *ConfigService) reset(ctx context.Context, req ipc.Request) (any, error)
 		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
 			return nil, err
 		}
+	}
+
+	// App principals may only address their own app layer, matching
+	// config/set and the read routes.
+	if principal.IsApp() {
+		if p.AppID != "" && p.AppID != principal.AppID {
+			return nil, errors.New("config/reset: cannot modify preferences for another application")
+		}
+		p.AppID = principal.AppID
 	}
 
 	opts := config.QueryOpts{
@@ -325,7 +343,7 @@ type previewReq struct {
 }
 
 func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
+	if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
 		return nil, err
 	}
 	var p previewReq
@@ -333,7 +351,13 @@ func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, erro
 		return nil, err
 	}
 
+	// Preview overrides are owned by the staging caller: applications stage
+	// under their own app ID, operators and in-process callers under the
+	// shared scope. Only the owner can commit or cancel them.
 	opts := config.QueryOpts{}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		opts.AppID = principal.AppID
+	}
 	if p.Settings != nil {
 		if err := s.store.PreviewBatch(p.Settings, opts); err != nil {
 			return nil, err
@@ -353,10 +377,14 @@ func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *ConfigService) cancelPreview(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
+	if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
 		return nil, err
 	}
-	s.store.CancelPreview(config.QueryOpts{})
+	opts := config.QueryOpts{}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		opts.AppID = principal.AppID
+	}
+	s.store.CancelPreview(opts)
 	return map[string]any{"ok": true}, nil
 }
 
@@ -379,13 +407,16 @@ func (s *ConfigService) commitPreview(ctx context.Context, req ipc.Request) (any
 		if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
 			return nil, err
 		}
-	} else if principal.IsApp() {
-		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-			return nil, err
-		}
+	} else if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
+		return nil, err
 	}
 
-	if err := s.store.CommitPreview(targetLayer, config.QueryOpts{}); err != nil {
+	// Only the caller's own staged overrides are committed.
+	opts := config.QueryOpts{}
+	if principal.IsApp() {
+		opts.AppID = principal.AppID
+	}
+	if err := s.store.CommitPreview(targetLayer, opts); err != nil {
 		return nil, err
 	}
 
