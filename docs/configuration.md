@@ -32,7 +32,7 @@ Default settings are declared in `internal/config/defaults.go`:
 
 | Path | Type | Default | Description |
 |---|---|---|---|
-| `theme` | `string` | `"nostalgia"` | Active aesthetic theme (`nostalgia`, `midnight`, `monochrome`, `high-contrast`, `high-contrast-light`). |
+| `theme` | `string` | `"nostalgia"` | Active aesthetic theme (`nostalgia`, `midnight`, `monochrome`, `high-contrast`, `high-contrast-light`, or a user theme from `/config/themes`). |
 | `accessibility.color_mode` | `string` | `"ansi256"` | Terminal color fidelity (`plain`, `ansi256`, `truecolor`). |
 | `accessibility.reduced_motion` | `bool` | `false` | Suppresses animations and decorative spinners. |
 | `accessibility.high_contrast` | `bool` | `false` | Enables high-contrast borders and text tokens. |
@@ -52,7 +52,7 @@ Before any configuration value is accepted by `Set` or `Preview`:
 - **Path format**: Paths must be non-empty dot-separated alphanumeric segments (`^[a-z0-9_]+(\.[a-z0-9_]+)*$`).
 - **Schema typing**: Values must match their expected type (string, bool, int/float).
 - **Domain restrictions**:
-  - `theme`: Must be one of the known theme identifiers.
+  - `theme`: Must be one of the known theme identifiers: a built-in name or a valid user theme defined in `/config/themes` (see `docs/experience.md`).
   - `accessibility.color_mode`: Must be `plain`, `ansi256`, or `truecolor`.
   - `startup.view`: Must be a recognized shell mode (`home`, `prompt`, `launcher`, `tasks`, `notifications`).
 - **Keybinding conflict detection**:

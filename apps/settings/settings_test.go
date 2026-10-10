@@ -21,6 +21,7 @@ type mockConfigService struct {
 	previewActive bool
 	previewTheme  string
 	calls         []string
+	userThemes    []map[string]any // served by theme/list alongside builtins
 }
 
 func newMockConfigService() *mockConfigService {
@@ -143,6 +144,21 @@ func (m *mockConfigService) call(ctx context.Context, method string, params, out
 
 	case "config/reset":
 		m.effective["theme"] = "nostalgia"
+		return nil
+
+	case "theme/list":
+		themes := []map[string]any{
+			{"name": "high-contrast", "source": "builtin"},
+			{"name": "high-contrast-light", "source": "builtin"},
+			{"name": "midnight", "source": "builtin"},
+			{"name": "monochrome", "source": "builtin"},
+			{"name": "nostalgia", "source": "builtin"},
+		}
+		themes = append(themes, m.userThemes...)
+		raw, _ := json.Marshal(map[string]any{"themes": themes})
+		if out != nil {
+			return json.Unmarshal(raw, out)
+		}
 		return nil
 
 	default:
@@ -359,6 +375,49 @@ func TestSettingsThemePreviewAndCommit(t *testing.T) {
 	}
 	if h.settings.theme != "midnight" {
 		t.Fatalf("expected theme to remain midnight after cancel, got %s", h.settings.theme)
+	}
+}
+
+// User themes dropped in /config/themes are surfaced by theme/list and
+// appear in the picker with the same select-preview-commit flow as the
+// built-ins.
+func TestSettingsUserThemeInPicker(t *testing.T) {
+	h := setupSettingsTest(t)
+	ctx := context.Background()
+	h.cfg.userThemes = []map[string]any{
+		{"name": "ocean", "source": "user", "description": "Deep sea palette"},
+	}
+
+	view, err := h.view(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, it := range view.Items {
+		if it.ID == "theme_ocean" {
+			found = true
+			if !strings.Contains(it.Detail, "Deep sea") {
+				t.Fatalf("user theme detail = %q", it.Detail)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("user theme missing from picker: %+v", view.Items)
+	}
+
+	// Preview and commit flow works for user names too.
+	view, err = h.act(ctx, "select", "theme_ocean", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.cfg.previewActive || h.cfg.previewTheme != "ocean" {
+		t.Fatalf("preview = %v / %q, want ocean", h.cfg.previewActive, h.cfg.previewTheme)
+	}
+	if _, err := h.act(ctx, "save", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if h.cfg.effective["theme"] != "ocean" {
+		t.Fatalf("committed theme = %v, want ocean", h.cfg.effective["theme"])
 	}
 }
 

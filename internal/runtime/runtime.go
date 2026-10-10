@@ -254,6 +254,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		services.NewDocument(),
 		services.NewIPC(),
 		services.NewConfig(),
+		services.NewTheme(),
 		services.NewClipboard(),
 		services.NewNet(),
 		services.NewSession(),
@@ -341,6 +342,7 @@ func InitRoot(root string) error {
 		"/apps/manifests",
 		"/apps/data",
 		"/config",
+		"/config/themes",
 		"/data",
 		"/mounts",
 	} {

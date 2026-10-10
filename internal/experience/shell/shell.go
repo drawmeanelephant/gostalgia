@@ -19,6 +19,7 @@ import (
 	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/themedef"
 	"gostalgia/sdk"
 )
 
@@ -149,6 +150,8 @@ type Model struct {
 
 	shortcuts           map[string]string
 	initialConfigLoaded bool
+	pendingTheme        string // user theme name with an in-flight theme/get; only the latest resolves
+	unresolvedTheme     string // config theme name that failed user-theme resolution; not retried
 
 	attached     bool
 	sessionID    string
@@ -341,6 +344,34 @@ func (m *Model) fetchConfigCmd() tea.Cmd {
 }
 
 type themeSavedMsg struct{ err error }
+
+// themeResolveMsg carries a user theme resolved through the theme service.
+// A nil theme means the name did not resolve.
+type themeResolveMsg struct {
+	name  string
+	theme *theme.Theme
+}
+
+// resolveThemeCmd fetches a user theme definition via theme/get for a
+// theme name the config layer selected that is not a built-in.
+func (m *Model) resolveThemeCmd(name string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	if client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		var out struct {
+			Definition themedef.Definition `json:"definition"`
+		}
+		if err := client.Call(c, "theme/get", map[string]string{"name": name}, &out); err != nil || out.Definition.Name == "" {
+			return themeResolveMsg{name: name}
+		}
+		t := theme.FromDefinition(out.Definition)
+		return themeResolveMsg{name: name, theme: &t}
+	}
+}
 
 // persistThemeCmd writes the chosen theme to the user config layer so the
 // prompt's `theme` command survives reboot like a Settings-app change does.
@@ -701,8 +732,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case openAppMsg:
 		return m, m.openView(msg.app)
 	case configUpdateMsg:
+		var themeCmd tea.Cmd
 		if msg.theme != "" {
-			m.SetThemeByName(msg.theme)
+			if m.SetThemeByName(msg.theme) {
+				m.pendingTheme = ""
+			} else if lower := strings.ToLower(msg.theme); !strings.EqualFold(m.kit.Theme().Name, msg.theme) &&
+				m.unresolvedTheme != lower && m.pendingTheme != lower {
+				// Not a built-in: it may be a user theme from /config/themes,
+				// resolved asynchronously via theme/get. A name that failed
+				// once is not retried on every poll.
+				m.pendingTheme = lower
+				themeCmd = m.resolveThemeCmd(lower)
+			}
 		}
 		if msg.colorMode != "" {
 			m.SetColorModeByName(msg.colorMode)
@@ -730,6 +771,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if msg.startupView == "home" {
 				m.setMode(modeHome)
 			}
+		}
+		return m, themeCmd
+	case themeResolveMsg:
+		if msg.name != m.pendingTheme {
+			// A newer selection superseded this lookup; drop it.
+			return m, nil
+		}
+		m.pendingTheme = ""
+		if msg.theme != nil {
+			m.SetTheme(*msg.theme, m.kit.Mode())
+		} else {
+			m.unresolvedTheme = msg.name
 		}
 		return m, nil
 	case procUpdateMsg:
@@ -852,10 +905,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.setTheme != "" {
 			if m.SetThemeByName(msg.setTheme) {
+				m.pendingTheme = ""
 				m.append(entry{fmt.Sprintf("Theme changed to %s", m.kit.Theme().Name), "accent"})
 				cmd = m.persistThemeCmd(msg.setTheme)
+			} else if msg.userTheme != nil {
+				m.pendingTheme = ""
+				m.SetTheme(*msg.userTheme, m.kit.Mode())
+				m.append(entry{fmt.Sprintf("Theme changed to %s", m.kit.Theme().Name), "accent"})
+				cmd = m.persistThemeCmd(m.kit.Theme().Name)
 			} else {
-				m.append(entry{fmt.Sprintf("Unknown theme %q. Available: nostalgia, midnight, monochrome, high-contrast, high-contrast-light", msg.setTheme), "error"})
+				m.append(entry{fmt.Sprintf("Unknown theme %q. Available: %s", msg.setTheme, strings.Join(msg.themeNames, ", ")), "error"})
 			}
 		} else if msg.showTheme {
 			rm := "disabled"
@@ -863,7 +922,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				rm = "enabled"
 			}
 			m.append(entry{fmt.Sprintf("Active theme: %s · Mode: %v · Reduced motion: %s", m.kit.Theme().Name, m.kit.Mode(), rm), "accent"})
-			m.append(entry{"Available themes: nostalgia, midnight, monochrome, high-contrast, high-contrast-light", "muted"})
+			m.append(entry{"Available themes: " + strings.Join(msg.themeNames, ", "), "muted"})
 		}
 		if msg.toggleMotion {
 			newMotion := !m.kit.Theme().ReducedMotion
@@ -1283,7 +1342,16 @@ func (m *Model) complete() {
 			return
 		}
 		if verb == "theme" {
-			choices = []string{"theme nostalgia", "theme midnight", "theme monochrome", "theme high-contrast", "theme high-contrast-light"}
+			names := []string{"nostalgia", "midnight", "monochrome", "high-contrast", "high-contrast-light"}
+			if m.client != nil {
+				cctx, cancel := context.WithTimeout(m.ctx, time.Second)
+				names = themeNames(cctx, m.client)
+				cancel()
+			}
+			choices = choices[:0]
+			for _, n := range names {
+				choices = append(choices, "theme "+n)
+			}
 		} else if verb == "motion" {
 			choices = []string{"motion on", "motion off"}
 		} else if verb == "profile" {
@@ -1372,9 +1440,11 @@ func (m *Model) SetReducedMotion(enabled bool) {
 	m.kit = ui.New(th, m.kit.Mode())
 }
 
-// SetThemeByName switches the active theme by case-insensitive name.
-// Supported names: nostalgia, midnight, monochrome (or mono), high-contrast (or hc),
-// high-contrast-light (or hcl). Returns true if the theme was recognized.
+// SetThemeByName switches the active theme by case-insensitive built-in
+// name: nostalgia, midnight, monochrome (or mono), high-contrast (or hc),
+// high-contrast-light (or hcl). User themes from /config/themes are not
+// handled here — they are resolved through theme/get (see resolveUserTheme
+// and resolveThemeCmd). Returns true if the theme was recognized.
 func (m *Model) SetThemeByName(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "nostalgia", "default":

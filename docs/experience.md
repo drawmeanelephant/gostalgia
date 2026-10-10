@@ -68,6 +68,83 @@ and mode explicitly for alternate views and deterministic testing. Shell users
 can dynamically switch themes with `theme [NAME]` or toggle reduced motion with
 `motion [on|off]`, as well as select them directly from the Command Palette (`Ctrl-P`).
 
+## User-loadable themes (`/config/themes`)
+
+Operators can install custom themes by dropping JSON files into
+`/config/themes/*.json` inside the environment. The `theme` service scans that
+directory on demand: every `*.json` file is parsed, defaulted, and validated
+against the same token set the built-ins use. Invalid files are skipped with a
+logged reason — they never block boot, and one bad file never hides the good
+ones. At most 64 files are read and each file is capped at 64 KiB.
+
+Selecting a user theme works exactly like a built-in: `theme NAME` in the shell
+lists and selects them, and the Settings app's Appearance category shows them
+after the built-ins. The choice is stored as the `theme` config value in the
+user layer, so it persists across reboots and scopes per profile for free.
+Theme names must match `[a-z0-9][a-z0-9_-]*` (≤ 48 chars) and may not shadow a
+built-in name or the `theme` command's aliases (`default`, `dark`, `mono`,
+`plain`, `hc`, `hcl`, ...).
+
+### Schema
+
+Only `name` and all eight `palette` colors are required. Every other group —
+and every field inside a provided group — falls back to a default when omitted
+or empty. Colors accept `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, or an ANSI-256
+index (`"0"`–`"255"`). Unknown fields are rejected.
+
+| Field | Shape | Default when omitted |
+|---|---|---|
+| `name` | `[a-z0-9][a-z0-9_-]*`, ≤ 48 chars | required |
+| `description` | string, ≤ 160 chars | shown in the Settings picker |
+| `palette` | 8 colors: `canvas`, `surface`, `text`, `muted`, `accent`, `border`, `header`, `header_text` | required |
+| `spacing` | `panel_x`, `gap`: integers 0–8 (terminal cells) | `1`, `1` |
+| `borders.panel` / `borders.dialog` | preset name or glyph object | `thick`, `double` |
+| `typography` | `title_bold`, `heading_bold`, `key_bold` | all `true` |
+| `focus` | `text`, `fill`, `border` colors, `marker` glyph | palette surface/text/accent, `›` |
+| `states.<state>` | per state: `text`, `fill` colors, `symbol`, `label`, `message` | derived from palette like the built-ins |
+| `progress` | `filled`, `track` glyphs | `━`, `·` |
+| `reduced_motion` | boolean | `false` |
+
+`states.<state>` is one of `normal`, `disabled`, `busy`, `success`, `error`,
+`empty`; each field inside a state may be overridden individually. A border is
+either a preset string (`normal`, `rounded`, `thick`, `double`, `block`,
+`ascii`) or an object of eight glyph strings: `top`, `bottom`, `left`, `right`,
+`top_left`, `top_right`, `bottom_left`, `bottom_right`. Glyphs are ≤ 8 runes
+each.
+
+### Sample `/config/themes/ocean.json`
+
+```json
+{
+  "name": "ocean",
+  "description": "Deep sea palette",
+  "palette": {
+    "canvas": "#10202B",
+    "surface": "#1A2E3C",
+    "text": "#E8F1F2",
+    "muted": "#8FA6AD",
+    "accent": "#4FB3BF",
+    "border": "#3E5C66",
+    "header": "#14506B",
+    "header_text": "#E8F1F2"
+  },
+  "borders": {
+    "panel": "rounded",
+    "dialog": "double"
+  },
+  "focus": { "marker": ">" },
+  "states": {
+    "error": { "symbol": "[FAIL]", "label": "FAIL" }
+  },
+  "reduced_motion": true
+}
+```
+
+A file only needs `name` and `palette`; every other group falls back to the
+same defaults the built-in colored themes derive from their palette. Files
+skipped during a scan are listed under `skipped` in the `theme/list` IPC
+response and logged with their rejection reason.
+
 ## Accessible terminal modes
 
 Gostalgia guarantees full visual accessibility without relying on terminal

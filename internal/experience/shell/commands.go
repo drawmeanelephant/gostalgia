@@ -10,8 +10,10 @@ import (
 	"time"
 	"unicode"
 
+	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/pkg"
 	"gostalgia/internal/recovery"
+	"gostalgia/internal/themedef"
 )
 
 // Caller is the single environment API used by the experience layer.
@@ -54,6 +56,8 @@ type resultMsg struct {
 	toggleDND        bool
 	setDND           *bool
 	setTheme         string
+	userTheme        *theme.Theme
+	themeNames       []string
 	showTheme        bool
 	setMotion        *bool
 	toggleMotion     bool
@@ -87,7 +91,7 @@ const helpText = `COMMAND CENTER
   receipt [PID]             view process crash receipts
   reap                      clean up terminated processes
   dnd [on|off]              toggle or set Do-Not-Disturb
-  theme [NAME]              switch theme (nostalgia, midnight, monochrome, high-contrast, high-contrast-light)
+  theme [NAME]              switch theme (built-ins or user themes in /config/themes)
   motion [on|off]           toggle or set reduced-motion mode
   settings / preferences    interactive system preferences and themes
   history [clear]           view or clear command history
@@ -189,8 +193,12 @@ func execute(ctx context.Context, c Caller, cwd, line string) resultMsg {
 	} else if strings.HasPrefix(result.text, "__SET_THEME__:") {
 		result.setTheme = strings.TrimPrefix(result.text, "__SET_THEME__:")
 		result.text = ""
-	} else if result.text == "__SHOW_THEME__" {
+		resolveUserTheme(ctx, c, &result)
+	} else if strings.HasPrefix(result.text, "__SHOW_THEME__") {
 		result.showTheme = true
+		if names := strings.TrimPrefix(result.text, "__SHOW_THEME__:"); names != result.text && names != "" {
+			result.themeNames = strings.Split(names, ",")
+		}
 		result.text = ""
 	} else if strings.HasPrefix(result.text, "__SET_MOTION__:") {
 		val := strings.TrimPrefix(result.text, "__SET_MOTION__:") == "on"
@@ -855,7 +863,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		}
 	case "theme":
 		if len(args) == 0 {
-			return ok("__SHOW_THEME__")
+			return ok("__SHOW_THEME__:" + strings.Join(themeNames(ctx, c), ","))
 		}
 		if len(args) != 1 {
 			return fail(fmt.Errorf("usage: theme [NAME]"))
@@ -899,6 +907,65 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 	default:
 		return fail(fmt.Errorf("unknown command %q — type help", cmd))
 	}
+}
+
+// themeListResult mirrors the theme service's theme/list response.
+type themeListResult struct {
+	Themes []struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+	} `json:"themes"`
+}
+
+// themeNames lists every selectable theme via theme/list: the built-ins
+// followed by user themes from /config/themes. A missing theme service or
+// a failed call yields just the built-in names.
+func themeNames(ctx context.Context, c Caller) []string {
+	names := []string{"nostalgia", "midnight", "monochrome", "high-contrast", "high-contrast-light"}
+	var res themeListResult
+	if err := c.Call(ctx, "theme/list", nil, &res); err != nil || len(res.Themes) == 0 {
+		return names
+	}
+	names = names[:0]
+	for _, t := range res.Themes {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// builtinThemeName reports whether the theme command resolves name to a
+// built-in, including the shell's aliases. Anything else may be a user
+// theme from /config/themes.
+func builtinThemeName(name string) bool {
+	switch name {
+	case "nostalgia", "default",
+		"midnight", "dark",
+		"monochrome", "mono", "plain",
+		"high-contrast", "highcontrast", "hc",
+		"high-contrast-light", "highcontrastlight", "hcl":
+		return true
+	}
+	return false
+}
+
+// resolveUserTheme fills result.userTheme by asking the theme service for
+// a user theme definition, and result.themeNames so an unknown-theme error
+// can list what is actually available. Built-in names skip the lookup:
+// SetThemeByName handles them locally.
+func resolveUserTheme(ctx context.Context, c Caller, result *resultMsg) {
+	name := result.setTheme
+	if name == "" || builtinThemeName(name) {
+		return
+	}
+	var get struct {
+		Definition themedef.Definition `json:"definition"`
+	}
+	if err := c.Call(ctx, "theme/get", map[string]string{"name": name}, &get); err == nil && get.Definition.Name != "" {
+		t := theme.FromDefinition(get.Definition)
+		result.userTheme = &t
+		return
+	}
+	result.themeNames = themeNames(ctx, c)
 }
 
 func formatDuration(d time.Duration) string {
