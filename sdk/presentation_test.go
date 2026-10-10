@@ -101,6 +101,21 @@ func TestPresentationValidation(t *testing.T) {
 			v.Grid = &Grid{Columns: 1, Cells: []Cell{{ID: "a", Label: "A", Action: "bad/action"}}}
 		},
 		func(v *View) { v.Grid = &Grid{Label: strings.Repeat("x", 257), Columns: 1} },
+		func(v *View) {
+			v.Version = 2
+			v.Region = &Region{ID: "log", Text: "x"}
+		},
+		func(v *View) {
+			v.Version = 2
+			v.Fields = []Field{{ID: "text", Label: "Text", Multiline: true}}
+		},
+		func(v *View) { v.Region = &Region{ID: "bad id", Text: "x"} },
+		func(v *View) { v.Region = &Region{ID: "log", Label: strings.Repeat("x", 257)} },
+		func(v *View) { v.Region = &Region{ID: "log", Text: strings.Repeat("x", 65537)} },
+		func(v *View) { v.Region = &Region{ID: "log", Text: strings.Repeat("x\n", 2049)} },
+		func(v *View) {
+			v.Fields = []Field{{ID: "text", Label: "Text", Multiline: true, Value: strings.Repeat("x", 32769)}}
+		},
 	} {
 		v := good
 		change(&v)
@@ -164,7 +179,7 @@ func TestPresentationTypedRoutesAndInputs(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatal("invalid input reached callback")
 	}
-	for _, raw := range []string{"", "null", `{"version":3}`, `{"version":0}`, `{"version":1,"unknown":true}`, `{"version":1} {}`, `[]`} {
+	for _, raw := range []string{"", "null", `{"version":0}`, `{"version":4}`, `{"version":1,"unknown":true}`, `{"version":1} {}`, `[]`} {
 		if _, err := routes["view"](context.Background(), json.RawMessage(raw)); err == nil {
 			t.Errorf("accepted params %q", raw)
 		}
@@ -280,7 +295,7 @@ func TestPresentationVersionNegotiation(t *testing.T) {
 		seen = append(seen, PresentationRequestVersion(ctx))
 		return testView(), nil
 	}, func(ctx context.Context, p ActionRequest) (View, error) { return testView(), nil })
-	for _, version := range []int{1, 2} {
+	for _, version := range []int{1, 2, 3} {
 		out, err := invokePresentation(t, routes["view"], ViewRequest{Version: version})
 		if err != nil {
 			t.Fatal(err)
@@ -293,11 +308,68 @@ func TestPresentationVersionNegotiation(t *testing.T) {
 			t.Fatalf("negotiated version %d view did not validate: %v", version, err)
 		}
 	}
-	if len(seen) != 2 || seen[0] != 1 || seen[1] != 2 {
+	if len(seen) != 3 || seen[0] != 1 || seen[1] != 2 || seen[2] != 3 {
 		t.Fatalf("callbacks did not observe negotiated versions: %v", seen)
 	}
 	if PresentationRequestVersion(context.Background()) != 0 {
 		t.Fatal("request version leaked outside a callback")
+	}
+}
+
+// areaView is a version-3 snapshot: a multiline field plus a scroll region.
+func areaView() View {
+	return View{
+		Title: "Doc", State: ViewReady,
+		Fields:  []Field{{ID: "body", Label: "Body", Multiline: true}},
+		Actions: []Action{{ID: "save", Label: "Save"}},
+		Region:  &Region{ID: "preview", Label: "Preview", Text: "line 1\nline 2\nline 3\n"},
+	}
+}
+
+func TestPresentationV3ElementsAndAreaInput(t *testing.T) {
+	var last ActionRequest
+	routes := presentTest(t, func(context.Context) (View, error) { return areaView(), nil },
+		func(ctx context.Context, p ActionRequest) (View, error) {
+			last = p
+			return areaView(), nil
+		})
+	out, err := invokePresentation(t, routes["view"], ViewRequest{Version: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := out.(View)
+	if v.Region == nil || len(v.Fields) != 1 || !v.Fields[0].Multiline {
+		t.Fatalf("version 3 snapshot dropped elements: %+v", v)
+	}
+	instance := v.Instance
+	// A version-2 request must fail rather than silently drop the new elements.
+	for _, version := range []int{1, 2} {
+		if _, err := invokePresentation(t, routes["view"], ViewRequest{Version: version}); err == nil {
+			t.Fatalf("version-%d request accepted a snapshot carrying version-3 elements", version)
+		}
+	}
+	// Multiline values keep newlines verbatim and use the larger budget,
+	// which neither shrinks to nor exceeds the contract's allowance.
+	for _, tc := range []struct {
+		request string
+		size    int
+		ok      bool
+	}{
+		{"r1", 4096, true},
+		{"r2", 32768, true},
+		{"r3", 32769, false},
+	} {
+		p := ActionRequest{Version: 3, Instance: instance, RequestID: tc.request, Action: "save",
+			Values: map[string]string{"body": strings.Repeat("x", tc.size)}}
+		_, err := invokePresentation(t, routes["action"], p)
+		if ok := err == nil; ok != tc.ok {
+			t.Fatalf("%d-byte multiline value: err = %v", tc.size, err)
+		}
+	}
+	p := ActionRequest{Version: 3, Instance: instance, RequestID: "r4", Action: "save",
+		Values: map[string]string{"body": "a\nb\n"}}
+	if _, err := invokePresentation(t, routes["action"], p); err != nil || last.Values["body"] != "a\nb\n" {
+		t.Fatalf("multiline value lost its newlines: %v, %q", err, last.Values["body"])
 	}
 }
 

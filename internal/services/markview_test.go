@@ -90,7 +90,8 @@ func TestMarkviewHandoffGrantFlow(t *testing.T) {
 		t.Fatalf("SECURITY VIOLATION: markview was granted parent-directory access")
 	}
 
-	// The F4 view carries the rendered Markdown structure as items.
+	// The F4 view carries the rendered Markdown structure: as items on the
+	// item-list contracts, inside the version-3 scroll region on the newest.
 	resp = env.call(ctx, adminCaps, "app/"+markview.ID+"/view", sdk.ViewRequest{Version: sdk.PresentationVersion})
 	if !resp.OK {
 		t.Fatalf("markview view failed: %s", resp.Error)
@@ -101,14 +102,20 @@ func TestMarkviewHandoffGrantFlow(t *testing.T) {
 		t.Fatalf("view does not validate: %v", err)
 	}
 	var haveHeading, haveList, haveCode bool
-	for _, it := range view.Items {
-		switch it.Label {
-		case "# Guide":
-			haveHeading = true
-		case "• one":
-			haveList = true
-		case "┃ fmt.Println(1)":
-			haveCode = true
+	if view.Region != nil {
+		haveHeading = strings.Contains(view.Region.Text, "# Guide")
+		haveList = strings.Contains(view.Region.Text, "• one")
+		haveCode = strings.Contains(view.Region.Text, "┃ fmt.Println(1)")
+	} else {
+		for _, it := range view.Items {
+			switch it.Label {
+			case "# Guide":
+				haveHeading = true
+			case "• one":
+				haveList = true
+			case "┃ fmt.Println(1)":
+				haveCode = true
+			}
 		}
 	}
 	if !haveHeading || !haveList || !haveCode {

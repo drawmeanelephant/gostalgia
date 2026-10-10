@@ -29,6 +29,10 @@ const (
 	// MaxContentLength is the maximum presentation field length supported in version 1.
 	MaxContentLength = 4096
 
+	// MaxAreaLength is the presentation version-3 multiline field budget,
+	// matching the contract's larger document-editing allowance.
+	MaxAreaLength = 32768
+
 	// MaxDocumentSize is the maximum document size allowed for VFS saves (1 MiB).
 	MaxDocumentSize = 1048576
 )
@@ -436,10 +440,10 @@ func (n *Notes) view(ctx context.Context) (sdk.View, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.ensureRecoveryCheckedLocked(ctx)
-	return n.viewLocked(), nil
+	return n.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
-func (n *Notes) viewLocked() sdk.View {
+func (n *Notes) viewLocked(version int) sdk.View {
 	dirtyMarker := ""
 	if n.dirty {
 		dirtyMarker = "*"
@@ -526,6 +530,26 @@ func (n *Notes) viewLocked() sdk.View {
 			}
 		}
 
+		fields := []sdk.Field{
+			{ID: n.pathFieldID(), Label: "Path", Value: truncateDetail(n.path)},
+		}
+		switch {
+		case version >= 3 && len(n.content) <= MaxAreaLength:
+			// Contract v3 edits real documents in place: the multiline field
+			// carries the whole buffer instead of the single-line preview.
+			fields = append(fields, sdk.Field{
+				ID: n.contentFieldID(), Label: "Content", Value: n.content, Multiline: true,
+			})
+		case version >= 3:
+			// Larger than the multiline budget stays a read-only summary
+			// rather than an editable view that would silently truncate.
+			statusText = nonBlank(statusText, "Ready") + " (content exceeds the multiline field limit; read-only)"
+		default:
+			fields = append(fields, sdk.Field{
+				ID: n.contentFieldID(), Label: "Content", Value: truncateDetail(n.content),
+			})
+		}
+
 		return sdk.View{
 			Title: title,
 			State: sdk.ViewReady,
@@ -534,10 +558,7 @@ func (n *Notes) viewLocked() sdk.View {
 				{ID: "mod_time", Label: "Disk Modified", Detail: nonBlank(n.loadedModTime, "Not saved to disk")},
 				{ID: "char_count", Label: "Size", Detail: fmt.Sprintf("%d runes · %d bytes", utf8.RuneCountInString(n.content), len(n.content))},
 			},
-			Fields: []sdk.Field{
-				{ID: n.pathFieldID(), Label: "Path", Value: truncateDetail(n.path)},
-				{ID: n.contentFieldID(), Label: "Content", Value: truncateDetail(n.content)},
-			},
+			Fields: fields,
 			Actions: []sdk.Action{
 				{ID: "save", Label: "Save"},
 				{ID: "save_as", Label: "Save As"},
@@ -714,7 +735,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 		return sdk.View{}, fmt.Errorf("unknown action %q", p.Action)
 	}
 
-	return n.viewLocked(), nil
+	return n.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 // Programmatic IPC route handlers

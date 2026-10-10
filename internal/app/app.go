@@ -47,6 +47,17 @@ type Event struct {
 
 func (Event) Type() string { return "app.state" }
 
+// ViewEvent is published when a running app reports its presentation
+// snapshot stale (contract version 3). It carries no view data: remote
+// subscribers only learn the app identity from the envelope source and
+// refetch the snapshot themselves rather than waiting on the poll cadence.
+type ViewEvent struct {
+	ID  string `json:"id"`
+	PID int32  `json:"pid"`
+}
+
+func (ViewEvent) Type() string { return "app.view" }
+
 type Status struct {
 	Manifest Manifest `json:"manifest"`
 	Running  bool     `json:"running"`

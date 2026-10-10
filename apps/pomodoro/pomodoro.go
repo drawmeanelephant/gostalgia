@@ -1,8 +1,10 @@
 // Package pomodoro is Gostalgia's focus timer: work, short-break, and
 // long-break phases with a live countdown, cycle counting, and a
 // notify/post alert when each phase ends. The countdown is derived from a
-// pinned ends_at anchor and rendered through the ordinary view snapshot —
-// the shell polls, the app never pushes.
+// pinned ends_at anchor and rendered through the ordinary view snapshot.
+// Mutations push the version-3 invalidate hint so an open view refreshes
+// immediately instead of waiting for the shell's poll cadence; the
+// countdown itself is still derived fresh on every fetch.
 //
 // Timer state and a bounded session log persist in the app-private
 // partition (/apps/data/com.gostalgia.pomodoro/state.json). A timer never
@@ -168,6 +170,16 @@ func (p *Pomodoro) tick(ctx context.Context) {
 	now := p.now()
 	if p.timer.Running && p.timer.Phase != PhaseIdle && !now.Before(p.timer.EndsAt) {
 		p.completePhaseLocked(ctx, now, false, true)
+	}
+}
+
+// invalidateLocked nudges open views to refetch now rather than wait for
+// the poll cadence. A mutation reached through an IPC route or the ticker
+// has no action reply to carry it; the version-3 hint is best-effort and
+// its error is deliberately ignored.
+func (p *Pomodoro) invalidateLocked(ctx context.Context) {
+	if p.app != nil {
+		_ = p.app.Invalidate(ctx)
 	}
 }
 
@@ -370,6 +382,7 @@ func (p *Pomodoro) completePhaseLocked(ctx context.Context, now time.Time, skipp
 	if err := p.persistLocked(ctx); err != nil {
 		p.lastError = fmt.Sprintf("save failed: %v", err)
 	}
+	p.invalidateLocked(ctx)
 }
 
 // --- mutations: error-returning, shared by presentation and routes ---
@@ -408,7 +421,11 @@ func (p *Pomodoro) startLocked(ctx context.Context, cfg *Config) error {
 	default:
 		return fmt.Errorf("timer is already running")
 	}
-	return p.persistLocked(ctx)
+	err := p.persistLocked(ctx)
+	if err == nil {
+		p.invalidateLocked(ctx)
+	}
+	return err
 }
 
 // pauseLocked freezes the countdown by converting the live anchor into a
@@ -425,7 +442,11 @@ func (p *Pomodoro) pauseLocked(ctx context.Context) error {
 	p.timer.EndsAt = time.Time{}
 	p.timer.Remaining = rem
 	p.statusNote = fmt.Sprintf("paused — %s left on %s", clock(rem), lowerLabels[p.timer.Phase])
-	return p.persistLocked(ctx)
+	err := p.persistLocked(ctx)
+	if err == nil {
+		p.invalidateLocked(ctx)
+	}
+	return err
 }
 
 // resetLocked abandons the current phase back to ready and restarts the
@@ -438,7 +459,11 @@ func (p *Pomodoro) resetLocked(ctx context.Context) error {
 	p.timer = Timer{Phase: PhaseIdle}
 	p.cyclePos = 0
 	p.statusNote = fmt.Sprintf("reset — %d sessions logged, %d focus sessions done", len(p.log), p.workDone)
-	return p.persistLocked(ctx)
+	err := p.persistLocked(ctx)
+	if err == nil {
+		p.invalidateLocked(ctx)
+	}
+	return err
 }
 
 // skipLocked ends the current phase early; the log marks it skipped and
@@ -473,7 +498,11 @@ func (p *Pomodoro) configureLocked(ctx context.Context, work, short, long, cycle
 	}
 	p.config = c
 	p.statusNote = "lengths updated — they apply from the next phase"
-	return p.persistLocked(ctx)
+	err := p.persistLocked(ctx)
+	if err == nil {
+		p.invalidateLocked(ctx)
+	}
+	return err
 }
 
 // configFromFieldsLocked turns presentation field values into a Config.

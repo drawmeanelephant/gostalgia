@@ -521,6 +521,12 @@ func (r *RSS) fetchFeeds(ctx context.Context, ids []string) fetchOutcome {
 		if err := r.persistLocked(ctx); err != nil {
 			r.lastError = fmt.Sprintf("save failed: %v", err)
 		}
+		// Background polls and IPC-route fetches change the snapshot with
+		// no action reply to carry it; the version-3 hint is best-effort
+		// and its error deliberately ignored.
+		if r.app != nil {
+			_ = r.app.Invalidate(ctx)
+		}
 	}
 	if out.newItems > 0 {
 		r.notifyLocked(ctx, fmt.Sprintf("%d new headline%s — %s",

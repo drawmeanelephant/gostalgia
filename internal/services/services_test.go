@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,6 +187,43 @@ func TestSysShutdownRequiresCapability(t *testing.T) {
 	}
 	if resp.Error == "" {
 		t.Fatal("shutdown denial has no error message")
+	}
+}
+
+// The version-3 push channel: only an app principal may invalidate, and the
+// published app.view envelope attributes the signal to that app's own id.
+func TestAppInvalidatePublishesOwnViewEvent(t *testing.T) {
+	env := newTestEnv(t)
+	got := make(chan events.Envelope, 1)
+	cancel := env.ctx.Events.Subscribe("app.view", func(e events.Envelope) { got <- e })
+	defer cancel()
+
+	appP := security.AppPrincipal("com.gostalgia.pomodoro", 42, "sess-1", security.User{Name: "guest"})
+	resp := env.callAs(context.Background(), appP, security.NewCapabilities(security.CapIPC), "app/invalidate", nil)
+	if !resp.OK {
+		t.Fatalf("app/invalidate rejected: %s", resp.Error)
+	}
+	select {
+	case e := <-got:
+		ve, ok := e.Payload.(app.ViewEvent)
+		if !ok || e.Type != "app.view" || e.Source != "app/com.gostalgia.pomodoro" ||
+			ve.ID != "com.gostalgia.pomodoro" || ve.PID != 42 {
+			t.Fatalf("unexpected view event envelope: %+v", e)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no app.view event published")
+	}
+
+	// An operator (or any non-app principal) cannot fake an app push.
+	op := security.OperatorPrincipal(security.User{Name: "operator"})
+	resp = env.callAs(context.Background(), op, security.AdminCapabilities(), "app/invalidate", nil)
+	if resp.OK || !strings.Contains(resp.Error, "only applications") {
+		t.Fatalf("operator invalidate = %+v, want app-only denial", resp)
+	}
+	// The route still requires the ipc capability.
+	resp = env.callAs(context.Background(), appP, security.NewCapabilities(), "app/invalidate", nil)
+	if resp.OK || !strings.Contains(resp.Error, "missing capability") {
+		t.Fatalf("capability-less invalidate = %+v, want denial", resp)
 	}
 }
 

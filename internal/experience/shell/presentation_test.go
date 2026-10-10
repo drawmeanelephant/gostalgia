@@ -11,8 +11,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"gostalgia/internal/events"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/ipc"
 	"gostalgia/sdk"
 )
 
@@ -412,8 +414,8 @@ func TestPresentationVersionNegotiationFallback(t *testing.T) {
 	if v := m.presentation; v == nil || v.version != 1 {
 		t.Fatalf("negotiated version = %+v", m.presentation)
 	}
-	if len(requested) != 2 || requested[0] != 2 || requested[1] != 1 {
-		t.Fatalf("negotiation requests = %v, want [2 1]", requested)
+	if len(requested) != 3 || requested[0] != 3 || requested[1] != 2 || requested[2] != 1 {
+		t.Fatalf("negotiation requests = %v, want [3 2 1]", requested)
 	}
 	// A version-2 app answers at 2 without a fallback request.
 	m2 := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
@@ -458,8 +460,10 @@ func TestPresentationRenegotiatesAfterFailedOpen(t *testing.T) {
 	if v.instance != "launch" || v.version != 1 || v.data.State != sdk.ViewReady {
 		t.Fatalf("renegotiation did not recover: %+v", v)
 	}
-	if len(requested) != 4 || requested[0] != 2 || requested[1] != 1 || requested[2] != 2 || requested[3] != 1 {
-		t.Fatalf("negotiation requests = %v, want [2 1 2 1]", requested)
+	if len(requested) != 6 ||
+		requested[0] != 3 || requested[1] != 2 || requested[2] != 1 ||
+		requested[3] != 3 || requested[4] != 2 || requested[5] != 1 {
+		t.Fatalf("negotiation requests = %v, want [3 2 1 3 2 1]", requested)
 	}
 }
 
@@ -535,5 +539,210 @@ func TestPresentationV2ElementsStayInBounds(t *testing.T) {
 		if lipgloss.Width(view) > size[0] || lipgloss.Height(view) > size[1] {
 			t.Fatalf("version-2 view escaped %dx%d bounds", size[0], size[1])
 		}
+	}
+}
+
+// areaData is a version-3 snapshot: a multiline field plus a scroll region
+// holding a 40-line transcript.
+func areaData() sdk.View {
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("L%02d", i)
+	}
+	return sdk.View{
+		Version: 3, Instance: "launch", Title: "Doc", State: sdk.ViewReady,
+		Fields:  []sdk.Field{{ID: "body", Label: "Body", Multiline: true}},
+		Actions: []sdk.Action{{ID: "save", Label: "Save"}},
+		Region:  &sdk.Region{ID: "log", Label: "Transcript", Text: strings.Join(lines, "\n")},
+		Status:  "ready",
+	}
+}
+
+func TestPresentationV3MultilineFieldEditing(t *testing.T) {
+	var received sdk.ActionRequest
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		v := areaData()
+		if strings.HasSuffix(method, "/action") {
+			received = params.(sdk.ActionRequest)
+		}
+		return writeJSON(out, v)
+	}), nil)
+	m.openView(screenStatus())
+	epoch := m.presentation.epoch
+	m.Update(viewMsg{epoch: epoch, data: areaData()})
+	v := m.presentation
+	if v.version != 3 {
+		t.Fatalf("negotiated version = %d, want 3", v.version)
+	}
+	// Focus lands on the multiline field: runes edit, Enter is a newline,
+	// not the first action. Actions still fire from their own focus stop.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "first"})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("Enter inside a multiline field dispatched an action")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "second"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
+	if v.values["body"] != "first\nsecon" {
+		t.Fatalf("multiline draft = %q, want %q", v.values["body"], "first\nsecon")
+	}
+	m.height = 24
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "first") || !strings.Contains(view, "secon") {
+		t.Fatalf("multiline draft not rendered on separate lines:\n%s", view)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("focused action did not dispatch")
+	}
+	m.Update(cmd())
+	if received.Action != "save" || received.Values["body"] != "first\nsecon" || received.Version != 3 {
+		t.Fatalf("multiline value lost in action routing: %+v", received)
+	}
+}
+
+func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.presentation = &appView{
+		data: areaData(), instance: "launch", version: 3,
+		values: map[string]string{}, regionPinned: true,
+	}
+	v := m.presentation
+	m.height = 16
+	// The region is the last focus stop: field, action, then region.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !v.regionFocused() {
+		t.Fatal("tab ring did not reach the region stop")
+	}
+	// Pinned shows the tail; the head is scrolled out.
+	view := ansi.Strip(m.View().Content)
+	if !strings.Contains(view, "L39") {
+		t.Fatalf("pinned region lost its tail:\n%s", view)
+	}
+	if strings.Contains(view, "L00") {
+		t.Fatalf("pinned region showed its head:\n%s", view)
+	}
+	tail := v.regionTop
+	if tail == 0 {
+		t.Fatal("region did not scroll to its tail")
+	}
+	// Up scrolls inside the region instead of moving item focus.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	if v.regionPinned || v.regionTop != tail-1 || v.itemFocus {
+		t.Fatalf("up did not scroll the region: top=%d pinned=%v itemFocus=%v", v.regionTop, v.regionPinned, v.itemFocus)
+	}
+	// Down back to the tail re-pins.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !v.regionPinned || v.regionTop != tail {
+		t.Fatalf("down did not re-pin the tail: top=%d pinned=%v", v.regionTop, v.regionPinned)
+	}
+	// Page keys move the whole window.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
+	if v.regionTop != tail-v.regionWindow {
+		t.Fatalf("pgup moved %d lines, want %d", tail-v.regionTop, v.regionWindow)
+	}
+	// Enter on a region is a no-op.
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("region dispatched an action")
+	}
+	// Unpinned: a fresh snapshot keeps the user's offset. Pinned: it follows
+	// appended lines. A new region id resets to the tail.
+	v.regionPinned = false
+	v.regionTop = 3
+	data := areaData()
+	data.Region.Text += "\nL40\nL41"
+	m.applyView(data)
+	if v.regionTop != 3 || v.regionPinned {
+		t.Fatalf("unpinned refresh moved the region: top=%d pinned=%v", v.regionTop, v.regionPinned)
+	}
+	v.regionPinned = true
+	m.applyView(data)
+	m.View()
+	if !v.regionPinned || !strings.Contains(ansi.Strip(m.View().Content), "L41") {
+		t.Fatal("pinned refresh did not follow the appended tail")
+	}
+	data.Region = &sdk.Region{ID: "other", Label: "Transcript", Text: data.Region.Text}
+	m.applyView(data)
+	if v.regionTop != 0 || !v.regionPinned {
+		t.Fatalf("region id change did not reset scroll: top=%d pinned=%v", v.regionTop, v.regionPinned)
+	}
+}
+
+func TestPresentationV3InvalidationRefreshesView(t *testing.T) {
+	fetches := 0
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if strings.HasSuffix(method, "/view") {
+			fetches++
+			v := areaData()
+			v.Status = fmt.Sprintf("fetch %d", fetches)
+			return writeJSON(out, v)
+		}
+		return writeJSON(out, screenData())
+	}), nil)
+	m.openView(screenStatus())
+	epoch := m.presentation.epoch
+	m.Update(viewMsg{epoch: epoch, data: areaData(), version: 3})
+	v := m.presentation
+	// A subscription the socket client would have opened.
+	m.viewSub = &ipc.ClientSubscription{Events: make(chan ipc.Notification, 4)}
+	push := func(source string) tea.Msg {
+		return viewEventMsg{ok: true, event: ipc.Notification{
+			Event: events.Record{Type: viewEventTopic, Source: "app/" + source},
+		}}
+	}
+	// An unrelated app's push does not refetch this view.
+	if _, cmd := m.Update(push("com.other.app")); v.refreshing || v.refreshQueued {
+		t.Fatal("foreign app invalidation triggered a refetch")
+	} else if cmd == nil {
+		t.Fatal("event consumer was not re-armed")
+	}
+	// A matching push starts one in-flight refetch at the negotiated version.
+	_, cmd := m.Update(push("com.test.screen"))
+	if cmd == nil || !v.refreshing {
+		t.Fatal("matching invalidation did not refetch")
+	}
+	batch := cmd().(tea.BatchMsg)
+	// A second push while the fetch is out queues exactly one follow-up.
+	m.Update(push("com.test.screen"))
+	if !v.refreshQueued {
+		t.Fatal("concurrent invalidation did not queue a follow-up")
+	}
+	msg := batch[1]() // batch[0] is the re-armed event wait
+	_, followUp := m.Update(msg)
+	if v.refreshQueued || !v.refreshing || followUp == nil {
+		t.Fatalf("queued refresh did not drain into one follow-up: queued=%v refreshing=%v", v.refreshQueued, v.refreshing)
+	}
+	m.Update(followUp())
+	if v.refreshing || v.data.Status != "fetch 2" || fetches != 2 {
+		t.Fatalf("refresh replies not applied in order: status=%q fetches=%d", v.data.Status, fetches)
+	}
+	// A stale refresh reply still releases the in-flight flag.
+	v.refreshing = true
+	m.Update(viewMsg{epoch: epoch, seq: v.seq + 9, refresh: true, data: areaData()})
+	if v.refreshing {
+		t.Fatal("dropped refresh wedged the in-flight flag")
+	}
+	// A dead stream clears the subscription so the next open retries it.
+	m.Update(viewEventMsg{ok: false})
+	if m.viewSub != nil {
+		t.Fatal("closed subscription was not released")
+	}
+}
+
+func TestPresentationV3SubscriptionLifecycle(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	// The in-process caller lacks Subscribe: openView degrades to polling.
+	m.openView(screenStatus())
+	if m.viewSub != nil {
+		t.Fatal("subscription opened without a subscriber client")
+	}
+	// A negotiated subscription installs and arms the event wait.
+	sub := &ipc.ClientSubscription{Events: make(chan ipc.Notification, 1)}
+	if cmd := m.updatePresentation(viewSubscribedMsg{sub: sub}); cmd == nil || m.viewSub != sub {
+		t.Fatal("subscription did not install")
+	}
+	m.updatePresentation(viewSubscribedMsg{err: errors.New("no socket")})
+	if m.viewSub != nil {
+		t.Fatal("failed subscribe left a stale subscription")
 	}
 }

@@ -206,9 +206,14 @@ func (h *harness) view(t testing.TB) sdk.View { return h.viewAt(t, 1) }
 
 func (h *harness) act(t testing.TB, action string, values map[string]string) sdk.View {
 	t.Helper()
-	cur := h.view(t)
+	return h.actAt(t, 1, action, values)
+}
+
+func (h *harness) actAt(t testing.TB, version int, action string, values map[string]string) sdk.View {
+	t.Helper()
+	cur := h.viewAt(t, version)
 	req := sdk.ActionRequest{
-		Version: sdk.PresentationVersion, Instance: cur.Instance,
+		Version: version, Instance: cur.Instance,
 		RequestID: fmt.Sprintf("req_%d", h.seq.Add(1)), Action: action, Values: values,
 	}
 	raw, _ := json.Marshal(req)
