@@ -37,8 +37,9 @@ type HostFS struct {
 	root     *os.Root
 	rootPath string
 
-	saveStageHook  func(stageName string) error
-	saveRenameHook func(stageName, targetName string) error
+	saveStageHook   func(stageName string) error
+	saveRenameHook  func(stageName, targetName string) error
+	saveDirSyncHook func(dir string, syncErr error)
 }
 
 // NewHost opens dir as the backing directory for a HostFS.
@@ -266,6 +267,23 @@ func (h *HostFS) RemoveAll(name string) error {
 
 var hostSaveSeq atomic.Uint64
 
+// syncDir fsyncs a directory so that a rename into it is durable across
+// a crash. It is best-effort: filesystems that cannot sync a directory
+// handle (EINVAL on some Unix filesystems, and platforms like Windows
+// where directory sync is unsupported) report an error that callers
+// ignore — the rename has already succeeded and the write is done.
+func (h *HostFS) syncDir(dir string) {
+	d, err := h.root.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	err = d.Sync()
+	if h.saveDirSyncHook != nil {
+		h.saveDirSyncHook(dir, err)
+	}
+}
+
 func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 	if err := validFSName("save", name); err != nil {
 		return err
@@ -337,6 +355,8 @@ func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 			recoverName := fmt.Sprintf("%s.recover", name)
 			if rErr := h.root.Rename(stageName, recoverName); rErr != nil {
 				recoverName = stageName
+			} else {
+				h.syncDir(dir)
 			}
 			return &Error{
 				Op:          "save",
@@ -354,6 +374,8 @@ func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 		recoverName := fmt.Sprintf("%s.recover", name)
 		if rErr := h.root.Rename(stageName, recoverName); rErr != nil {
 			recoverName = stageName
+		} else {
+			h.syncDir(dir)
 		}
 		return &Error{
 			Op:          "save",
@@ -364,6 +386,7 @@ func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 			Message:     fmt.Sprintf("atomic replacement failed: %v", err),
 		}
 	}
+	h.syncDir(dir)
 	return nil
 }
 

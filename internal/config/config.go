@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // Store is the configuration document for one environment.
@@ -20,6 +22,8 @@ type Store struct {
 	mu   sync.Mutex
 	path string
 	data map[string]any
+
+	dirSyncHook func(dir string, syncErr error)
 }
 
 // Load opens the store at path. A missing file yields an empty store
@@ -186,23 +190,62 @@ func (s *Store) Snapshot() map[string]any {
 // Path returns the backing file path.
 func (s *Store) Path() string { return s.path }
 
+var saveSeq atomic.Uint64
+
 func (s *Store) saveLocked() error {
 	b, err := json.MarshalIndent(s.data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("config: encode: %w", err)
 	}
 	b = append(b, '\n')
-	tmp := s.path + ".tmp"
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	// Unique staging name: two writers on the same file must never
+	// clobber each other's staging file (same recipe as
+	// vfs.HostFS.SaveAtomic).
+	tmp := fmt.Sprintf("%s.tmp.%d.%d", s.path, time.Now().UnixNano(), saveSeq.Add(1))
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("config: write: %w", err)
+	}
+	if _, err := f.Write(b); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: write: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("config: write: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("config: write: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
+		_ = os.Remove(tmp)
 		return fmt.Errorf("config: rename: %w", err)
 	}
+	s.syncDir(dir)
 	return nil
+}
+
+// syncDir fsyncs dir so that a rename into it is durable across a
+// crash. It is best-effort: filesystems or platforms that cannot sync a
+// directory handle report an error that is ignored — the rename has
+// already succeeded.
+func (s *Store) syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	err = d.Sync()
+	if s.dirSyncHook != nil {
+		s.dirSyncHook(dir, err)
+	}
 }
 
 func lookup(m map[string]any, segs []string) (any, bool) {
