@@ -21,6 +21,10 @@ func ListenIPC(root string) (net.Listener, string, error) {
 	return ln, "tcp://" + ln.Addr().String(), nil
 }
 
+// IPCSocketDir returns "" on Windows: IPC endpoints are loopback TCP, so
+// there is no filesystem socket directory for a sandbox policy to mask.
+func IPCSocketDir() string { return "" }
+
 // ListenChildIPC creates a dedicated loopback listener for a child application process.
 func ListenChildIPC(appID string) (net.Listener, string, error) {
 	ln, err := net.Listen("tcp4", "127.0.0.1:0")

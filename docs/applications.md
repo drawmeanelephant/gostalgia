@@ -253,7 +253,8 @@ When an external app launches:
      already-connected fd requires no connect capability at all.
    - `trusted` children, and all children on Windows (which lacks fd
      passing): the runtime creates a dedicated, ephemeral listener
-     (`unix:///...` domain socket on Unix, loopback TCP on Windows) using
+     (`unix:///...` domain socket inside the runtime's private per-boot
+     socket directory on Unix, loopback TCP on Windows) using
      `platform.ListenChildIPC`.
 2. **Environment variable injection:** The runtime generates an app token
    bound to the app ID and declared permissions, and starts the child with a
