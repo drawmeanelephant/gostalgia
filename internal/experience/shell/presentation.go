@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 	"gostalgia/sdk"
@@ -380,7 +380,7 @@ func (m *Model) viewRun(p sdk.ActionRequest) tea.Cmd {
 	}
 }
 
-func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
+func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 	v := m.presentation
 	if key.String() == "esc" {
 		if v.busy {
@@ -467,18 +467,16 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 		id := fields[v.focus].ID
 		v.itemFocus, m.scroll = false, 0
 		value := []rune(v.values[id])
-		switch key.Type {
-		case tea.KeyBackspace, tea.KeyCtrlH:
+		k := key.Key()
+		switch {
+		case k.Code == tea.KeyBackspace || (k.Mod.Contains(tea.ModCtrl) && k.Code == 'h'):
 			if len(value) > 0 {
 				value = value[:len(value)-1]
 			}
-		case tea.KeyCtrlU:
+		case k.Mod.Contains(tea.ModCtrl) && k.Code == 'u':
 			value = nil
-		case tea.KeyRunes, tea.KeySpace:
-			text := strings.ReplaceAll(safe(string(key.Runes)), "\n", " ")
-			if key.Type == tea.KeySpace {
-				text = " "
-			}
+		case k.Text != "":
+			text := strings.ReplaceAll(safe(k.Text), "\n", " ")
 			if len(string(value))+len(text) <= 4096 {
 				value = append(value, []rune(text)...)
 			}

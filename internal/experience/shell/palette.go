@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
 )
 
@@ -287,7 +287,7 @@ func (m *Model) renderPalette(w, bodyHeight int) []string {
 	return lines
 }
 
-func (m *Model) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredPaletteItems()
 	switch msg.String() {
 	case "up":
@@ -317,12 +317,8 @@ func (m *Model) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-		text := string(msg.Runes)
-		if msg.Type == tea.KeySpace {
-			text = " "
-		}
-		m.paletteQuery += text
+	if msg.Text != "" {
+		m.paletteQuery += msg.Text
 		m.paletteSelected = 0
 		return m, nil
 	}

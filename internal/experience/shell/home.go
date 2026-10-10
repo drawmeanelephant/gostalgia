@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -130,7 +130,7 @@ func (m *Model) renderHome(w, bodyHeight int) []string {
 	return lines
 }
 
-func (m *Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	items := m.homeItems()
 	switch msg.String() {
 	case "up":
@@ -167,7 +167,7 @@ func (m *Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setMode(modePrompt)
 		return m, nil
 	}
-	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+	if msg.Text != "" {
 		m.setMode(modePrompt)
 		return m.handlePromptKey(msg)
 	}

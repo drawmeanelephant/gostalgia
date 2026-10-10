@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -33,9 +33,9 @@ func TestAuditHomePaletteDocumentNamesNotSanitized(t *testing.T) {
 	m.apps = []appStatus{app}
 
 	m.setMode(modeHome)
-	home := m.View()
+	home := m.View().Content
 	m.openPalette()
-	palette := m.View()
+	palette := m.View().Content
 
 	// ui.Plain emits no terminal styling of its own, so any raw ESC or BEL
 	// in the rendered view came straight from unsanitized app/VFS data.
