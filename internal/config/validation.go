@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 )
 
 var (
@@ -29,6 +30,45 @@ var (
 		"prompt":   true,
 	}
 )
+
+// themeValidator extends theme validation with names resolved at runtime
+// (user themes under /config/themes). It is a process-wide hook because
+// Validate is a pure function with no access to the environment
+// filesystem; the theme service registers it at boot.
+var themeValidator = struct {
+	sync.RWMutex
+	fn func(name string) bool
+}{}
+
+// SetThemeValidator registers the lookup Validate uses for theme names
+// beyond the built-in set. Passing nil restores built-in-only validation.
+func SetThemeValidator(fn func(name string) bool) {
+	themeValidator.Lock()
+	defer themeValidator.Unlock()
+	themeValidator.fn = fn
+}
+
+// BuiltinThemeNames returns the sorted built-in theme identifiers.
+func BuiltinThemeNames() []string {
+	names := make([]string, 0, len(allowedThemes))
+	for name := range allowedThemes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ValidThemeName reports whether name selects a theme: a built-in or a
+// name the registered validator recognizes.
+func ValidThemeName(name string) bool {
+	if allowedThemes[name] {
+		return true
+	}
+	themeValidator.RLock()
+	fn := themeValidator.fn
+	themeValidator.RUnlock()
+	return fn != nil && fn(name)
+}
 
 // KeybindingConflict describes two or more actions bound to the same key chord.
 type KeybindingConflict struct {
@@ -85,8 +125,8 @@ func Validate(path string, val any) error {
 	switch path {
 	case "theme":
 		str, ok := val.(string)
-		if !ok || !allowedThemes[strings.ToLower(str)] {
-			return fmt.Errorf("config: invalid theme %v (must be one of: nostalgia, midnight, monochrome, high-contrast, high-contrast-light)", val)
+		if !ok || !ValidThemeName(strings.ToLower(str)) {
+			return fmt.Errorf("config: invalid theme %v (must be a built-in theme or a theme defined in /config/themes)", val)
 		}
 	case "accessibility.reduced_motion", "accessibility.high_contrast", "accessibility.screen_reader":
 		if _, ok := val.(bool); !ok {

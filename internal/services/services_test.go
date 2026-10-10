@@ -50,7 +50,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Cleanup(func() { hostFS.Close() })
 	env := vfs.New(hostFS)
 	must(t, env.Mount("/tmp", vfs.NewMem()))
-	for _, dir := range []string{"/users/guest/documents", "/apps/manifests", "/apps/data"} {
+	for _, dir := range []string{"/users/guest/documents", "/apps/manifests", "/apps/data", "/config/themes"} {
 		must(t, env.MkdirAll(dir))
 	}
 
@@ -90,6 +90,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	must(t, sm.Register(NewSys()))
 	must(t, sm.Register(NewProc()))
 	must(t, sm.Register(NewFS()))
+	must(t, sm.Register(NewTheme()))
 	must(t, sm.Register(NewDocument()))
 	must(t, sm.Register(NewClipboard()))
 	must(t, sm.Register(NewNet()))
@@ -160,8 +161,8 @@ func TestSysStatus(t *testing.T) {
 	if status.Version != "test" {
 		t.Errorf("version = %q, want test", status.Version)
 	}
-	if len(status.Services) != 10 {
-		t.Errorf("services = %d, want 10", len(status.Services))
+	if len(status.Services) != 11 {
+		t.Errorf("services = %d, want 11", len(status.Services))
 	}
 	if len(status.Apps) != len(apps.Manifests()) {
 		t.Errorf("apps count = %d, want %d", len(status.Apps), len(apps.Manifests()))

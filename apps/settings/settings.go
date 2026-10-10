@@ -49,6 +49,13 @@ const (
 	CategoryStorage       Category = "storage"
 )
 
+// userTheme is a user-loadable theme discovered through the theme service
+// (files under /config/themes).
+type userTheme struct {
+	name        string
+	description string
+}
+
 // Settings implements the preferences presentation application.
 type Settings struct {
 	app *sdk.Context
@@ -59,6 +66,7 @@ type Settings struct {
 
 	theme         string
 	previewTheme  string
+	userThemes    []userTheme
 	colorMode     string
 	reducedMotion bool
 	highContrast  bool
@@ -177,9 +185,34 @@ func (s *Settings) loadFromConfig(ctx context.Context) {
 	}
 }
 
+// refreshThemesLocked re-reads the theme registry so the picker lists
+// user themes dropped into /config/themes alongside the built-ins. A
+// missing theme service or a failed call keeps the last known list.
+func (s *Settings) refreshThemesLocked(ctx context.Context) {
+	var resp struct {
+		Themes []struct {
+			Name        string `json:"name"`
+			Source      string `json:"source"`
+			Description string `json:"description"`
+		} `json:"themes"`
+	}
+	if err := s.app.Call(ctx, "theme/list", nil, &resp); err != nil {
+		return
+	}
+	var users []userTheme
+	for _, t := range resp.Themes {
+		if t.Source == "user" {
+			users = append(users, userTheme{name: t.Name, description: t.Description})
+		}
+	}
+	s.userThemes = users
+}
+
 func (s *Settings) snapshot(ctx context.Context) (sdk.View, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.refreshThemesLocked(ctx)
 
 	state := sdk.ViewReady
 	if s.errorMessage != "" {
@@ -241,26 +274,42 @@ func (s *Settings) buildItems() []sdk.Item {
 	switch s.category {
 	case CategoryAppearance:
 		themes := []struct {
-			id, name, desc string
+			name, label, desc string
 		}{
-			{"theme_nostalgia", "Nostalgia (Default)", "Warm cream/sand surface, slate text, amber accents"},
-			{"theme_midnight", "Midnight", "Cool slate canvas, rich blue headers, subdued dark styling"},
-			{"theme_monochrome", "Monochrome", "High-compatibility pure ASCII borders, zero ANSI color escapes"},
-			{"theme_high_contrast", "High Contrast Dark", "Pure black background, bright white text, vivid yellow focus"},
-			{"theme_high_contrast_light", "High Contrast Light", "Pure white canvas, pure black text, deep navy headers"},
+			{"nostalgia", "Nostalgia (Default)", "Warm cream/sand surface, slate text, amber accents"},
+			{"midnight", "Midnight", "Cool slate canvas, rich blue headers, subdued dark styling"},
+			{"monochrome", "Monochrome", "High-compatibility pure ASCII borders, zero ANSI color escapes"},
+			{"high-contrast", "High Contrast Dark", "Pure black background, bright white text, vivid yellow focus"},
+			{"high-contrast-light", "High Contrast Light", "Pure white canvas, pure black text, deep navy headers"},
 		}
 		for _, t := range themes {
 			tag := ""
-			themeKey := strings.TrimPrefix(t.id, "theme_")
-			if s.previewTheme != "" && s.previewTheme == themeKey {
+			if s.previewTheme != "" && s.previewTheme == t.name {
 				tag = " [PREVIEWING]"
-			} else if s.previewTheme == "" && s.theme == themeKey {
+			} else if s.previewTheme == "" && s.theme == t.name {
 				tag = " [ACTIVE]"
 			}
 			items = append(items, sdk.Item{
-				ID:     t.id,
-				Label:  t.name + tag,
+				ID:     "theme_" + t.name,
+				Label:  t.label + tag,
 				Detail: t.desc,
+			})
+		}
+		for _, t := range s.userThemes {
+			tag := ""
+			if s.previewTheme != "" && s.previewTheme == t.name {
+				tag = " [PREVIEWING]"
+			} else if s.previewTheme == "" && s.theme == t.name {
+				tag = " [ACTIVE]"
+			}
+			detail := t.description
+			if detail == "" {
+				detail = "User theme loaded from /config/themes"
+			}
+			items = append(items, sdk.Item{
+				ID:     "theme_" + t.name,
+				Label:  t.name + tag,
+				Detail: detail,
 			})
 		}
 
@@ -438,6 +487,8 @@ func (s *Settings) handleAction(ctx context.Context, req sdk.ActionRequest) (sdk
 	case "reset_defaults":
 		s.handleResetLocked(ctx)
 	}
+
+	s.refreshThemesLocked(ctx)
 
 	state := sdk.ViewReady
 	if s.errorMessage != "" {
