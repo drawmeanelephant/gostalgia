@@ -1879,17 +1879,26 @@ and emits rows: ATX and setext headings (label `# Title`…`###### Title`,
 detail `h1 · line N`), bullet/ordered/task list items (`•`, `1.`, `[ ]`,
 `[x]`, indented per depth), block quotes (`│ ` prefixed per depth), fenced
 and indented code (each source line as a `┃`-guttered item, fence language
-in the detail), thematic breaks (`───`), pipe tables (cells joined with
-`│`), and paragraphs wrapped at ~110 runes with continuation rows indented.
-Inline markup flattens honestly: emphasis and strikethrough markers drop,
-code spans show their contents, links render `text (target)` with the
-optional title dropped, images collapse to `[image: alt]`, autolinks stay
-readable, raw HTML tags are removed rather than passed through, entities
-decode, and escapes reveal literals. Every row carries its source line in
-the item detail (`list · line 42`) so the reader can locate it in the
-original. Items — not v2 blocks — carry everything, so the view looks the
-same at presentation versions 1 and 2 and document order is preserved
-(blocks render above items and cannot interleave).
+in the detail), thematic breaks (`───`), pipe tables, link reference
+definitions (`↳ [id]: …`, detail `linkdef · line N`), and paragraphs
+wrapped at ~110 runes with continuation rows indented. Quotes and list
+items continue lazily: a paragraph line under a quote or item keeps that
+row's marker until a blank line or a new block start, a blank-separated
+line indented to an item's content column stays inside it, and four
+columns deeper is code inside the item. An indented opening fence dedents
+its code body by the same amount. Pipe tables render their delimiter row
+as a `─┼─` separator carrying its own source line, pad every column to its
+widest cell (bounded at 64 runes), honor `:--`/`--:`/`:-:` alignment, keep
+`\|` escapes inside their cell, and normalize ragged rows to the header's
+cell count. Inline markup flattens honestly: emphasis and strikethrough
+markers drop, code spans show their contents, links render `text (target)`
+with the optional title dropped, images collapse to `[image: alt]`,
+autolinks stay readable, raw HTML tags are removed rather than passed
+through, entities decode, and escapes reveal literals. Every row carries
+its source line in the item detail (`list · line 42`) so the reader can
+locate it in the original. Items — not v2 blocks — carry everything, so
+the view looks the same at presentation versions 1 and 2 and document
+order is preserved (blocks render above items and cannot interleave).
 
 ### Honest rejection and bounded views
 
