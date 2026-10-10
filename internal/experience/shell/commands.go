@@ -405,9 +405,9 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 				}
 				desc := ""
 				if p.Description != "" {
-					desc = " - " + p.Description
+					desc = " - " + viewText(p.Description)
 				}
-				lines = append(lines, fmt.Sprintf("%s %s (%s)%s%s", marker, p.ID, p.Name, activeTag, desc))
+				lines = append(lines, fmt.Sprintf("%s %s (%s)%s%s", marker, viewText(p.ID), viewText(p.Name), activeTag, desc))
 			}
 			return ok(strings.Join(lines, "\n"))
 		}
@@ -441,7 +441,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			if err := c.Call(ctx, "profile/create", map[string]string{"id": id, "name": name}, &created); err != nil {
 				return fail(err)
 			}
-			return ok(fmt.Sprintf("Profile %s (%s) created", created.ID, created.Name))
+			return ok(fmt.Sprintf("Profile %s (%s) created", viewText(created.ID), viewText(created.Name)))
 		case "delete":
 			if len(args) != 2 {
 				return fail(fmt.Errorf("usage: profile delete ID"))
@@ -451,7 +451,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			if err := c.Call(ctx, "profile/delete", map[string]string{"id": id}, &delResp); err != nil {
 				return fail(err)
 			}
-			return ok(fmt.Sprintf("Profile %s deleted", id))
+			return ok(fmt.Sprintf("Profile %s deleted", viewText(id)))
 		default:
 			return fail(fmt.Errorf("usage: profile [list|switch|create|delete]"))
 		}
@@ -478,11 +478,11 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			return fail(err)
 		}
 		var out []string
-		out = append(out, fmt.Sprintf("SESSION %s · User: %s (%s)", detail.ID, detail.User.Name, detail.User.ID))
+		out = append(out, fmt.Sprintf("SESSION %s · User: %s (%s)", viewText(detail.ID), viewText(detail.User.Name), viewText(detail.User.ID)))
 		out = append(out, fmt.Sprintf("Started: %s · Active: %t", detail.StartedAt.Format("2006-01-02 15:04:05"), detail.Active))
 		out = append(out, fmt.Sprintf("Attached clients: %d", len(detail.Attachments)))
 		for _, a := range detail.Attachments {
-			out = append(out, fmt.Sprintf("  - %s (%s) client %s, attached %s", a.ID, a.ClientType, a.ClientID, a.AttachedAt.Format("15:04:05")))
+			out = append(out, fmt.Sprintf("  - %s (%s) client %s, attached %s", viewText(a.ID), viewText(a.ClientType), viewText(a.ClientID), a.AttachedAt.Format("15:04:05")))
 		}
 		return ok(strings.Join(out, "\n"))
 	case "exit", "quit":
@@ -608,7 +608,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		if res.Success && res.AppID != "" {
 			return ok(fmt.Sprintf("__SWITCH_VIEW__:%s", res.AppID))
 		}
-		return ok(res.Message)
+		return ok(safe(res.Message))
 	case "search", "find":
 		if len(args) < 1 {
 			return fail(fmt.Errorf("usage: search QUERY [PATH]"))
@@ -637,7 +637,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		var b strings.Builder
 		fmt.Fprintf(&b, "Found %d document(s):\n", res.Total)
 		for _, r := range res.Results {
-			fmt.Fprintf(&b, "  %-40s %8d B\n", r.Path, r.Size)
+			fmt.Fprintf(&b, "  %-40s %8d B\n", viewText(r.Path), r.Size)
 		}
 		return ok(strings.TrimRight(b.String(), "\n"))
 	case "recents":
@@ -663,7 +663,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			if !e.Exists {
 				st = " (missing)"
 			}
-			fmt.Fprintf(&b, "  %s%s\n", e.Path, st)
+			fmt.Fprintf(&b, "  %s%s\n", viewText(e.Path), st)
 		}
 		return ok(strings.TrimRight(b.String(), "\n"))
 	case "favorites":
@@ -685,7 +685,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		var b strings.Builder
 		b.WriteString("FAVORITE DOCUMENTS\n")
 		for _, e := range res.Entries {
-			fmt.Fprintf(&b, "  %-20s %s\n", e.Label, e.Path)
+			fmt.Fprintf(&b, "  %-20s %s\n", viewText(e.Label), viewText(e.Path))
 		}
 		return ok(strings.TrimRight(b.String(), "\n"))
 	case "ps":

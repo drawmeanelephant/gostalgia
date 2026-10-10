@@ -171,6 +171,34 @@ func TestProfileService_CapabilityChecks(t *testing.T) {
 	}
 }
 
+// #158: profile/delete must remove the profile's /users/<id>/ data tree,
+// not just its registry entry — operator deletion is expected to erase the
+// departed profile's private data.
+func TestProfileService_DeleteRemovesUserTree(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	caps := security.AdminCapabilities()
+
+	resp := env.call(ctx, caps, "profile/create", CreateProfileRequest{ID: "departed", Name: "Departed"})
+	if !resp.OK {
+		t.Fatalf("profile/create failed: %s", resp.Error)
+	}
+	resp = env.call(ctx, caps, "fs/write", map[string]string{
+		"path": "/users/departed/documents/private.txt", "data_base64": "c2VjcmV0",
+	})
+	if !resp.OK {
+		t.Fatalf("fs/write failed: %s", resp.Error)
+	}
+
+	resp = env.call(ctx, caps, "profile/delete", DeleteProfileRequest{ID: "departed"})
+	if !resp.OK {
+		t.Fatalf("profile/delete failed: %s", resp.Error)
+	}
+	if _, err := env.ctx.VFS.Stat("/users/departed"); err == nil {
+		t.Fatal("/users/departed still exists after profile/delete")
+	}
+}
+
 // #74: profile/* must not accept the baseline ipc cap — an app with only
 // 'ipc' can no longer enumerate, create, switch, update, or delete profiles.
 // (PoC: internal/services/audit_findings_test.go on the audit branch.)

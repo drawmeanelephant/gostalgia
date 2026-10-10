@@ -166,6 +166,11 @@ func tailLines(s string, n int) string {
 	return strings.Join(lines[len(lines)-n:], "\n") + "\n"
 }
 
+// maxProcStopTimeout caps proc/stop's caller-supplied timeout_seconds so a
+// caller cannot park a handler goroutine indefinitely on a process that
+// never exits. A var so tests can shrink it.
+var maxProcStopTimeout = 60 * time.Second
+
 func (s *ProcService) stop(ctx context.Context, req ipc.Request) (any, error) {
 	if err := ipc.RequireCap(ctx, security.CapProcStop); err != nil {
 		return nil, err
@@ -182,7 +187,7 @@ func (s *ProcService) stop(ctx context.Context, req ipc.Request) (any, error) {
 	}
 	timeout := 5 * time.Second
 	if p.Timeout > 0 {
-		timeout = time.Duration(p.Timeout) * time.Second
+		timeout = min(time.Duration(p.Timeout)*time.Second, maxProcStopTimeout)
 	}
 	if err := s.ctx.Procs.Stop(p.ID, timeout); err != nil {
 		return nil, err

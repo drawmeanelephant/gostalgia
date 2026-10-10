@@ -71,11 +71,14 @@ The runtime exposes configuration management over IPC via `ConfigService`. Acces
 | `config/reset` | `{layer?: string, app_id?: string}` | `config.write` or `admin` | Resets the target layer to an empty state. |
 | `config/list` | `{layer?: string, app_id?: string}` | `config.read` or `admin` | Lists values across defaults, system, user, app, and preview, plus merged effective. |
 | `config/snapshot`| `{app_id?: string}` | `config.read` or `admin` | Returns the complete merged effective configuration tree. |
-| `config/preview` | `{path: string, value: any, app_id?: string}` | `config.write` or `admin` | Applies an in-memory preview override and emits live change events. |
-| `config/cancel_preview` | `{app_id?: string}` | `config.write` or `admin` | Reverts all active preview overrides and emits change events with restored values. |
-| `config/commit_preview` | `{layer?: string, app_id?: string}` | `config.write` or `admin` | Persists active preview overrides to disk (defaulting to user layer). |
+| `config/preview` | `{path: string, value: any}` or `{settings: map}` | `config.write` or `admin` | Applies an in-memory preview override owned by the caller and emits live change events. |
+| `config/cancel_preview` | none | `config.write` or `admin` | Reverts the caller's staged preview overrides and emits change events with restored values. |
+| `config/commit_preview` | `{layer?: string}` | `config.write` or `admin` | Persists the caller's staged preview overrides to disk (defaulting to user layer). `system` additionally requires `admin`. |
+
 | `config/validate` | `{path?: string, value?: any, batch?: map}` | `config.read` or `admin` | Pre-validates paths, values, and shortcut conflict absence without writing. |
 | `config/explain` | `{path: string, app_id?: string}` | `config.read` or `admin` | Returns resolution breakdown across every layer and identifies the winning layer. |
+
+Preview overrides are staged per caller: application callers own the paths they stage under their own application ID, while operator and in-process callers share the global scope. `config/cancel_preview` and `config/commit_preview` only affect the caller's own staged values, so one principal can never commit or discard another's preview. Staged values remain visible in effective reads while active, preserving live theme previews; `config/unset` and `config/reset` on the `preview` layer are likewise scoped to the caller's own staged paths. For `config/unset`, `config/reset`, `config/get`, `config/list`, `config/snapshot`, and `config/explain`, an application caller's `app_id` is pinned to the calling application — applications may only address their own app layer, while operators may address any.
 
 ## 5. Live updates and event subscriptions
 

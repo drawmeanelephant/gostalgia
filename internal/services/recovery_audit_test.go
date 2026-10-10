@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"gostalgia/internal/recovery"
+	"gostalgia/internal/security"
 	"gostalgia/internal/vfs"
 )
 
@@ -74,6 +75,51 @@ func TestAuditExportSilentlyDropsUserFiles(t *testing.T) {
 	} {
 		if _, ok := skipReasons[want]; !ok {
 			t.Errorf("omission of %q not reported; skipped=%+v", want, res.Skipped)
+		}
+	}
+}
+
+// #146: two backup exports within the same second shared the default
+// backup-<unix>.gbar destination and the second silently overwrote the
+// first. Fixed: same-second exports land on distinct -N suffixed paths and
+// both archives survive.
+func TestAuditBackupExportSameSecondCollision(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	caps := security.AdminCapabilities()
+
+	export := func(description string) recovery.ExportResult {
+		t.Helper()
+		resp := env.call(ctx, caps, "backup/export", map[string]any{"description": description})
+		if !resp.OK {
+			t.Fatalf("backup/export %q failed: %s", description, resp.Error)
+		}
+		var res recovery.ExportResult
+		must(t, json.Unmarshal(resp.Data, &res))
+		return res
+	}
+
+	first := export("first-backup")
+	second := export("second-backup")
+	if first.ArchivePath == "" || second.ArchivePath == "" {
+		t.Fatalf("exports missing archive_path: %q / %q", first.ArchivePath, second.ArchivePath)
+	}
+	if first.ArchivePath == second.ArchivePath {
+		t.Fatalf("BUG: same-second exports collided at %s and the FIRST backup was silently overwritten", first.ArchivePath)
+	}
+	for _, tc := range []struct {
+		path        string
+		description string
+	}{
+		{first.ArchivePath, "first-backup"},
+		{second.ArchivePath, "second-backup"},
+	} {
+		data, err := env.ctx.VFS.ReadFile(tc.path)
+		must(t, err)
+		m, err := recovery.Inspect(bytes.NewReader(data))
+		must(t, err)
+		if m.Description != tc.description {
+			t.Fatalf("%s description = %q, want %q", tc.path, m.Description, tc.description)
 		}
 	}
 }
