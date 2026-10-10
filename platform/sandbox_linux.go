@@ -319,29 +319,68 @@ func linuxApplySandboxMounts(cfg sandboxInitConfig) error {
 	return nil
 }
 
+// linuxMount is one parsed entry from /proc/self/mounts.
+type linuxMount struct{ point, fstype string }
+
+func linuxParseMounts(data string) []linuxMount {
+	var out []linuxMount
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		out = append(out, linuxMount{
+			point:  strings.ReplaceAll(fields[1], "\\040", " "),
+			fstype: fields[2],
+		})
+	}
+	return out
+}
+
 // linuxRemountReadOnly bind-remounts every real mount read-only. Pseudo
 // filesystems are skipped: they hold no host file contents, and remounting
-// proc/sysfs/devtmpfs would break the confined process.
+// proc/sysfs/devtmpfs would break the confined process. A mount owned by a
+// foreign user namespace (WSL 9p/drvfs host drives, some FUSE and network
+// filesystems) refuses MS_REMOUNT inside ours; rather than leave it writable
+// under a read-only policy, it is masked behind empty space so the contents
+// become unreachable, and the mask is reported on stderr where the child's
+// captured output explains any "missing" paths.
 func linuxRemountReadOnly() error {
 	data, err := os.ReadFile("/proc/self/mounts")
 	if err != nil {
 		return fmt.Errorf("read mounts: %w", err)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
+	for _, m := range linuxParseMounts(string(data)) {
+		if linuxPseudoFSTypes[m.fstype] {
 			continue
 		}
-		mountPoint := strings.ReplaceAll(fields[1], "\\040", " ")
-		fstype := fields[2]
-		if linuxPseudoFSTypes[fstype] {
+		err := syscall.Mount("", m.point, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, "")
+		if err == nil {
 			continue
 		}
-		if err := syscall.Mount("", mountPoint, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, ""); err != nil {
-			return fmt.Errorf("remount %s read-only: %w", mountPoint, err)
+		if m.point == "/" {
+			return fmt.Errorf("remount / read-only: %w", err)
 		}
+		if maskErr := linuxMaskMount(m.point); maskErr != nil {
+			return fmt.Errorf("remount %s read-only: %w (mask fallback: %v)", m.point, err, maskErr)
+		}
+		fmt.Fprintf(os.Stderr, "platform: sandbox: %s cannot be remounted read-only (%v); contents masked\n", m.point, err)
 	}
 	return nil
+}
+
+// linuxMaskMount hides a mount that refuses a read-only remount behind empty
+// space: directories take a fresh read-only tmpfs, anything else is bound
+// over with /dev/null — the same treatment MaskedPaths gives sensitive files.
+func linuxMaskMount(mountPoint string) error {
+	st, err := os.Stat(mountPoint)
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		return syscall.Mount("tmpfs", mountPoint, "tmpfs", syscall.MS_RDONLY, "mode=0555")
+	}
+	return syscall.Mount("/dev/null", mountPoint, "", syscall.MS_BIND, "")
 }
 
 // KillDescendants kills unauthorized descendants of pid. It sweeps /proc once

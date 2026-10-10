@@ -522,7 +522,10 @@ func (m *Model) viewLines(height int) []string {
 	}
 	itemBase := len(rows)
 	for i, item := range v.data.Items {
-		text := viewText(item.Label + ": " + item.Detail)
+		text := viewText(item.Label)
+		if item.Detail != "" {
+			text = viewText(item.Label + ": " + item.Detail)
+		}
 		if i == v.item {
 			text = m.kit.FocusText(text)
 		} else {

@@ -340,6 +340,26 @@ func (m *Model) fetchConfigCmd() tea.Cmd {
 	}
 }
 
+type themeSavedMsg struct{ err error }
+
+// persistThemeCmd writes the chosen theme to the user config layer so the
+// prompt's `theme` command survives reboot like a Settings-app change does.
+// The live switch has already happened, so a failed save means session-only.
+func (m *Model) persistThemeCmd(name string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	if client == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		return themeSavedMsg{err: client.Call(c, "config/set", map[string]any{
+			"path":  "theme",
+			"value": name,
+		}, nil)}
+	}
+}
+
 func (m *Model) parseConfigMsg(eff map[string]any) configUpdateMsg {
 	msg := configUpdateMsg{
 		shortcuts: make(map[string]string),
@@ -753,6 +773,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 	case resultMsg:
+		var cmd tea.Cmd
 		m.busy = false
 		m.initExperience()
 		if msg.switchedUser != "" {
@@ -832,6 +853,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.setTheme != "" {
 			if m.SetThemeByName(msg.setTheme) {
 				m.append(entry{fmt.Sprintf("Theme changed to %s", m.kit.Theme().Name), "accent"})
+				cmd = m.persistThemeCmd(msg.setTheme)
 			} else {
 				m.append(entry{fmt.Sprintf("Unknown theme %q. Available: nostalgia, midnight, monochrome, high-contrast, high-contrast-light", msg.setTheme), "error"})
 			}
@@ -917,6 +939,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		}
+		return m, cmd
+	case themeSavedMsg:
+		if msg.err != nil {
+			m.append(entry{fmt.Sprintf("Theme applies to this session only (could not save preference: %s)", msg.err), "muted"})
+		} else {
+			m.append(entry{"Theme saved to your settings.", "muted"})
+		}
+		return m, nil
 	case tea.KeyMsg:
 		keyStr := msg.String()
 		switch keyStr {

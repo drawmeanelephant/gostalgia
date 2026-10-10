@@ -252,6 +252,24 @@ func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing
 	}
 }
 
+// Regression for #179: an item with no Detail rendered a dangling colon.
+func TestPresentationItemWithoutDetailRendersNoColon(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	data := screenData()
+	data.Items = []sdk.Item{
+		{ID: "one", Label: "THE BRASS ELEPHANT"},
+		{ID: "two", Label: "Two", Detail: "second"},
+	}
+	m.presentation = &appView{data: data, instance: data.Instance, values: map[string]string{}}
+	view := ansi.Strip(m.View())
+	if strings.Contains(view, "THE BRASS ELEPHANT:") {
+		t.Fatalf("item without detail rendered a dangling colon:\n%s", view)
+	}
+	if !strings.Contains(view, "Two: second") {
+		t.Fatalf("item with detail lost its join:\n%s", view)
+	}
+}
+
 func TestPresentationUsesExplicitThemeAndFocusTokens(t *testing.T) {
 	tokens := theme.Nostalgia()
 	tokens.Focus.Marker = "*"
