@@ -7,7 +7,7 @@ abstract, kept deliberately thin.
 
 | Concern | macOS/Linux | Windows |
 |---|---|---|
-| IPC listener | unix domain socket (`$TMPDIR/gostalgia-<hash>.sock`, derived from the root to respect the 104-byte socket path limit) | loopback TCP, ephemeral port |
+| IPC listener | unix domain socket inside a private per-boot directory (`$TMPDIR/gostalgia-ipc-*/gostalgia-<hash>.sock`, mode `0700`; the hash derives from the root to respect the 104-byte socket path limit) | loopback TCP, ephemeral port |
 | IPC dial | `unix://` scheme | `tcp://` scheme |
 | Shutdown signal set | `os.Interrupt`, `SIGTERM` | `os.Interrupt` only (Ctrl-C / console close) |
 | Host clipboard | Darwin: `pbcopy`/`pbpaste`; Linux: `wl-copy`/`xclip`/`xsel` | Pure Go Win32 API (`user32.dll` / `kernel32.dll`) |
