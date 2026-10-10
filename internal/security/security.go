@@ -73,22 +73,30 @@ type Credential struct {
 	RevokedAt    time.Time     `json:"revoked_at,omitempty"`
 }
 
+// revokedCredentialLimit bounds the retained set of revoked credentials kept
+// for diagnostics (Lookup and revoked-vs-unknown error reporting). It follows
+// the 256-record bound used for the IPC audit history (events.HistoryLimit).
+const revokedCredentialLimit = 256
+
 // TokenStore issues, validates, and revokes credentials for operators and
 // applications. It enforces server-side identity validation, binding tokens to
 // specific approved principals and grants rather than trusting client claims.
 // Safe for concurrent use.
 type TokenStore struct {
-	mu          sync.RWMutex
-	credentials map[string]*Credential
-	byApp       map[string][]string // appID -> []token
-	byProc      map[int32][]string  // procID -> []token
+	mu           sync.RWMutex
+	credentials  map[string]*Credential         // live credentials only, token -> cred
+	byApp        map[string]map[string]struct{} // appID -> live token set
+	byProc       map[int32]map[string]struct{}  // procID -> live token set
+	revoked      map[string]*Credential         // bounded tombstones, token -> cred
+	revokedOrder []string                       // tombstone tokens, oldest first
 }
 
 func NewTokenStore() *TokenStore {
 	return &TokenStore{
 		credentials: make(map[string]*Credential),
-		byApp:       make(map[string][]string),
-		byProc:      make(map[int32][]string),
+		byApp:       make(map[string]map[string]struct{}),
+		byProc:      make(map[int32]map[string]struct{}),
+		revoked:     make(map[string]*Credential),
 	}
 }
 
@@ -143,9 +151,9 @@ func (s *TokenStore) IssueAppToken(appID string, procID int32, sessionID string,
 		CreatedAt:    time.Now(),
 	}
 	s.credentials[token] = cred
-	s.byApp[appID] = append(s.byApp[appID], token)
+	indexToken(s.byApp, appID, token)
 	if procID != 0 {
-		s.byProc[procID] = append(s.byProc[procID], token)
+		indexToken(s.byProc, procID, token)
 	}
 	return token, nil
 }
@@ -158,48 +166,105 @@ func (s *TokenStore) BindProcess(token string, procID int32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cred, ok := s.credentials[token]; ok {
+		if old := cred.Principal.ProcessID; old != 0 && old != procID {
+			unindexToken(s.byProc, old, token)
+		}
 		cred.Principal.ProcessID = procID
-		s.byProc[procID] = append(s.byProc[procID], token)
+		indexToken(s.byProc, procID, token)
 	}
+}
+
+// indexToken records token under key in an index map.
+func indexToken[K comparable](index map[K]map[string]struct{}, key K, token string) {
+	set := index[key]
+	if set == nil {
+		set = make(map[string]struct{})
+		index[key] = set
+	}
+	set[token] = struct{}{}
+}
+
+// unindexToken drops token from key's set, removing empty sets.
+func unindexToken[K comparable](index map[K]map[string]struct{}, key K, token string) {
+	set := index[key]
+	if set == nil {
+		return
+	}
+	delete(set, token)
+	if len(set) == 0 {
+		delete(index, key)
+	}
+}
+
+// reapLocked marks the credential revoked, removes it from the live set and
+// indexes, and retains a bounded tombstone so diagnostics can still report
+// recent revocations. Callers must hold s.mu.
+func (s *TokenStore) reapLocked(token string, cred *Credential, now time.Time) {
+	cred.Revoked = true
+	cred.RevokedAt = now
+	delete(s.credentials, token)
+	unindexToken(s.byApp, cred.Principal.AppID, token)
+	if cred.Principal.ProcessID != 0 {
+		unindexToken(s.byProc, cred.Principal.ProcessID, token)
+	}
+	if _, ok := s.revoked[token]; !ok {
+		s.revokedOrder = append(s.revokedOrder, token)
+	}
+	s.revoked[token] = cred
+	for len(s.revokedOrder) > revokedCredentialLimit {
+		delete(s.revoked, s.revokedOrder[0])
+		s.revokedOrder = s.revokedOrder[1:]
+	}
+}
+
+// lookupLocked resolves a token against live credentials, then the bounded
+// tombstone set. Callers must hold s.mu.
+func (s *TokenStore) lookupLocked(token string) (*Credential, bool) {
+	if cred, ok := s.credentials[token]; ok &&
+		subtle.ConstantTimeCompare([]byte(cred.Token), []byte(token)) == 1 {
+		return cred, true
+	}
+	if cred, ok := s.revoked[token]; ok &&
+		subtle.ConstantTimeCompare([]byte(cred.Token), []byte(token)) == 1 {
+		return cred, true
+	}
+	return nil, false
 }
 
 // Authenticate verifies the token on connection handshake.
 func (s *TokenStore) Authenticate(token string) (Principal, *Capabilities, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for tok, cred := range s.credentials {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
-			if cred.Revoked {
-				return Principal{}, nil, errors.New("unauthorized: token revoked")
-			}
-			return cred.Principal, NewCapabilities(cred.Capabilities.List()...), nil
-		}
+	cred, ok := s.lookupLocked(token)
+	if !ok {
+		return Principal{}, nil, errors.New("unauthorized: bad token")
 	}
-	return Principal{}, nil, errors.New("unauthorized: bad token")
+	if cred.Revoked {
+		return Principal{}, nil, errors.New("unauthorized: token revoked")
+	}
+	return cred.Principal, NewCapabilities(cred.Capabilities.List()...), nil
 }
 
 // Validate verifies whether an already-authenticated token remains active and unrevoked.
 func (s *TokenStore) Validate(token string) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for tok, cred := range s.credentials {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
-			if cred.Revoked {
-				return errors.New("unauthorized: credential revoked")
-			}
-			return nil
-		}
+	cred, ok := s.lookupLocked(token)
+	if !ok {
+		return errors.New("unauthorized: bad token")
 	}
-	return errors.New("unauthorized: bad token")
+	if cred.Revoked {
+		return errors.New("unauthorized: credential revoked")
+	}
+	return nil
 }
 
-// Revoke invalidates a specific token immediately.
+// Revoke invalidates a specific token immediately and reaps it from the live set.
 func (s *TokenStore) Revoke(token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cred, ok := s.credentials[token]; ok && !cred.Revoked {
-		cred.Revoked = true
-		cred.RevokedAt = time.Now()
+	if cred, ok := s.credentials[token]; ok {
+		s.reapLocked(token, cred, time.Now())
 	}
 }
 
@@ -208,10 +273,9 @@ func (s *TokenStore) RevokeApp(appID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for _, tok := range s.byApp[appID] {
-		if cred, ok := s.credentials[tok]; ok && !cred.Revoked {
-			cred.Revoked = true
-			cred.RevokedAt = now
+	for tok := range s.byApp[appID] {
+		if cred, ok := s.credentials[tok]; ok {
+			s.reapLocked(tok, cred, now)
 		}
 	}
 }
@@ -224,31 +288,30 @@ func (s *TokenStore) RevokeProcess(procID int32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for _, tok := range s.byProc[procID] {
-		if cred, ok := s.credentials[tok]; ok && !cred.Revoked {
-			cred.Revoked = true
-			cred.RevokedAt = now
+	for tok := range s.byProc[procID] {
+		if cred, ok := s.credentials[tok]; ok {
+			s.reapLocked(tok, cred, now)
 		}
 	}
 }
 
-// Lookup returns a copy of the credential metadata for diagnostics.
+// Lookup returns a copy of the credential metadata for diagnostics, including
+// recently revoked credentials retained in the bounded tombstone set.
 func (s *TokenStore) Lookup(token string) (Credential, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for tok, cred := range s.credentials {
-		if subtle.ConstantTimeCompare([]byte(token), []byte(tok)) == 1 {
-			return Credential{
-				Token:        tok,
-				Principal:    cred.Principal,
-				Capabilities: NewCapabilities(cred.Capabilities.List()...),
-				CreatedAt:    cred.CreatedAt,
-				Revoked:      cred.Revoked,
-				RevokedAt:    cred.RevokedAt,
-			}, true
-		}
+	cred, ok := s.lookupLocked(token)
+	if !ok {
+		return Credential{}, false
 	}
-	return Credential{}, false
+	return Credential{
+		Token:        cred.Token,
+		Principal:    cred.Principal,
+		Capabilities: NewCapabilities(cred.Capabilities.List()...),
+		CreatedAt:    cred.CreatedAt,
+		Revoked:      cred.Revoked,
+		RevokedAt:    cred.RevokedAt,
+	}, true
 }
 
 // Well-known capabilities. Applications declare the ones they need in
