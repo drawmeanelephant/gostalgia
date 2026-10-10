@@ -23,7 +23,7 @@ func TestFromDefinitionCompleteTokens(t *testing.T) {
 	if th.Name != "ocean" {
 		t.Fatalf("name = %q", th.Name)
 	}
-	if th.Palette.Canvas == "" || th.Palette.Text == "" || th.Palette.Accent == "" {
+	if th.Palette.Canvas == nil || th.Palette.Text == nil || th.Palette.Accent == nil {
 		t.Fatal("incomplete palette")
 	}
 	if th.Palette.Canvas == th.Palette.Text || th.Palette.Surface == th.Palette.Text {
@@ -37,7 +37,7 @@ func TestFromDefinitionCompleteTokens(t *testing.T) {
 	}
 	for _, state := range []State{Normal, Disabled, Busy, Success, Error, Empty} {
 		s := th.Status(state)
-		if s.Text == "" || s.Fill == "" || s.Symbol == "" || s.Label == "" || s.Message == "" {
+		if s.Text == nil || s.Fill == nil || s.Symbol == "" || s.Label == "" || s.Message == "" {
 			t.Errorf("incomplete %s status: %+v", state, s)
 		}
 	}
