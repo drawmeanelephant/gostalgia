@@ -73,7 +73,7 @@ func (m *Model) renderHome(w, bodyHeight int) []string {
 	// System Activity
 	lines = append(lines, m.kit.Heading("SYSTEM ACTIVITY"))
 	up := formatUptime(m.homeData.UptimeSeconds)
-	user := m.homeData.User
+	user := viewText(m.homeData.User)
 	if user == "" {
 		user = "guest"
 	}
@@ -95,9 +95,9 @@ func (m *Model) renderHome(w, bodyHeight int) []string {
 			}
 			badge := m.kit.Badge(fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success, 20)
 			if itemIdx == m.homeSelected {
-				lines = append(lines, ui.Truncate(m.kit.Selection(cursor+a.Manifest.Name)+"  "+badge+"  "+m.kit.Muted(a.Manifest.ID), w))
+				lines = append(lines, ui.Truncate(m.kit.Selection(cursor+viewText(a.Manifest.Name))+"  "+badge+"  "+m.kit.Muted(viewText(a.Manifest.ID)), w))
 			} else {
-				lines = append(lines, ui.Truncate(cursor+m.kit.Text(a.Manifest.Name)+"  "+badge+"  "+m.kit.Muted(a.Manifest.ID), w))
+				lines = append(lines, ui.Truncate(cursor+m.kit.Text(viewText(a.Manifest.Name))+"  "+badge+"  "+m.kit.Muted(viewText(a.Manifest.ID)), w))
 			}
 			itemIdx++
 		}
@@ -119,9 +119,9 @@ func (m *Model) renderHome(w, bodyHeight int) []string {
 			}
 			sizeStr := fmt.Sprintf("%d B", d.Size)
 			if itemIdx == m.homeSelected {
-				lines = append(lines, ui.Truncate(m.kit.Selection(cursor+d.Name)+"  "+m.kit.Muted(sizeStr), w))
+				lines = append(lines, ui.Truncate(m.kit.Selection(cursor+viewText(d.Name))+"  "+m.kit.Muted(sizeStr), w))
 			} else {
-				lines = append(lines, ui.Truncate(cursor+m.kit.Text(d.Name)+"  "+m.kit.Muted(sizeStr), w))
+				lines = append(lines, ui.Truncate(cursor+m.kit.Text(viewText(d.Name))+"  "+m.kit.Muted(sizeStr), w))
 			}
 			itemIdx++
 		}

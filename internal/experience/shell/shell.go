@@ -1418,7 +1418,7 @@ func (m *Model) View() string {
 	if m.attached {
 		statusLabel = "ATTACHED"
 	}
-	userName := m.user
+	userName := viewText(m.user)
 	if userName == "" {
 		userName = "guest"
 	}
@@ -1507,9 +1507,9 @@ func (m *Model) View() string {
 	} else if m.currentMode() == modeLauncher {
 		filtered := m.filteredApps()
 		if len(filtered) > 0 && m.selected < len(filtered) && filtered[m.selected].Running {
-			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter relaunch, F3 stop, F4 view.", filtered[m.selected].Manifest.Name, filtered[m.selected].PID), theme.Success)
+			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter relaunch, F3 stop, F4 view.", viewText(filtered[m.selected].Manifest.Name), filtered[m.selected].PID), theme.Success)
 		} else if len(filtered) > 0 && m.selected < len(filtered) {
-			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop · F4 view · Esc prompt.", filtered[m.selected].Manifest.Name))
+			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop · F4 view · Esc prompt.", viewText(filtered[m.selected].Manifest.Name)))
 		} else {
 			prompt += m.kit.Muted("Esc returns to prompt.")
 		}
