@@ -113,8 +113,12 @@ conflict resolution, and transactional rollback semantics.
 
 ## Endpoints per platform
 
-- macOS/Linux: unix domain socket at `$TMPDIR/gostalgia-<hash>.sock` (path
-  derived from the root to stay under the 104-byte limit).
+- macOS/Linux: unix domain socket inside a private per-boot directory,
+  `$TMPDIR/gostalgia-ipc-<random>/gostalgia-<hash>.sock` (mode `0700`; the
+  `<hash>` derives from the root to stay under the 104-byte limit). Per-app
+  child sockets (`gs-app-<random>.sock`) share the same directory. The
+  directory is masked from sandboxed children so they cannot discover or
+  unlink live sockets.
 - Windows: loopback TCP on an ephemeral port.
 
 Clients dial via `platform.DialIPC(endpoint)`; both schemes are recorded in

@@ -64,7 +64,7 @@ Shutdown is triggered by SIGINT/SIGTERM (handled by `cmd/gostalgia`) or by the
 Written when the IPC service starts, removed at shutdown:
 
 ```json
-{"pid": 123, "version": "0.1.0", "endpoint": "unix:///var/folders/.../gostalgia-1a2b3c.sock",
+{"pid": 123, "version": "0.1.0", "endpoint": "unix:///var/folders/.../gostalgia-ipc-XXXX/gostalgia-1a2b3c.sock",
  "token": "...", "started_at": "2026-10-04T..."}
 ```
 
