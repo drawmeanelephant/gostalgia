@@ -169,8 +169,9 @@ type Instance interface {
    manifest grant, never an inherited operator grant. Run blocks while the app
    is alive, returns nil on normal cancellation, or an error on failure.
 5. On Run return or cancellation: reject new handlers, cancel app lifetime,
-   retract `app/<id>/` routes, and drain in-flight handlers (five-second cleanup
-   deadline). Then call Stop **once**, even after failed Init. Stop receives a
+   retract `app/<id>/` routes (bounded wait for in-flight dispatches), and
+   drain in-flight handlers (five-second cleanup deadline). Then call Stop
+   **once**, even after failed Init. Stop receives a
    fresh context, not Run's canceled one, and must honor its deadline. If handler
    draining exhausts the deadline, Stop sees an expired context: release what
    you safely can and return an error, not success.
@@ -270,8 +271,11 @@ When an external app launches:
    it then sends an `auth` request with the token and verifies
    authentication success.
 4. **Readiness and version handshake:** `sdk.Serve` invokes `app/ready` with
-   its `app_id` and `protocol_version`. If the protocol version does not match
-   the runtime's supported protocol (`ProtocolVersion = 1`), the handshake fails.
+   its `app_id`, `protocol_version`, and route list. If the protocol version
+   does not match the runtime's supported protocol (`ProtocolVersion = 1`),
+   the handshake fails. The route list is bounded (at most 1024 entries) and
+   each name must be an identifier matching `^[a-z][a-z0-9_-]*$` of at most
+   64 bytes; oversized or invalid registrations fail the handshake too.
 5. **Startup timeout:** The supervisor enforces a strict startup timeout
    (5 seconds). If the child fails to complete the handshake, crashes, or hangs
    during startup, the supervisor kills the child process, cleans up the socket,
@@ -302,10 +306,13 @@ func (c *sdk.Context) Call(ctx context.Context, method string, params, out any) 
 func sdk.DecodeParams(raw json.RawMessage, out any) error
 ```
 
-- Handle is **Init-only**. Names match `^[a-z][a-z0-9_-]*$`; no slashes, global
-  methods, or overriding system routes. `Handle("next", h)` serves
-  `app/com.example.counter/next`. Duplicate routes are errors. Both publishing
-  app routes and invoking them require `ipc`.
+- Handle is **Init-only**. Names match `^[a-z][a-z0-9_-]*$` and are at most
+  64 bytes; no slashes, global methods, or overriding system routes.
+  `Handle("next", h)` serves `app/com.example.counter/next`. Duplicate routes
+  are errors. An app may declare at most 1024 routes in total; both limits
+  are enforced identically for in-proc Init declarations and the external
+  `app/ready` handshake. Both publishing app routes and invoking them
+  require `ipc`.
 - Handler params are the request's JSON; validate all required fields.
   DecodeParams leaves a value untouched for absent params. Return a
   JSON-serializable value (struct/map, nil, or json.RawMessage), or an error.
