@@ -307,12 +307,16 @@ func (m *MemFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 
 	if n, ok := m.nodes[name]; ok && n.dir() {
 		recoverName := name + ".recover"
-		cp := append([]byte(nil), data...)
-		m.nodes[recoverName] = &memNode{
-			name:    path.Base(recoverName),
-			data:    cp,
-			mode:    perm,
-			modTime: time.Now(),
+		// An existing artifact may be the only copy of an earlier failed
+		// save; never clobber it (HostFS refuses before touching it).
+		if _, exists := m.nodes[recoverName]; !exists {
+			cp := append([]byte(nil), data...)
+			m.nodes[recoverName] = &memNode{
+				name:    path.Base(recoverName),
+				data:    cp,
+				mode:    perm,
+				modTime: time.Now(),
+			}
 		}
 		return &Error{
 			Op:          "save",

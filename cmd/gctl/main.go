@@ -290,14 +290,14 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 
 		if logs.Stdout.Content != "" {
 			fmt.Println("--- stdout ---")
-			fmt.Print(sanitizeTerminal(logs.Stdout.Content))
+			fmt.Print(sanitizeTerminalBlock(logs.Stdout.Content))
 			if !strings.HasSuffix(logs.Stdout.Content, "\n") {
 				fmt.Println()
 			}
 		}
 		if logs.Stderr.Content != "" {
 			fmt.Println("--- stderr ---")
-			fmt.Print(sanitizeTerminal(logs.Stderr.Content))
+			fmt.Print(sanitizeTerminalBlock(logs.Stderr.Content))
 			if !strings.HasSuffix(logs.Stderr.Content, "\n") {
 				fmt.Println()
 			}
@@ -327,7 +327,7 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 			if a.Running {
 				state = fmt.Sprintf("running (pid %d)", a.PID)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.Manifest.ID, a.Manifest.Name, a.Manifest.Version, state)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", sanitizeTerminal(a.Manifest.ID), sanitizeTerminal(a.Manifest.Name), sanitizeTerminal(a.Manifest.Version), state)
 		}
 		return w.Flush()
 
@@ -343,7 +343,7 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 		if err := client.Call(ctx, "app/com.gostalgia.echo/echo", params, &out); err != nil {
 			return err
 		}
-		fmt.Printf("%s (echo #%d)\n", out.Msg, out.Echoes)
+		fmt.Printf("%s (echo #%d)\n", sanitizeTerminal(out.Msg), out.Echoes)
 		return nil
 
 	case "ls":
@@ -363,13 +363,13 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 			return err
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintf(w, "%s:\n", out.Path)
+		fmt.Fprintf(w, "%s:\n", sanitizeTerminal(out.Path))
 		for _, e := range out.Entries {
 			if e.IsDir {
-				fmt.Fprintf(w, "  %s/\n", e.Name)
+				fmt.Fprintf(w, "  %s/\n", sanitizeTerminal(e.Name))
 				continue
 			}
-			fmt.Fprintf(w, "  %s\t(%d bytes)\n", e.Name, e.Size)
+			fmt.Fprintf(w, "  %s\t(%d bytes)\n", sanitizeTerminal(e.Name), e.Size)
 		}
 		return w.Flush()
 
@@ -441,7 +441,37 @@ func pretty(raw json.RawMessage) error {
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?(\x07|\x1b\\)`)
 
+// sanitizeTerminal scrubs server-supplied strings rendered into single-line
+// table fields. ANSI/OSC sequences and control characters are removed, and
+// newlines, carriage returns, and tabs become visible escapes so a hostile
+// process name or error string cannot forge rows or columns in the
+// ps/history/logs tabwriter tables.
 func sanitizeTerminal(s string) string {
+	s = ansiRegex.ReplaceAllString(s, "")
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 32 || r == 127 || unicode.IsControl(r) {
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// sanitizeTerminalBlock is sanitizeTerminal for multi-line log content: the
+// same sequence stripping, but real newlines and tabs survive so captured
+// process output keeps its shape. It never feeds tabwriter fields.
+func sanitizeTerminalBlock(s string) string {
 	s = ansiRegex.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' {
