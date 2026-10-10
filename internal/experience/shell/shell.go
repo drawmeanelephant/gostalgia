@@ -19,6 +19,7 @@ import (
 	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/ipc"
 	"gostalgia/sdk"
 )
 
@@ -131,6 +132,7 @@ type Model struct {
 	kit             ui.Kit
 	presentation    *appView
 	viewEpoch       uint64
+	viewSub         *ipc.ClientSubscription
 	mode            viewMode
 	homeData        homeData
 	homeSelected    int
@@ -762,7 +764,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tasks.UpdateReceipt(&r)
 		}
 		return m, nil
-	case viewMsg, viewTickMsg, viewCheckMsg, viewCancelMsg:
+	case viewMsg, viewTickMsg, viewCheckMsg, viewCancelMsg, viewSubscribedMsg, viewEventMsg:
 		return m, m.updatePresentation(msg)
 	case closedMsg:
 		if m.presentation != nil && m.presentation.cancel != nil {
@@ -1076,9 +1078,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shelf = false
 			return m, nil
 		case "pgup":
+			// A focused version-3 region owns page scrolling; everywhere
+			// else the keys keep scrolling shell output.
+			if m.presentation != nil && m.presentation.regionFocused() {
+				return m, m.viewKey(msg)
+			}
 			m.scroll += max(1, m.height/2)
 			return m, nil
 		case "pgdown":
+			if m.presentation != nil && m.presentation.regionFocused() {
+				return m, m.viewKey(msg)
+			}
 			m.scroll = max(0, m.scroll-max(1, m.height/2))
 			return m, nil
 		}

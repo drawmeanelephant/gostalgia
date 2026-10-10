@@ -75,12 +75,14 @@ func TestMarkviewHandoffRendersOverSocket(t *testing.T) {
 		t.Fatalf("handoff = %+v", h)
 	}
 
-	// The running app answers its view over the socket with items only.
+	// The running app answers its view over the socket: on contract v3 the
+	// rendered document lives in the scroll region, on older contracts in
+	// items. Either way the full structure must be present.
 	var v sdk.View
 	must(t, client.Call(ctx, "app/com.gostalgia.markview/view", sdk.ViewRequest{Version: sdk.PresentationVersion}, &v))
 	var haveHeading, haveList, haveCode, haveQuote bool
-	for _, it := range v.Items {
-		switch it.Label {
+	mark := func(label string) {
+		switch label {
 		case "# Guide":
 			haveHeading = true
 		case "• one":
@@ -91,8 +93,16 @@ func TestMarkviewHandoffRendersOverSocket(t *testing.T) {
 			haveQuote = true
 		}
 	}
+	if v.Region != nil {
+		for _, line := range strings.Split(v.Region.Text, "\n") {
+			mark(strings.TrimSpace(line))
+		}
+	}
+	for _, it := range v.Items {
+		mark(it.Label)
+	}
 	if !haveHeading || !haveList || !haveCode || !haveQuote {
-		t.Fatalf("rendered structure incomplete: %+v", v.Items)
+		t.Fatalf("rendered structure incomplete: region=%v items=%+v", v.Region != nil, v.Items)
 	}
 
 	// The app's own open route is denied on a path outside the grant, and a

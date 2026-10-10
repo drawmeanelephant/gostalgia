@@ -43,6 +43,7 @@ func (s *SysService) Start(ctx context.Context) error {
 		"app/list":          s.appList,
 		"app/launch":        s.appLaunch,
 		"app/stop":          s.appStop,
+		"app/invalidate":    s.appInvalidate,
 		"session/whoami":    s.whoami,
 	}
 	for method, h := range routes {
@@ -231,6 +232,28 @@ func (s *SysService) appStop(ctx context.Context, req ipc.Request) (any, error) 
 		return nil, err
 	}
 	return map[string]any{"id": p.ID, "stopped": true}, nil
+}
+
+// appInvalidate is the presentation contract's version-3 push channel: the
+// calling app reports its own snapshot stale and subscribers refetch it.
+// The app id comes from the caller principal — an app cannot invalidate a
+// view it does not own, and no view data rides the event.
+func (s *SysService) appInvalidate(ctx context.Context, req ipc.Request) (any, error) {
+	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
+		return nil, err
+	}
+	principal := ipc.CallerPrincipal(ctx)
+	if !principal.IsApp() || principal.AppID == "" {
+		return nil, fmt.Errorf("app/invalidate: only applications can invalidate their view")
+	}
+	if s.ctx.Events == nil {
+		return nil, fmt.Errorf("app/invalidate: event bus unavailable")
+	}
+	s.ctx.Events.Publish("app/"+principal.AppID, app.ViewEvent{
+		ID:  principal.AppID,
+		PID: principal.ProcessID,
+	})
+	return map[string]any{"published": true}, nil
 }
 
 func (s *SysService) whoami(ctx context.Context, req ipc.Request) (any, error) {

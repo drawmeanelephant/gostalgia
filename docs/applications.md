@@ -437,7 +437,7 @@ handler as an operator too: it must not borrow operator capabilities.
 Run `go build ./...`, `go vet ./...`, `gofmt -l .` (empty output), and
 `go test -race ./...`. Do not add another external dependency to an app.
 
-## 7. Data/action presentation contract (versions 1–2)
+## 7. Data/action presentation contract (versions 1–3)
 
 **There is exactly one terminal owner: the experience/shell.** Only it enters
 raw mode, renders, restores the terminal, chooses styles, edits inputs, moves
@@ -471,9 +471,9 @@ manifest grants, handler concurrency, cancellation, and error rules.
 
 `version` is the presentation protocol version, independent of manifest
 version. Requests may name any version in `[sdk.MinPresentationVersion,
-sdk.PresentationVersion]` (currently 1–2); the response is stamped with the
-requested version and must validate under it, so version-2 elements served to
-a version-1 request are an error rather than silently dropped content. The
+sdk.PresentationVersion]` (currently 1–3); the response is stamped with the
+requested version and must validate under it, so newer elements served to
+an older request are an error rather than silently dropped content. The
 shell asks for the newest version it supports and steps down one version at a
 time on an unsupported-version reply, so version-1 apps keep rendering. Inside both
 callbacks, `sdk.PresentationRequestVersion(ctx)` reports the negotiated
@@ -489,15 +489,20 @@ not automatically retry a mutating action after a lost response.
 ### Typed snapshot, not widgets
 
 `sdk.View` has `version`, `instance`, `title`, `state`, `items`, `fields`,
-`actions`, `blocks`, `meters`, `grid`, `status`, and `error`. It is a full
-replacement, including explicit empty values, not a patch. Its small concrete
-vocabulary is:
+`actions`, `blocks`, `meters`, `grid`, `region`, `status`, and `error`. It is
+a full replacement, including explicit empty values, not a patch. Its small
+concrete vocabulary is:
 
 - `sdk.Item`: stable local `id`, `label`, and textual `detail`.
-- `sdk.Field`: local `id`, `label`, initial text `value`, and `required`.
-  Fields are single-line text. The shell owns editing; periodic
-  snapshots preserve drafts for surviving field IDs. To reset an input, change
-  its ID or reopen the view.
+- `sdk.Field`: local `id`, `label`, initial text `value`, `required`, and
+  `multiline` (version 3). Ordinary fields are single-line text with a
+  4096-byte value budget; `multiline` fields accept newlines — Enter inserts
+  a line break instead of invoking an action — and carry a 32768-byte value
+  budget so Notes/Compendium can edit whole documents in place. The shell
+  owns editing and focus either way; periodic snapshots preserve drafts for
+  surviving field IDs. To reset an input, change its ID or reopen the view.
+  Apps should not silently truncate oversized content into a multiline
+  field: surface a read-only status instead.
 - `sdk.Action`: local `id`, `label`, and `disabled`.
 - `sdk.ViewState`: `ready`, `loading`, or `error`. An error state requires an
   error banner. `status` is informational text, not an IPC error.
@@ -524,15 +529,27 @@ vocabulary is:
   whose ID still rides along on action requests while the cell is enabled. A
   disabled cell is drawn dimmed and never activates, like a disabled
   `sdk.Action`.
+- `sdk.Region` (version 3): a scrollable long-form output region — `id`,
+  `label`, and `text` bounded to 2048 lines and 65536 bytes. It answers the
+  "paged item list" pain of Compendium articles, RSS items, the Adventure
+  transcript, and Markview documents: apps publish the whole text once and
+  the shell owns the scrolling. The region is the focus ring's last stop;
+  while focused, Up/Down scroll one line and Page-Up/Page-Down scroll a
+  window at a time. Reaching the tail re-pins the region so refreshed
+  snapshots keep following live output; scrolling away from the tail
+  preserves the user's offset across refreshes, and a changed region `id`
+  resets to the tail.
 
 IDs are unique within each collection and match `[a-z][a-z0-9_-]*`, up to 64
 bytes. Collections are bounded to 100 items, 16 fields, 16 actions, 4 blocks,
-and 8 meters; each block holds at most 32 lines and 16384 bytes, and a grid
-1–64 cells. Titles/labels are bounded to 256 bytes; field values, item
-details, status, and error to 4096 bytes each. New collections carry their own
-deliberate budgets instead of reusing item byte limits. `View.Validate()`
-checks the contract, including rejecting blocks, meters, and grid on a
-version-1 snapshot. The SDK stamps and validates callback results; the shell
+and 8 meters; each block holds at most 32 lines and 16384 bytes, a grid
+1–64 cells, and a region 2048 lines / 65536 bytes. Titles/labels are bounded
+to 256 bytes; ordinary field values, item details, status, and error to 4096
+bytes each; multiline field values to 32768 bytes. New collections carry
+their own deliberate budgets instead of reusing item byte limits.
+`View.Validate()` checks the contract, including rejecting blocks, meters,
+and grid on a version-1 snapshot and multiline fields and regions on
+versions below 3. The SDK stamps and validates callback results; the shell
 validates replies and strips terminal controls before rendering every piece
 of app text.
 
@@ -546,11 +563,31 @@ without its own `cell_id` and while a same-named top-level action is disabled.
 App callbacks still validate domain rules and authorization, and must
 synchronize shared state.
 
+### Push invalidation (version 3)
+
+Polling the `view` route is the baseline liveness mechanism, but a version-3
+app can also nudge the shell when its state changes:
+
+```go
+func (c *sdk.Context) Invalidate(ctx context.Context) error
+```
+
+`Invalidate` calls the `app/invalidate` host route, which publishes an
+`app.view` notification on the event bus with source `app/<app-id>`. The
+shell subscribes to that topic on its operator-token connection and, for a
+matching source, refetches the view at the negotiated version — an
+invalidation carries no data, only "your snapshot is stale." Refreshes are
+coalesced while an action or another refresh is in flight, so a burst of
+invalidations costs at most one extra fetch. Ordinary polling stays on as
+the fallback: a client connection without subscribe support simply keeps
+polling. Pomodoro invalidates on phase transitions and RSS on background
+poll results, so those surfaces update between poll ticks.
+
 This deliberately supports a concrete list/text-form/action screen plus
-bounded art, gauge, and pad regions, not a speculative layout or widget
-framework. Files and Notes can build on these data types and scoped
+bounded art, gauge, pad, and scroll regions, not a speculative layout or
+widget framework. Files and Notes can build on these data types and scoped
 filesystem service calls; rich editors, pagination, multiple views, and
-app-defined shortcuts are not part of versions 1–2.
+app-defined shortcuts are not part of versions 1–3.
 
 ### Echo, interactive and headless
 
@@ -561,13 +598,15 @@ same synchronized operation. Neither path imports Charm or accesses a host
 file or terminal.
 
 In the shell, press F2, select a running Echo instance, and press F4. Type a
-message and press Enter. Tab/Shift-Tab move field/action focus — the grid is
-the last stop when a version-2 snapshot carries one. Enter invokes the focused
-action (the first action when a field is focused) or the focused cell's
-declared action; Up/Down select an item, and all four arrows move the cell
-selection while the grid is focused. A list action's request carries the
-current `item_id` and `cell_id` selections (`cell_id` is omitted while a
-disabled cell is selected). F2 always returns to the shelf,
+message and press Enter. Tab/Shift-Tab move field/action focus — the grid,
+then the region, are the last stops when a snapshot carries them. Enter
+invokes the focused action (the first action when a single-line field is
+focused), inserts a newline inside a focused multiline field, or fires the
+focused cell's declared action; Up/Down select an item, scroll a focused
+region, and all four arrows move the cell selection while the grid is
+focused. A list action's request carries the current `item_id` and `cell_id`
+selections (`cell_id` is omitted while a disabled cell is selected). F2
+always returns to the shelf,
 Ctrl-C/Ctrl-D always exit, and apps cannot intercept these global hotkeys.
 
 The same operations run without any UI:
@@ -709,6 +748,11 @@ via F4):
 - Recovery mode: `restore`, `discard_recovery`
 - Unsaved changes mode: `save_and_proceed`, `discard_and_proceed`, `cancel`
 - Conflict mode: `force_save`, `save_as`, `cancel`
+
+On contract v3 the whole document is a `multiline` content field — real
+multi-line editing without leaving the contract — for notes up to 32,768
+bytes; larger notes surface an honest read-only status instead of a
+truncated edit box. Older contracts keep the legacy single-line field.
 
 Notes also provides programmatic IPC routes under `app/com.gostalgia.notes/`:
 - `doc`: Returns `{path, content, dirty, mod_time, size, recovery_available, prompt}`
@@ -1165,10 +1209,13 @@ appear as unresolved in the graph.
   `trash_bin`, `recovery`, `export_vault`, `rebuild_index`, `help`,
   `home`.
 - Note: rendered text, link, backlink, and tag items; a `Markdown` field
-  (only when the note fits the 4,096-byte field limit, so a larger note is
-  never truncated by an edit) and a `Rename to` field. Actions: `save`,
-  `follow`, `reload`, `rename`, `trash`, `export_note`, `today`, `home`,
-  plus `overwrite` while a save conflict is pending.
+  and a `Rename to` field. On contract v3 the rendered note is a scroll
+  region and `Markdown` is a multiline field holding the whole document up
+  to 32,768 bytes; on older contracts rendered text stays an item and the
+  field appears only when the note fits the 4,096-byte limit, so a larger
+  note is never truncated by an edit. Actions: `save`, `follow`, `reload`,
+  `rename`, `trash`, `export_note`, `today`, `home`, plus `overwrite` while
+  a save conflict is pending.
 - Graph, Tags, Tag, Trash (`restore`), Recovery drafts, and Help views.
 
 Programmatic routes under `app/com.gostalgia.compendium/`: `create`, `open`,
@@ -1201,9 +1248,9 @@ content or byte-identical export.
   protects them from other apps, not from anyone who can read the host
   directory. Use host disk encryption if that matters.
 - No sync, sharing, accounts, plugins, query language, HTML preview, or
-  WYSIWYG editing (non-goals). Version 1 fields are single-line, so
-  multi-line editing in the shell is limited; the `edit`/`save` routes
-  carry full documents.
+  WYSIWYG editing (non-goals). Multi-line editing needs contract v3: on
+  older contracts fields are single-line, and the `edit`/`save` routes
+  carry full documents either way.
 - The daily note uses the runtime host's local date.
 - Titles are not Unicode-normalized (stdlib only): normalization variants
   are refused as collisions rather than unified, and links resolve by case
@@ -1735,12 +1782,13 @@ the transcript, never as IPC errors. The command field and the buttons
 share one dispatch, and every action echoes as a `> verb` line, so
 commands and actions stay in sync.
 
-The transcript is the view: each line is an item, newest at the bottom,
+The transcript is the view. On contract v3 it is a scroll region holding the
+full retained 200-line tail, pinned to the newest lines until the player
+scrolls up. Older contracts keep each line as an item, newest at the bottom,
 bounded to the newest 63 with a leading `… N earlier lines` notice item
-rather than silent loss. Stored state keeps a longer 200-line tail. Death
-(`go down` in the dark) and victory (out the door with the elephant)
-render honestly — the title changes, the transcript says so, and the only
-live words are `restart` and `help`.
+rather than silent loss. Death (`go down` in the dark) and victory (out the
+door with the elephant) render honestly — the title changes, the transcript
+says so, and the only live words are `restart` and `help`.
 
 ### Persistence and routes
 
@@ -1887,9 +1935,10 @@ optional title dropped, images collapse to `[image: alt]`, autolinks stay
 readable, raw HTML tags are removed rather than passed through, entities
 decode, and escapes reveal literals. Every row carries its source line in
 the item detail (`list · line 42`) so the reader can locate it in the
-original. Items — not v2 blocks — carry everything, so the view looks the
-same at presentation versions 1 and 2 and document order is preserved
-(blocks render above items and cannot interleave).
+original. On contract v3 the rows are one scroll region (`document`), so the
+whole document is on screen at once and the page actions disappear; on
+versions 1–2 items — not blocks — carry everything, so document order is
+preserved (blocks render above items and cannot interleave).
 
 ### Honest rejection and bounded views
 

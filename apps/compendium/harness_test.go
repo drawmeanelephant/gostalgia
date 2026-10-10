@@ -427,7 +427,12 @@ func (h *harness) must(t testing.TB, route string, params, out any) {
 
 func (h *harness) view(t testing.TB) sdk.View {
 	t.Helper()
-	res, err := h.handlers["view"](context.Background(), json.RawMessage(`{"version":1}`))
+	return h.viewV(t, 1)
+}
+
+func (h *harness) viewV(t testing.TB, version int) sdk.View {
+	t.Helper()
+	res, err := h.handlers["view"](context.Background(), json.RawMessage(fmt.Sprintf(`{"version":%d}`, version)))
 	if err != nil {
 		t.Fatalf("view: %v", err)
 	}
@@ -440,20 +445,29 @@ func (h *harness) view(t testing.TB) sdk.View {
 
 func (h *harness) act(t testing.TB, action, item string, values map[string]string) sdk.View {
 	t.Helper()
-	v, err := h.tryAct(action, item, values)
+	v, err := h.tryActV(1, action, item, values)
 	if err != nil {
 		t.Fatalf("action %s: %v", action, err)
 	}
 	return v
 }
 
-func (h *harness) tryAct(action, item string, values map[string]string) (sdk.View, error) {
-	cur, err := h.handlers["view"](context.Background(), json.RawMessage(`{"version":1}`))
+func (h *harness) actV(t testing.TB, version int, action, item string, values map[string]string) sdk.View {
+	t.Helper()
+	v, err := h.tryActV(version, action, item, values)
+	if err != nil {
+		t.Fatalf("action %s: %v", action, err)
+	}
+	return v
+}
+
+func (h *harness) tryActV(version int, action, item string, values map[string]string) (sdk.View, error) {
+	cur, err := h.handlers["view"](context.Background(), json.RawMessage(fmt.Sprintf(`{"version":%d}`, version)))
 	if err != nil {
 		return sdk.View{}, err
 	}
 	req := sdk.ActionRequest{
-		Version: sdk.PresentationVersion, Instance: cur.(sdk.View).Instance,
+		Version: version, Instance: cur.(sdk.View).Instance,
 		RequestID: fmt.Sprintf("req_%d", h.seq.Add(1)), Action: action, ItemID: item, Values: values,
 	}
 	raw, _ := json.Marshal(req)

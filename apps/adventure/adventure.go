@@ -381,7 +381,7 @@ func (a *Adventure) view(ctx context.Context) (sdk.View, error) {
 	if err := a.ensureLoadedLocked(ctx); err != nil {
 		return sdk.View{Title: "Adventure", State: sdk.ViewError, Error: err.Error()}, nil
 	}
-	return a.viewLocked(), nil
+	return a.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 func (a *Adventure) act(ctx context.Context, req sdk.ActionRequest) (sdk.View, error) {
@@ -418,7 +418,7 @@ func (a *Adventure) act(ctx context.Context, req sdk.ActionRequest) (sdk.View, e
 	default:
 		return sdk.View{}, fmt.Errorf("unknown action %q", req.Action)
 	}
-	return a.viewLocked(), nil
+	return a.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 // runLocked echoes a command word into the transcript and appends its
@@ -504,28 +504,40 @@ func (a *Adventure) newGameLocked(ctx context.Context) {
 	a.saveLocked(ctx)
 }
 
-// viewLocked builds the snapshot: the transcript tail as items, newest at
-// the bottom, plus the command field and the actions that currently apply.
-func (a *Adventure) viewLocked() sdk.View {
-	start := 0
-	dropped := 0
-	if len(a.transcript) > transcriptView {
-		start = len(a.transcript) - transcriptView
-		dropped = start
-	}
-	items := make([]sdk.Item, 0, len(a.transcript)-start+1)
-	if dropped > 0 {
-		items = append(items, sdk.Item{
-			ID:     "earlier",
-			Label:  fmt.Sprintf("… %d earlier lines", dropped),
-			Detail: fmt.Sprintf("the transcript keeps the newest %d lines", transcriptView),
-		})
-	}
-	for i := start; i < len(a.transcript); i++ {
-		items = append(items, sdk.Item{
-			ID:    fmt.Sprintf("t%03d", i-start),
-			Label: a.transcript[i],
-		})
+// viewLocked builds the snapshot: on version 3 the whole kept transcript
+// lands in the scroll region; older contracts get the transcript tail as
+// items, newest at the bottom. The command field and the actions that
+// currently apply round it out either way.
+func (a *Adventure) viewLocked(version int) sdk.View {
+	var items []sdk.Item
+	var region *sdk.Region
+	if version >= 3 {
+		region = &sdk.Region{
+			ID:    "transcript",
+			Label: "Transcript",
+			Text:  strings.Join(a.transcript, "\n"),
+		}
+	} else {
+		start := 0
+		dropped := 0
+		if len(a.transcript) > transcriptView {
+			start = len(a.transcript) - transcriptView
+			dropped = start
+		}
+		items = make([]sdk.Item, 0, len(a.transcript)-start+1)
+		if dropped > 0 {
+			items = append(items, sdk.Item{
+				ID:     "earlier",
+				Label:  fmt.Sprintf("… %d earlier lines", dropped),
+				Detail: fmt.Sprintf("the transcript keeps the newest %d lines", transcriptView),
+			})
+		}
+		for i := start; i < len(a.transcript); i++ {
+			items = append(items, sdk.Item{
+				ID:    fmt.Sprintf("t%03d", i-start),
+				Label: a.transcript[i],
+			})
+		}
 	}
 
 	actions := []sdk.Action{{ID: "command", Label: "Do it"}}
@@ -548,6 +560,7 @@ func (a *Adventure) viewLocked() sdk.View {
 		Title:   a.titleLocked(),
 		State:   sdk.ViewReady,
 		Items:   items,
+		Region:  region,
 		Fields:  []sdk.Field{{ID: "cmd", Label: "Command"}},
 		Actions: actions,
 		Status:  a.statusLocked(),

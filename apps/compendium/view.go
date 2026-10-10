@@ -29,7 +29,9 @@ const (
 	modeHelp     viewMode = "help"
 
 	fieldLimit = 4096
-	maxItems   = 100
+	// areaLimit is the version-3 multiline field budget.
+	areaLimit = 32768
+	maxItems  = 100
 )
 
 type uiState struct {
@@ -82,7 +84,7 @@ func (c *Compendium) view(ctx context.Context) (sdk.View, error) {
 			c.ui.mode = modeRecovery
 		}
 	}
-	return c.render(), nil
+	return c.render(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 func (c *Compendium) errorView(err error) sdk.View {
@@ -116,7 +118,7 @@ func (c *Compendium) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, er
 	if err := c.dispatch(ctx, p); err != nil {
 		u.err = err.Error()
 	}
-	return c.render(), nil
+	return c.render(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 func (c *Compendium) dispatch(ctx context.Context, p sdk.ActionRequest) error {
@@ -434,16 +436,16 @@ func (c *Compendium) renameCurrent(ctx context.Context, newTitle string) error {
 
 // --- rendering --------------------------------------------------------------
 
-func (c *Compendium) render() sdk.View {
+func (c *Compendium) render(version int) sdk.View {
 	u := &c.ui
 	var v sdk.View
 	switch u.mode {
 	case modeNote:
 		if c.v.notes[fold(u.note)] == nil && !u.dirty && c.v.drafts[fold(u.note)] == nil {
 			c.goHome()
-			return c.render()
+			return c.render(version)
 		}
-		v = c.noteView()
+		v = c.noteView(version)
 	case modeGraph:
 		v = c.graphView()
 	case modeTags:
@@ -527,7 +529,18 @@ func (c *Compendium) homeView() sdk.View {
 	return v
 }
 
-func (c *Compendium) noteView() sdk.View {
+// regionText bounds a rendered document to the version-3 scroll region
+// budgets: 2048 lines and 64 KiB. A cut is marked, never silent.
+func regionText(s string) string {
+	const maxRegionLines, maxRegionBytes = 2048, 65536
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if len(lines) > maxRegionLines {
+		s = strings.Join(lines[:maxRegionLines-1], "\n") + "\n…"
+	}
+	return clip(s, maxRegionBytes)
+}
+
+func (c *Compendium) noteView(version int) sdk.View {
 	u := &c.ui
 	n := c.v.notes[fold(u.note)]
 	title := "Compendium — " + clip(u.note, 220)
@@ -539,7 +552,13 @@ func (c *Compendium) noteView() sdk.View {
 		rendered = "(empty note)"
 	}
 	v := sdk.View{Title: title}
-	v.Items = append(v.Items, sdk.Item{ID: "rendered", Label: "Rendered", Detail: detail(rendered)})
+	if version >= 3 {
+		// The rendered preview is long output: the version-3 scroll region
+		// replaces the single item detail it used to be clipped into.
+		v.Region = &sdk.Region{ID: "rendered", Label: "Rendered", Text: regionText(rendered)}
+	} else {
+		v.Items = append(v.Items, sdk.Item{ID: "rendered", Label: "Rendered", Detail: detail(rendered)})
+	}
 	p := parseNote(u.buffer)
 	missing := 0
 	for i, l := range p.Links {
@@ -568,7 +587,11 @@ func (c *Compendium) noteView() sdk.View {
 		}
 		v.Items = append(v.Items, sdk.Item{ID: hid("t", t), Label: label("#" + t), Detail: fmt.Sprintf("%d notes", len(c.v.tagIdx[t]))})
 	}
-	if len(u.buffer) <= fieldLimit {
+	if version >= 3 {
+		if len(u.buffer) <= areaLimit {
+			v.Fields = append(v.Fields, sdk.Field{ID: u.bodyField(), Label: "Markdown", Value: u.buffer, Multiline: true})
+		}
+	} else if len(u.buffer) <= fieldLimit {
 		v.Fields = append(v.Fields, sdk.Field{ID: u.bodyField(), Label: "Markdown", Value: u.buffer})
 	}
 	v.Fields = append(v.Fields, sdk.Field{ID: u.renameField(), Label: "Rename to"})
@@ -586,7 +609,9 @@ func (c *Compendium) noteView() sdk.View {
 	switch {
 	case u.conflict:
 		v.Status = "Conflict: the note changed since you started editing. Overwrite saves your version; Reload shows the saved one (your edits stay in Drafts)."
-	case len(u.buffer) > fieldLimit:
+	case version >= 3 && len(u.buffer) > areaLimit:
+		v.Status = fmt.Sprintf("This note is %d bytes, larger than the %d-byte multiline field limit, so it is read-only here; edit it with the edit/save routes.", len(u.buffer), areaLimit)
+	case version < 3 && len(u.buffer) > fieldLimit:
 		v.Status = fmt.Sprintf("This note is %d bytes, larger than the %d-byte field limit, so it is read-only here; edit it with the edit/save routes.", len(u.buffer), fieldLimit)
 	case u.dirty && stale:
 		v.Status = "Unsaved changes, and the note was changed elsewhere meanwhile. Save will ask before overwriting."

@@ -13,10 +13,12 @@ import (
 )
 
 // PresentationVersion is the newest data/action protocol version, independent
-// of an app's manifest version. Version 2 is additive: every version-1
-// collection keeps its meaning, and blocks, meters, and grid become available.
-// Apps supply data, never terminal widgets or keymaps.
-const PresentationVersion = 2
+// of an app's manifest version. Versions 2 and 3 are additive: every
+// earlier-version collection keeps its meaning, while blocks, meters, and grid
+// arrived at version 2 and multiline fields, the scroll region, and view
+// invalidation arrive at version 3. Apps supply data, never terminal widgets
+// or keymaps.
+const PresentationVersion = 3
 
 // MinPresentationVersion is the oldest protocol version still answered. A
 // request may name any version in [MinPresentationVersion, PresentationVersion];
@@ -37,6 +39,12 @@ const (
 	maxViewMeters  = 8
 	maxGridColumns = 16
 	maxGridCells   = 64
+	// maxAreaValue is the multiline field value budget: a deliberately
+	// larger allowance than the 4096-byte single-line field value, sized
+	// for editing real documents without pretending to be unbounded.
+	maxAreaValue   = 32768
+	maxRegionLines = 2048
+	maxRegionBytes = 65536
 )
 
 type ViewState string
@@ -53,13 +61,17 @@ type Item struct {
 	Detail string `json:"detail"`
 }
 
-// Field is a single-line text input. IDs, not labels or screen positions, route
-// input back to the app. The experience owns editing and focus.
+// Field is a text input. IDs, not labels or screen positions, route input
+// back to the app. The experience owns editing and focus. Fields are
+// single-line unless Multiline is set; a multiline field accepts newlines,
+// carries the larger maxAreaValue budget instead of the single-line 4096,
+// and exists only on version 3 and later.
 type Field struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Value    string `json:"value"`
-	Required bool   `json:"required"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Value     string `json:"value"`
+	Required  bool   `json:"required"`
+	Multiline bool   `json:"multiline,omitempty"`
 }
 
 type Action struct {
@@ -109,10 +121,25 @@ type Grid struct {
 	Cells   []Cell `json:"cells"`
 }
 
+// Region is a scrollable multi-line text viewport for long app output —
+// transcripts, articles, feed bodies — that would overflow the item list or
+// a fixed Block. Text is a full snapshot, not an append delta; the shell
+// owns the scroll position, pins the view to the tail until the user scrolls
+// up, and clips each line at the viewport edge without wrapping. Label is an
+// optional caption. Unlike Block, a Region is a focus stop: it accepts
+// scroll keys. Version 3 and later.
+type Region struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Text  string `json:"text"`
+}
+
 // View is a complete snapshot, not a patch or a tree of speculative widgets.
 // Present supplies Version and Instance; Instance changes on every launch.
 // Blocks, meters, and grid are additive version-2 elements; a version-1
-// snapshot must not carry them.
+// snapshot must not carry them. Multiline fields and the scroll region are
+// additive version-3 elements; a snapshot stamped below version 3 must not
+// carry them.
 type View struct {
 	Version  int       `json:"version"`
 	Instance string    `json:"instance"`
@@ -124,6 +151,7 @@ type View struct {
 	Blocks   []Block   `json:"blocks,omitempty"`
 	Meters   []Meter   `json:"meters,omitempty"`
 	Grid     *Grid     `json:"grid,omitempty"`
+	Region   *Region   `json:"region,omitempty"`
 	Status   string    `json:"status"`
 	Error    string    `json:"error"`
 }
@@ -156,6 +184,16 @@ type CancelRequest struct {
 
 type CancelResult struct {
 	Canceled bool `json:"canceled"`
+}
+
+// Invalidate reports that the app's snapshot changed out of band — a timer
+// fired, a background fetch landed — so open views should refetch now rather
+// than on the poll cadence. It is a hint, not a data channel: nothing rides
+// along and the shell still pulls the whole snapshot. Best-effort by design:
+// hosts or shells that predate version 3 simply never act on it, so callers
+// may ignore the error. Version 3 and later.
+func (c *Context) Invalidate(ctx context.Context) error {
+	return c.call(ctx, "app/invalidate", nil, nil)
 }
 
 type requestVersionKey struct{}
@@ -195,6 +233,13 @@ func (v View) Validate() error {
 	if v.Version < 2 && (len(v.Blocks) > 0 || len(v.Meters) > 0 || v.Grid != nil) {
 		return fmt.Errorf("presentation: blocks, meters, and grid require version 2")
 	}
+	hasMultiline := false
+	for _, f := range v.Fields {
+		hasMultiline = hasMultiline || f.Multiline
+	}
+	if v.Version < 3 && (v.Region != nil || hasMultiline) {
+		return fmt.Errorf("presentation: multiline fields and the scroll region require version 3")
+	}
 	check := func(id, label string, seen map[string]bool) error {
 		if !entryPattern.MatchString(id) || len(id) > 64 || seen[id] ||
 			strings.TrimSpace(label) == "" || len(label) > 256 {
@@ -217,8 +262,8 @@ func (v View) Validate() error {
 		if err := check(field.ID, field.Label, seen); err != nil {
 			return err
 		}
-		if len(field.Value) > 4096 {
-			return fmt.Errorf("presentation: field value exceeds limit")
+		if len(field.Value) > fieldValueLimit(field) {
+			return fmt.Errorf("presentation: field %q value exceeds limit", field.ID)
 		}
 	}
 	seen = make(map[string]bool)
@@ -268,7 +313,26 @@ func (v View) Validate() error {
 			}
 		}
 	}
+	if r := v.Region; r != nil {
+		if !entryPattern.MatchString(r.ID) || len(r.ID) > 64 || len(r.Label) > 256 {
+			return fmt.Errorf("presentation: invalid region %q", r.ID)
+		}
+		// One trailing newline merely terminates the last line, as in Block.
+		text := strings.TrimSuffix(r.Text, "\n")
+		if len(r.Text) > maxRegionBytes || strings.Count(text, "\n")+1 > maxRegionLines {
+			return fmt.Errorf("presentation: region %q exceeds line or size budget", r.ID)
+		}
+	}
 	return nil
+}
+
+// fieldValueLimit is the per-field value budget: multiline fields get the
+// larger document-editing allowance, single-line fields keep 4096.
+func fieldValueLimit(f Field) int {
+	if f.Multiline {
+		return maxAreaValue
+	}
+	return 4096
 }
 
 // Present declares view, action, and cancel during Init. Callbacks obey the
@@ -432,15 +496,16 @@ func validateAction(v View, p ActionRequest) error {
 			return fmt.Errorf("presentation: unknown item %q", p.ItemID)
 		}
 	}
-	fields := make(map[string]bool)
+	limits := make(map[string]int)
 	for _, f := range v.Fields {
-		fields[f.ID] = true
+		limits[f.ID] = fieldValueLimit(f)
 		if f.Required && strings.TrimSpace(p.Values[f.ID]) == "" {
 			return fmt.Errorf("presentation: field %q is required", f.ID)
 		}
 	}
 	for id, value := range p.Values {
-		if !fields[id] || len(value) > 4096 {
+		limit, known := limits[id]
+		if !known || len(value) > limit {
 			return fmt.Errorf("presentation: unknown or oversized field %q", id)
 		}
 	}

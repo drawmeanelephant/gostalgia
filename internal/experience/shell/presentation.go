@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/ipc"
 	"gostalgia/sdk"
 )
 
@@ -18,6 +19,10 @@ import (
 // terminal handle. Epoch/sequence guards reject replies after dismissal,
 // cancellation, or a later operation. version is the negotiated presentation
 // protocol; cell is the selected grid cell when a version-2 grid exists.
+// regionTop/regionPinned/regionWindow drive the version-3 scroll region; the
+// window is written by the renderer so key handling clamps against the same
+// line count the user sees. refreshing/refreshQueued coalesce version-3
+// invalidation pushes into at most one in-flight refetch plus one follow-up.
 type appView struct {
 	id, instance string
 	pid          int32
@@ -32,6 +37,13 @@ type appView struct {
 	request      string
 	cancel       context.CancelFunc
 	banner       string
+
+	regionTop    int
+	regionPinned bool
+	regionWindow int
+
+	refreshing    bool
+	refreshQueued bool
 }
 
 type viewMsg struct {
@@ -40,6 +52,22 @@ type viewMsg struct {
 	data       sdk.View
 	err        error
 	action     bool
+	refresh    bool
+}
+
+// viewSubscribedMsg carries the event subscription the shell opens once per
+// connection for the version-3 push channel; a nil sub means the caller does
+// not support subscriptions and polling remains the only refresh path.
+type viewSubscribedMsg struct {
+	sub *ipc.ClientSubscription
+	err error
+}
+
+// viewEventMsg is one bus notification from the subscription. ok=false means
+// the subscription stream ended.
+type viewEventMsg struct {
+	event ipc.Notification
+	ok    bool
 }
 
 type viewTickMsg struct{ epoch uint64 }
@@ -85,7 +113,7 @@ func (m *Model) openView(a appStatus) tea.Cmd {
 	v := &appView{
 		id: a.Manifest.ID, pid: a.PID, epoch: m.viewEpoch, version: sdk.PresentationVersion,
 		data:   sdk.View{Title: a.Manifest.Name, State: sdk.ViewLoading},
-		values: make(map[string]string),
+		values: make(map[string]string), regionPinned: true,
 	}
 	m.presentation, m.shelf, m.scroll = v, false, 0
 	epoch, ctx, client, id := v.epoch, m.ctx, m.client, v.id
@@ -94,11 +122,79 @@ func (m *Model) openView(a appStatus) tea.Cmd {
 		defer cancel()
 		data, version, err := fetchView(ctx, client, id, sdk.PresentationVersion)
 		return viewMsg{epoch: epoch, version: version, data: data, err: err}
-	}, viewTick(epoch))
+	}, viewTick(epoch), m.ensureViewSub())
 }
 
 func viewTick(epoch uint64) tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return viewTickMsg{epoch} })
+}
+
+// viewEventTopic is the bus topic of the version-3 invalidation signal; the
+// record source carries "app/<app-id>" of the app that pushed.
+const viewEventTopic = "app.view"
+
+// viewSubscriber is the optional subscription half of the environment client:
+// *ipc.Client implements it, in-process fakes do not. When absent the
+// version-3 push path silently degrades to the ordinary poll.
+type viewSubscriber interface {
+	Subscribe(context.Context, ipc.SubscribeParams) (*ipc.ClientSubscription, error)
+}
+
+// ensureViewSub opens the connection's single event subscription on the
+// "app.view" topic the first time an app view opens. Subscribing is IPC off
+// the event loop; the answer arrives as viewSubscribedMsg.
+func (m *Model) ensureViewSub() tea.Cmd {
+	if m.viewSub != nil {
+		return nil
+	}
+	client, ok := m.client.(viewSubscriber)
+	if !ok {
+		return nil
+	}
+	ctx := m.ctx
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		sub, err := client.Subscribe(ctx, ipc.SubscribeParams{Topic: viewEventTopic, Buffer: 16})
+		return viewSubscribedMsg{sub: sub, err: err}
+	}
+}
+
+// waitViewEvent blocks in a command goroutine for the next subscription
+// notification; the update loop re-arms it after every delivery.
+func (m *Model) waitViewEvent(sub *ipc.ClientSubscription) tea.Cmd {
+	ctx := m.ctx
+	return func() tea.Msg {
+		select {
+		case n, ok := <-sub.Events:
+			return viewEventMsg{event: n, ok: ok}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// refreshView refetches the current snapshot at the negotiated version in
+// answer to a version-3 invalidation push. Unlike the poll it skips app/list:
+// liveness keeps coming from the tick.
+func (m *Model) refreshView() tea.Cmd {
+	v := m.presentation
+	v.refreshing = true
+	epoch, seq, id, version := v.epoch, v.seq, v.id, v.version
+	ctx, client := m.ctx, m.client
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		var data sdk.View
+		err := client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version}, &data)
+		if err == nil {
+			err = data.Validate()
+		}
+		if err == nil && data.Version > version {
+			err = fmt.Errorf("presentation: view stamped version %d exceeds requested %d", data.Version, version)
+		}
+		return viewMsg{epoch: epoch, seq: seq, version: version, data: data, err: err, refresh: true}
+	}
 }
 
 // dismissView retracts focus and data immediately. Cancel uses a separate IPC
@@ -189,7 +285,12 @@ func (m *Model) applyView(data sdk.View) bool {
 	if v.data.Grid != nil && v.cell < len(v.data.Grid.Cells) {
 		cellID = v.data.Grid.Cells[v.cell].ID
 	}
+	var regionID string
+	if v.region() != nil {
+		regionID = v.region().ID
+	}
 	wasGrid := v.gridFocused()
+	wasRegion := v.regionFocused()
 	v.instance, v.data = data.Instance, data
 	v.focus, v.item, v.cell = 0, 0, 0
 	fields := make(map[string]string)
@@ -224,6 +325,14 @@ func (m *Model) applyView(data sdk.View) bool {
 	if wasGrid && v.grid() != nil {
 		v.focus = len(data.Fields) + len(data.Actions)
 	}
+	if wasRegion && v.region() != nil {
+		v.focus = v.regionIndex()
+	}
+	// A different region resets scroll to the tail; the same one keeps the
+	// user's position (clamped at render) or stays pinned.
+	if v.region() == nil || v.region().ID != regionID {
+		v.regionTop, v.regionPinned = 0, true
+	}
 	v.values = fields
 	return true
 }
@@ -231,8 +340,45 @@ func (m *Model) applyView(data sdk.View) bool {
 func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 	v := m.presentation
 	switch msg := msg.(type) {
+	case viewSubscribedMsg:
+		if msg.err == nil && msg.sub != nil {
+			m.viewSub = msg.sub
+			return m.waitViewEvent(msg.sub)
+		}
+		m.viewSub = nil
+		return nil
+	case viewEventMsg:
+		if !msg.ok {
+			// The stream ended (unsubscribe or disconnect); the next
+			// openView retries the subscription.
+			m.viewSub = nil
+			return nil
+		}
+		var wait tea.Cmd
+		if m.viewSub != nil {
+			wait = m.waitViewEvent(m.viewSub)
+		}
+		if v == nil || v.instance == "" || msg.event.Event.Type != viewEventTopic ||
+			msg.event.Event.Source != "app/"+v.id {
+			return wait
+		}
+		// A matching push coalesces into at most one in-flight refetch:
+		// while an action or earlier refresh runs, the action's own reply
+		// already freshens the view and one queued refresh follows.
+		if v.busy || v.refreshing {
+			v.refreshQueued = true
+			return wait
+		}
+		v.refreshQueued = false
+		return tea.Batch(wait, m.refreshView())
 	case viewMsg:
-		if v == nil || msg.epoch != v.epoch || msg.seq != v.seq {
+		if v == nil {
+			return nil
+		}
+		if msg.refresh {
+			v.refreshing = false
+		}
+		if msg.epoch != v.epoch || msg.seq != v.seq {
 			return nil
 		}
 		if msg.action {
@@ -260,6 +406,10 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 		}
 		if msg.action && v.id == "com.gostalgia.settings" {
 			return m.fetchConfigCmd()
+		}
+		if v.refreshQueued && !v.busy {
+			v.refreshQueued = false
+			return m.refreshView()
 		}
 	case viewTickMsg:
 		if v != nil && msg.epoch == v.epoch {
@@ -303,8 +453,9 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 	return nil
 }
 
-// gridFocused reports whether the tab ring rests on the grid stop. The grid is
-// always the last focusable element, after fields and actions.
+// gridFocused reports whether the tab ring rests on the grid stop. The grid
+// sits after fields and actions; the version-3 scroll region is the only stop
+// past it.
 func (v *appView) grid() *sdk.Grid {
 	if g := v.data.Grid; g != nil && len(g.Cells) > 0 {
 		return g
@@ -314,6 +465,42 @@ func (v *appView) grid() *sdk.Grid {
 
 func (v *appView) gridFocused() bool {
 	return v.grid() != nil && v.focus == len(v.data.Fields)+len(v.data.Actions)
+}
+
+// region returns the version-3 scroll region when the snapshot carries one.
+func (v *appView) region() *sdk.Region {
+	return v.data.Region
+}
+
+// regionIndex is the region's focus-ring position: last, after the grid stop.
+func (v *appView) regionIndex() int {
+	idx := len(v.data.Fields) + len(v.data.Actions)
+	if v.grid() != nil {
+		idx++
+	}
+	return idx
+}
+
+func (v *appView) regionFocused() bool {
+	return v.region() != nil && v.focus == v.regionIndex()
+}
+
+// textLines splits text the way the renderer and the validator count it: a
+// trailing newline terminates the last line. Control sequences are dropped.
+func textLines(text string) []string {
+	return strings.Split(strings.TrimSuffix(safe(text), "\n"), "\n")
+}
+
+// scrollRegion moves the region window by delta lines; reaching the tail
+// re-pins the view to live output.
+func (v *appView) scrollRegion(delta int) {
+	r := v.region()
+	if r == nil || v.regionWindow <= 0 {
+		return
+	}
+	maxTop := max(0, len(textLines(r.Text))-v.regionWindow)
+	v.regionTop = min(maxTop, max(0, v.regionTop+delta))
+	v.regionPinned = v.regionTop >= maxTop
 }
 
 // topActionDisabled reports whether a same-named top-level action is
@@ -396,6 +583,10 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 	if v.grid() != nil {
 		total++
 	}
+	if v.region() != nil {
+		total++
+	}
+	fieldFocused := v.focus < len(fields)
 	switch key.String() {
 	case "tab", "shift+tab":
 		v.itemFocus, m.scroll = false, 0
@@ -407,21 +598,37 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 			v.focus = (v.focus + delta) % total
 		}
 	case "up":
-		if v.gridFocused() {
+		switch {
+		case v.gridFocused():
 			v.moveCell(0, -1)
-		} else {
+		case v.regionFocused():
+			v.scrollRegion(-1)
+		default:
 			v.itemFocus = true
 			v.item = max(0, v.item-1)
 		}
 		m.scroll = 0
 	case "down":
-		if v.gridFocused() {
+		switch {
+		case v.gridFocused():
 			v.moveCell(0, 1)
-		} else {
+		case v.regionFocused():
+			v.scrollRegion(1)
+		default:
 			v.itemFocus = true
 			v.item = min(max(0, len(v.data.Items)-1), v.item+1)
 		}
 		m.scroll = 0
+	case "pgup":
+		if v.regionFocused() {
+			v.scrollRegion(-v.regionWindow)
+			m.scroll = 0
+		}
+	case "pgdown":
+		if v.regionFocused() {
+			v.scrollRegion(v.regionWindow)
+			m.scroll = 0
+		}
 	case "left":
 		if v.gridFocused() {
 			v.moveCell(-1, 0)
@@ -434,6 +641,16 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		if v.data.State == sdk.ViewLoading {
+			return nil
+		}
+		if fieldFocused && fields[v.focus].Multiline {
+			// In a version-3 multiline field Enter edits like a newline;
+			// actions still fire from their own focus stop.
+			v.itemFocus, m.scroll = false, 0
+			v.values[fields[v.focus].ID] += "\n"
+			return nil
+		}
+		if v.regionFocused() {
 			return nil
 		}
 		if v.gridFocused() {
@@ -461,12 +678,17 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 		}
 		return m.viewRun(p)
 	default:
-		if v.focus >= len(fields) {
+		if !fieldFocused {
 			return nil
 		}
-		id := fields[v.focus].ID
+		f := fields[v.focus]
+		id := f.ID
 		v.itemFocus, m.scroll = false, 0
 		value := []rune(v.values[id])
+		limit := 4096
+		if f.Multiline {
+			limit = 32768 // matches the SDK maxAreaValue budget
+		}
 		switch key.Type {
 		case tea.KeyBackspace, tea.KeyCtrlH:
 			if len(value) > 0 {
@@ -475,11 +697,14 @@ func (m *Model) viewKey(key tea.KeyMsg) tea.Cmd {
 		case tea.KeyCtrlU:
 			value = nil
 		case tea.KeyRunes, tea.KeySpace:
-			text := strings.ReplaceAll(safe(string(key.Runes)), "\n", " ")
+			text := safe(string(key.Runes))
+			if !f.Multiline {
+				text = strings.ReplaceAll(text, "\n", " ")
+			}
 			if key.Type == tea.KeySpace {
 				text = " "
 			}
-			if len(string(value))+len(text) <= 4096 {
+			if len(string(value))+len(text) <= limit {
 				value = append(value, []rune(text)...)
 			}
 		}
@@ -493,8 +718,13 @@ func viewText(s string) string { return strings.ReplaceAll(safe(s), "\n", " ") }
 func (m *Model) viewLines(height int) []string {
 	v := m.presentation
 	hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
-	if v.grid() != nil {
+	switch {
+	case v.grid() != nil && v.region() != nil:
+		hints = "Tab focus · Enter action · ↑↓ item/region · ←→↑↓ grid · Esc cancel/back"
+	case v.grid() != nil:
 		hints = "Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back"
+	case v.region() != nil:
+		hints = "Tab focus · Enter action · ↑↓ item/region · Esc cancel/back"
 	}
 	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(hints)}
 	if v.busy || v.data.State == sdk.ViewLoading {
@@ -536,6 +766,19 @@ func (m *Model) viewLines(height int) []string {
 	formBase := len(rows)
 	for i, field := range v.data.Fields {
 		label := viewText(field.Label) + ": "
+		if field.Multiline {
+			// Version-3 multiline field: label row then each value line
+			// verbatim. Focus marks the label; shell still owns the draft.
+			if i == v.focus {
+				rows = append(rows, m.kit.FocusText(label+" "))
+			} else {
+				rows = append(rows, m.kit.Text(label))
+			}
+			for _, line := range textLines(v.values[field.ID]) {
+				rows = append(rows, m.kit.Text("  "+line))
+			}
+			continue
+		}
 		value := viewText(v.values[field.ID])
 		room := max(1, m.width-8-lipgloss.Width(label))
 		text := label + ui.Tail(value, room)
@@ -600,10 +843,36 @@ func (m *Model) viewLines(height int) []string {
 		}
 	}
 	visible := max(1, height-len(lines)-1)
+	regionBase := -1
+	if r := v.region(); r != nil {
+		all := textLines(r.Text)
+		v.regionWindow = min(20, max(4, visible/2))
+		maxTop := max(0, len(all)-v.regionWindow)
+		if v.regionPinned {
+			v.regionTop = maxTop
+		} else {
+			v.regionTop = min(maxTop, v.regionTop)
+		}
+		label := viewText(r.Label)
+		if len(all) > v.regionWindow {
+			label += " " + m.kit.Muted(fmt.Sprintf("– %d/%d", v.regionTop+1, len(all)))
+		}
+		if v.regionFocused() {
+			rows = append(rows, m.kit.FocusText(label))
+		} else {
+			rows = append(rows, m.kit.Muted(label))
+		}
+		regionBase = len(rows)
+		for _, line := range all[v.regionTop:min(len(all), v.regionTop+v.regionWindow)] {
+			rows = append(rows, m.kit.Text(line))
+		}
+	}
 	focus := formBase + v.focus
 	switch {
 	case v.itemFocus:
 		focus = itemBase + v.item
+	case regionBase >= 0 && v.regionFocused():
+		focus = len(rows) - 1
 	case gridBase >= 0 && v.gridFocused():
 		focus = gridBase + gridRow
 	}

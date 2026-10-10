@@ -291,10 +291,29 @@ func (m *Markview) pageCount() int {
 func (m *Markview) view(ctx context.Context) (sdk.View, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.viewLocked(), nil
+	return m.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
-func (m *Markview) viewLocked() sdk.View {
+// regionText flattens the rendered rows into one version-3 scroll region,
+// bounded to the contract's 2048-line and 64 KiB budgets with the same
+// honest truncation the item view uses.
+func regionText(rows []row) string {
+	const maxLines, maxBytes = 2048, 65536
+	var b strings.Builder
+	for i, r := range rows {
+		if i == maxLines-1 && len(rows) > maxLines {
+			fmt.Fprintf(&b, "… %d more rows", len(rows)-i)
+			break
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(r.label)
+	}
+	return clipRunes(b.String(), maxBytes)
+}
+
+func (m *Markview) viewLocked(version int) sdk.View {
 	v := sdk.View{
 		Title: "Markview",
 		State: sdk.ViewReady,
@@ -319,6 +338,44 @@ func (m *Markview) viewLocked() sdk.View {
 	}
 
 	v.Title = "Markview — " + m.name
+	if version >= 3 {
+		// The scroll region shows the whole document at once; pages and
+		// their actions only exist for the item-list contracts.
+		v.Items = []sdk.Item{{
+			ID:    "docinfo",
+			Label: m.name,
+			Detail: fmt.Sprintf("%s · %s · %d lines · modified %s",
+				m.path, formatSize(m.totalSize), m.lines, nonEmpty(m.modTime, "unknown")),
+		}}
+		if len(m.rows) == 0 {
+			v.Items = append(v.Items, sdk.Item{ID: "empty", Label: "(empty document)", Detail: m.path})
+		} else {
+			v.Region = &sdk.Region{ID: "document", Label: "Document", Text: regionText(m.rows)}
+		}
+		if m.rowCapped {
+			v.Items = append(v.Items, sdk.Item{
+				ID:     "rowcap",
+				Label:  "… document exceeds the row cap",
+				Detail: fmt.Sprintf("only the first %d rendered rows are held", maxRows),
+			})
+		}
+		if m.truncated {
+			v.Items = append(v.Items, sdk.Item{
+				ID:     "truncated",
+				Label:  "… document truncated",
+				Detail: fmt.Sprintf("showing the first %s of %s", formatSize(maxDocumentBytes), formatSize(m.totalSize)),
+			})
+		}
+		v.Actions = []sdk.Action{
+			{ID: "open", Label: "Open path"},
+			{ID: "reload", Label: "Reload"},
+		}
+		v.Status = fmt.Sprintf("%d rows · %s · read-only", len(m.rows), formatSize(m.size))
+		if m.statusNote != "" {
+			v.Status = m.statusNote + " — " + v.Status
+		}
+		return v
+	}
 	pages := m.pageCount()
 	start := m.page * pageRows
 	end := start + pageRows
@@ -410,7 +467,7 @@ func (m *Markview) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, erro
 	if err != nil {
 		m.lastError = err.Error()
 	}
-	return m.viewLocked(), nil
+	return m.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 func nonEmpty(s, fallback string) string {
