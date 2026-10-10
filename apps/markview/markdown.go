@@ -20,6 +20,7 @@ const (
 	rowCode
 	rowRule
 	rowTable
+	rowDef
 )
 
 // row is one rendered view row. Label carries the display text with inline
@@ -54,6 +55,8 @@ func (r row) detail() string {
 		return fmt.Sprintf("rule · line %d", r.line)
 	case rowTable:
 		return fmt.Sprintf("table · line %d", r.line)
+	case rowDef:
+		return fmt.Sprintf("linkdef · line %d", r.line)
 	default:
 		return fmt.Sprintf("line %d", r.line)
 	}
@@ -111,10 +114,14 @@ func (r *renderer) emitBlock(lines []string, start, level int) {
 // renderMarkdown parses src into bounded view rows. It is line-oriented
 // CommonMark-ish by design: ATX and setext headings, thematic breaks,
 // block quotes, bulleted/numbered/task lists, fenced and indented code,
-// pipe tables, and paragraphs. Inline markup flattens to plain text —
-// emphasis markers drop away, links show their target, code spans show
-// their contents — because the presentation contract carries structure,
-// never raw markup.
+// pipe tables, link reference definitions, and paragraphs. Container
+// blocks continue lazily: a paragraph line under a quote or list row keeps
+// that row's marker until a blank line or a new block start, and a
+// blank-separated line indented to a list item's content column stays
+// inside the item. Inline markup flattens to plain text — emphasis
+// markers drop away, links show their target, code spans show their
+// contents — because the presentation contract carries structure, never
+// raw markup.
 func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 	src = strings.ReplaceAll(src, "\r\n", "\n")
 	src = strings.ReplaceAll(src, "\r", "\n")
@@ -126,6 +133,9 @@ func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 	r := &renderer{limit: limit}
 	paraFrom := -1    // 1-based source line where the pending paragraph began; -1 = none
 	prevBlank := true // previous source line was blank or document start; gates indented code
+	quoteDepth := 0   // nesting depth of the open quote's lazy paragraph; 0 = no quote open
+	itemIndent := -1  // content column of the open list item; -1 = no item open
+	itemDepth := 0    // display depth of the open list item
 	for i := 0; i < len(lines) && !r.capped; {
 		line := lines[i]
 		ln := i + 1
@@ -156,16 +166,20 @@ func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 		switch {
 		case trimmed == "":
 			prevBlank = true
+			quoteDepth = 0
 			i++
 		case isFenceStart(line):
 			ch, n, info, _ := fenceStart(line)
+			ind := leadingIndent(line)
 			i++
 			start := ln
 			for i < len(lines) {
 				if fenceEnd(lines[i], ch, n) {
 					break
 				}
-				body := lines[i]
+				// An indented opening fence dedents its body by up to the
+				// same number of columns.
+				body := stripIndent(lines[i], ind)
 				if strings.TrimSpace(body) == "" {
 					body = " "
 				}
@@ -178,37 +192,62 @@ func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 			if i < len(lines) {
 				i++ // consume the closing fence
 			}
-			prevBlank = false
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
 		case isATXHeading(line):
 			level, text, _ := atxHeading(line)
 			r.emit(rowHeading, ln, strings.Repeat("#", level)+" "+flattenInline(text), "", level)
 			i++
-			prevBlank = false
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
 		case isRule(line):
 			r.emit(rowRule, ln, "───", "", 0)
 			i++
-			prevBlank = false
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
 		case isQuote(line):
 			depth, text := quoteParts(line)
 			r.emit(rowQuote, ln, strings.Repeat("│ ", depth)+flattenInline(text), "", depth)
 			i++
-			prevBlank = false
+			prevBlank, quoteDepth, itemIndent = false, depth, -1
 		case isTableStart(lines, i):
-			r.emit(rowTable, ln, tableLabel(line), "", 0)
-			i += 2 // consume the header line and its delimiter row
-			for i < len(lines) && strings.Contains(lines[i], "|") && strings.TrimSpace(lines[i]) != "" {
-				r.emit(rowTable, i+1, tableLabel(lines[i]), "", 0)
-				i++
-			}
-			prevBlank = false
+			i = emitTable(r, lines, i)
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
 		case isListItem(line):
-			depth, label, task := listItem(line)
+			depth, content, label, task := listItem(line)
 			kind := rowList
 			if task {
 				kind = rowTask
 			}
 			r.emit(kind, ln, label, "", depth)
 			i++
+			prevBlank, quoteDepth, itemIndent, itemDepth = false, 0, content, depth
+		case isLinkDef(line):
+			id, rest, _ := linkDef(line)
+			r.emit(rowDef, ln, "↳ ["+id+"]: "+rest, "", 0)
+			i++
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
+		case quoteDepth > 0 && !prevBlank:
+			// Lazy quote continuation: the paragraph inside the quote keeps
+			// running on lines without the `>` marker until a blank line or
+			// a new block start.
+			r.emit(rowQuote, ln, strings.Repeat("│ ", quoteDepth)+flattenInline(trimmed), "", quoteDepth)
+			i++
+		case itemIndent >= 0 && !prevBlank:
+			// Lazy item continuation: a paragraph line under an item stays
+			// inside it without repeating the marker.
+			r.emit(rowList, ln, strings.Repeat("  ", itemDepth+1)+flattenInline(trimmed), "", itemDepth)
+			i++
+		case itemIndent >= 0 && leadingIndent(line) >= itemIndent:
+			// Blank-separated content indented to the item's content column
+			// is a new block inside the item; four columns deeper is an
+			// indented code block.
+			if leadingIndent(line) >= itemIndent+4 {
+				for i < len(lines) && leadingIndent(lines[i]) >= itemIndent+4 && strings.TrimSpace(lines[i]) != "" {
+					r.emit(rowCode, i+1, strings.Repeat("  ", itemDepth)+"┃ "+stripIndent(lines[i], itemIndent+4), "", 0)
+					i++
+				}
+			} else {
+				r.emit(rowList, ln, strings.Repeat("  ", itemDepth+1)+flattenInline(trimmed), "", itemDepth)
+				i++
+			}
 			prevBlank = false
 		case leadingIndent(line) >= 4 && prevBlank:
 			// Indented code block: a run of >=4-column lines after a blank
@@ -225,9 +264,10 @@ func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 				r.emit(rowCode, i+1, "┃ "+body, "", 0)
 				i++
 			}
-			prevBlank = false
+			prevBlank, quoteDepth, itemIndent = false, 0, -1
 		default:
 			paraFrom = ln
+			itemIndent = -1
 			i++
 		}
 	}
@@ -243,7 +283,7 @@ func renderMarkdown(src string, limit int) (rows []row, capped bool) {
 func startsBlock(lines []string, i int) bool {
 	line := lines[i]
 	return isFenceStart(line) || isATXHeading(line) || isRule(line) ||
-		isQuote(line) || isTableStart(lines, i) || isListItem(line)
+		isQuote(line) || isTableStart(lines, i) || isListItem(line) || isLinkDef(line)
 }
 
 // leadingIndent measures the indentation of line in columns: a space is one
@@ -423,14 +463,14 @@ func quoteParts(line string) (depth int, text string) {
 // isListItem reports whether line is a list item marker: a bullet (`-`,
 // `+`, `*`) or an ordered marker (`1.`, `2)`) followed by whitespace.
 func isListItem(line string) bool {
-	_, _, _, _, ok := listItemParts(line)
+	_, _, _, _, _, ok := listItemParts(line)
 	return ok
 }
 
-// listItem decomposes a list item line into indent depth and label text,
-// detecting task markers (`[ ]`, `[x]`) on bullet items.
-func listItem(line string) (depth int, label string, task bool) {
-	depth, marker, body, t, _ := listItemParts(line)
+// listItem decomposes a list item line into indent depth, content column,
+// and label text, detecting task markers (`[ ]`, `[x]`) on bullet items.
+func listItem(line string) (depth, content int, label string, task bool) {
+	depth, content, marker, body, t, _ := listItemParts(line)
 	indent := strings.Repeat("  ", depth)
 	body = strings.TrimLeft(body, " \t")
 	if t {
@@ -438,36 +478,39 @@ func listItem(line string) (depth int, label string, task bool) {
 		if marker == "x" || marker == "X" {
 			mark = "[x]"
 		}
-		return depth, indent + mark + " " + flattenInline(body), true
+		return depth, content, indent + mark + " " + flattenInline(body), true
 	}
-	return depth, indent + marker + " " + flattenInline(body), false
+	return depth, content, indent + marker + " " + flattenInline(body), false
 }
 
-// listItemParts splits a list item line into indent depth, marker text
-// ("•" or the ordered digits), body, and task-list flag without rendering.
-func listItemParts(line string) (depth int, marker, body string, task bool, ok bool) {
+// listItemParts splits a list item line into indent depth, content column
+// (the indentation nested content must reach to stay inside the item),
+// marker text ("•" or the ordered digits), body, and task-list flag
+// without rendering.
+func listItemParts(line string) (depth, content int, marker, body string, task, ok bool) {
 	if strings.TrimSpace(line) == "" {
-		return 0, "", "", false, false
+		return 0, 0, "", "", false, false
 	}
-	depth = leadingIndent(line) / 2
+	indent := leadingIndent(line)
+	depth = indent / 2
 	s := strings.TrimLeft(line, " \t")
 	if len(s) >= 2 && (s[0] == '-' || s[0] == '+' || s[0] == '*') && (s[1] == ' ' || s[1] == '\t') {
 		rest := strings.TrimLeft(s[2:], " \t")
 		if len(rest) >= 3 && rest[0] == '[' && rest[2] == ']' &&
 			(rest[1] == ' ' || rest[1] == 'x' || rest[1] == 'X') &&
 			(len(rest) == 3 || rest[3] == ' ' || rest[3] == '\t') {
-			return depth, string(rest[1]), rest[3:], true, true
+			return depth, indent + 2, string(rest[1]), rest[3:], true, true
 		}
-		return depth, "•", rest, false, true
+		return depth, indent + 2, "•", rest, false, true
 	}
 	k := 0
 	for k < len(s) && k <= 9 && s[k] >= '0' && s[k] <= '9' {
 		k++
 	}
 	if k >= 1 && k+1 < len(s) && (s[k] == '.' || s[k] == ')') && (s[k+1] == ' ' || s[k+1] == '\t') {
-		return depth, s[:k+1], s[k+2:], false, true
+		return depth, indent + k + 2, s[:k+1], s[k+2:], false, true
 	}
-	return 0, "", "", false, false
+	return 0, 0, "", "", false, false
 }
 
 // isTableStart reports whether lines[i] is a pipe-table header: it contains
@@ -476,42 +519,223 @@ func isTableStart(lines []string, i int) bool {
 	if i+1 >= len(lines) || !strings.Contains(lines[i], "|") || strings.TrimSpace(lines[i]) == "" {
 		return false
 	}
-	return delimCells(lines[i+1]) == len(splitCells(lines[i]))
+	aligns, ok := tableDelims(lines[i+1])
+	return ok && len(aligns) == len(splitCells(lines[i]))
 }
 
-// delimCells returns the delimiter row's cell count, or 0 when the line is
-// not a pipe-table delimiter: cells of `-` with optional `:` alignment.
-func delimCells(line string) int {
+// tableAlign is a column's alignment per its delimiter cell.
+type tableAlign int
+
+const (
+	alignNone   tableAlign = iota // `---`
+	alignLeft                     // `:--`
+	alignCenter                   // `:-:`
+	alignRight                    // `--:`
+)
+
+// tableDelims parses a pipe-table delimiter row into per-column alignment,
+// reporting false when the line is not a delimiter row: every cell must be
+// a run of `-` with optional `:` alignment edges.
+func tableDelims(line string) ([]tableAlign, bool) {
 	s := strings.TrimSpace(line)
 	if s == "" || !strings.Contains(s, "-") {
-		return 0
+		return nil, false
 	}
 	cells := splitCells(s)
-	for _, c := range cells {
+	aligns := make([]tableAlign, len(cells))
+	for i, c := range cells {
 		c = strings.TrimSpace(c)
 		if c == "" || strings.Trim(c, ":-") != "" || !strings.Contains(c, "-") {
-			return 0
+			return nil, false
+		}
+		left, right := strings.HasPrefix(c, ":"), strings.HasSuffix(c, ":")
+		switch {
+		case left && right:
+			aligns[i] = alignCenter
+		case right:
+			aligns[i] = alignRight
+		case left:
+			aligns[i] = alignLeft
 		}
 	}
-	return len(cells)
+	return aligns, true
 }
 
-// splitCells breaks a pipe-table line into raw cells, dropping the framing
-// pipes at either end.
+// splitCells breaks a pipe-table line into raw cells, dropping unescaped
+// framing pipes at either end. A backslash-escaped `\|` stays inside its
+// cell and decodes during inline flattening.
 func splitCells(line string) []string {
 	s := strings.TrimSpace(line)
 	s = strings.TrimPrefix(s, "|")
-	s = strings.TrimSuffix(s, "|")
-	return strings.Split(s, "|")
+	if n := len(s); n > 0 && s[n-1] == '|' && !escapedPipe(s, n-1) {
+		s = s[:n-1]
+	}
+	var cells []string
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '|' && !escapedPipe(s, i) {
+			cells = append(cells, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(cells, s[start:])
 }
 
-// tableLabel renders a pipe-table line as cells joined by a table pipe.
-func tableLabel(line string) string {
+// escapedPipe reports whether the `|` at s[i] is backslash-escaped —
+// preceded by an odd-length run of backslashes.
+func escapedPipe(s string, i int) bool {
+	bs := 0
+	for j := i - 1; j >= 0 && s[j] == '\\'; j-- {
+		bs++
+	}
+	return bs%2 == 1
+}
+
+// emitTable renders the pipe table whose header sits at lines[i] and
+// returns the first source index past it. Columns are padded to the widest
+// cell (bounded by maxTableColRunes) and aligned per the delimiter row;
+// the delimiter itself renders as a separator row so every source line
+// still maps to a view row.
+func emitTable(r *renderer, lines []string, i int) int {
+	header := tableCells(lines[i])
+	aligns, _ := tableDelims(lines[i+1])
+	var body [][]string
+	j := i + 2
+	for j < len(lines) && strings.Contains(lines[j], "|") && strings.TrimSpace(lines[j]) != "" {
+		body = append(body, tableCells(lines[j]))
+		j++
+	}
+	widths := make([]int, len(header))
+	measure := func(cells []string) {
+		for c := range widths {
+			w := 0
+			if c < len(cells) {
+				w = utf8.RuneCountInString(cells[c])
+			}
+			if w > widths[c] {
+				widths[c] = w
+			}
+		}
+	}
+	measure(header)
+	for _, b := range body {
+		measure(b)
+	}
+	for c := range widths {
+		if widths[c] > maxTableColRunes {
+			widths[c] = maxTableColRunes
+		}
+	}
+	r.emit(rowTable, i+1, tableRow(header, widths, aligns), "", 0)
+	r.emit(rowTable, i+2, tableSep(widths, aligns), "", 0)
+	for k, cells := range body {
+		r.emit(rowTable, i+3+k, tableRow(cells, widths, aligns), "", 0)
+		if r.capped {
+			break
+		}
+	}
+	return j
+}
+
+// tableCells flattens a pipe-table source line into cell text.
+func tableCells(line string) []string {
 	cells := splitCells(line)
 	for i := range cells {
 		cells[i] = flattenInline(strings.TrimSpace(cells[i]))
 	}
-	return strings.Join(cells, " │ ")
+	return cells
+}
+
+// tableRow renders one pipe-table row: cells padded to column width and
+// aligned per the delimiter spec, joined by a table pipe. Missing cells
+// pad empty and excess cells drop, matching GFM row normalization.
+func tableRow(cells []string, widths []int, aligns []tableAlign) string {
+	parts := make([]string, len(widths))
+	for c := range parts {
+		cell := ""
+		if c < len(cells) {
+			cell = cells[c]
+		}
+		parts[c] = alignCell(cell, widths[c], colAlign(aligns, c))
+	}
+	return strings.Join(parts, " │ ")
+}
+
+// tableSep renders the delimiter row as a visible separator: column-width
+// runs of ─ joined by ┼, with a : edge marking non-default alignment.
+func tableSep(widths []int, aligns []tableAlign) string {
+	parts := make([]string, len(widths))
+	for c, w := range widths {
+		if w < 1 {
+			w = 1
+		}
+		seg := strings.Repeat("─", w)
+		switch colAlign(aligns, c) {
+		case alignLeft:
+			seg = ":" + strings.Repeat("─", w-1)
+		case alignRight:
+			seg = strings.Repeat("─", w-1) + ":"
+		case alignCenter:
+			if w == 1 {
+				seg = ":"
+			} else {
+				seg = ":" + strings.Repeat("─", w-2) + ":"
+			}
+		}
+		parts[c] = seg
+	}
+	return strings.Join(parts, "─┼─")
+}
+
+func colAlign(aligns []tableAlign, c int) tableAlign {
+	if c < len(aligns) {
+		return aligns[c]
+	}
+	return alignNone
+}
+
+// alignCell pads cell to width on the side its alignment demands; a cell
+// already wider than the column passes through untouched.
+func alignCell(cell string, width int, a tableAlign) string {
+	gap := width - utf8.RuneCountInString(cell)
+	if gap <= 0 {
+		return cell
+	}
+	switch a {
+	case alignRight:
+		return strings.Repeat(" ", gap) + cell
+	case alignCenter:
+		left := gap / 2
+		return strings.Repeat(" ", left) + cell + strings.Repeat(" ", gap-left)
+	default:
+		return cell + strings.Repeat(" ", gap)
+	}
+}
+
+// isLinkDef reports whether line is a link reference definition:
+// `[label]: destination`, with up to three leading columns.
+func isLinkDef(line string) bool {
+	_, _, ok := linkDef(line)
+	return ok
+}
+
+// linkDef parses `[label]: destination "title"` into the label and the
+// remainder (destination plus optional title). A missing destination or a
+// `]` immediately after `[` is not a definition.
+func linkDef(line string) (id, rest string, ok bool) {
+	s := strings.TrimLeft(line, " ")
+	if len(line)-len(s) > 3 || !strings.HasPrefix(s, "[") {
+		return "", "", false
+	}
+	close := strings.IndexByte(s, ']')
+	if close <= 1 || close+1 >= len(s) || s[close+1] != ':' {
+		return "", "", false
+	}
+	rest = strings.TrimSpace(s[close+2:])
+	if rest == "" {
+		return "", "", false
+	}
+	return s[1:close], rest, true
 }
 
 // runLen counts the run of c at the start of s.
