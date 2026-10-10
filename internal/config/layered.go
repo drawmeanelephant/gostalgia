@@ -58,6 +58,7 @@ type LayeredStore struct {
 	appStores     map[string]*Store
 	defaults      map[string]any
 	previewData   map[string]any
+	previewOwners map[string]string
 	corruptLayers map[Layer]error
 	listeners     []func(ChangeEvent)
 }
@@ -70,6 +71,7 @@ func NewLayeredStore(systemPath, userPath string) (*LayeredStore, error) {
 		appStores:     make(map[string]*Store),
 		defaults:      DefaultSettings(),
 		previewData:   make(map[string]any),
+		previewOwners: make(map[string]string),
 		corruptLayers: make(map[Layer]error),
 	}
 
@@ -397,7 +399,9 @@ func (ls *LayeredStore) Unset(layer Layer, path string, opts QueryOpts) error {
 		}
 		_, _ = ls.userStore.Delete("apps." + opts.AppID + "." + path)
 	case LayerPreview:
-		delete(ls.previewData, path)
+		if ls.previewOwners[path] == previewScope(opts) {
+			ls.dropPreviewPathLocked(path)
+		}
 	default:
 		return fmt.Errorf("config: cannot unset from layer %s", targetLayer)
 	}
@@ -451,7 +455,9 @@ func (ls *LayeredStore) Reset(layer Layer, path string, opts QueryOpts) error {
 			}
 		}
 	case LayerPreview:
-		ls.previewData = make(map[string]any)
+		for p := range ls.ownedPreviewLocked(previewScope(opts)) {
+			ls.dropPreviewPathLocked(p)
+		}
 	default:
 		return fmt.Errorf("config: cannot reset layer %s", targetLayer)
 	}
@@ -490,6 +496,17 @@ func (ls *LayeredStore) Preview(path string, val any, opts QueryOpts) error {
 	}
 	m[segs[len(segs)-1]] = val
 
+	// Record ownership: only the staging caller's scope may commit or
+	// cancel this override. Re-staging a path retires ownership records
+	// for any staged descendants it replaced.
+	scope := previewScope(opts)
+	ls.previewOwners[path] = scope
+	for p := range ls.previewOwners {
+		if p != path && strings.HasPrefix(p, path+".") {
+			delete(ls.previewOwners, p)
+		}
+	}
+
 	ls.emit(ChangeEvent{
 		Layer:         LayerPreview,
 		Path:          path,
@@ -498,6 +515,54 @@ func (ls *LayeredStore) Preview(path string, val any, opts QueryOpts) error {
 		IsPreview:     true,
 	})
 	return nil
+}
+
+// previewScope identifies the owner of a staged preview override. The
+// empty scope is shared by operators and in-process callers; application
+// callers stage under their own app ID.
+func previewScope(opts QueryOpts) string {
+	return opts.AppID
+}
+
+// ownedPreviewLocked flattens the staged overrides owned by scope into
+// dotted paths, pruning stale ownership records. Caller must hold ls.mu.
+func (ls *LayeredStore) ownedPreviewLocked(scope string) map[string]any {
+	flat := make(map[string]any)
+	for p, owner := range ls.previewOwners {
+		if owner != scope {
+			continue
+		}
+		if v, ok := lookup(ls.previewData, strings.Split(p, ".")); ok {
+			flat[p] = v
+		} else {
+			delete(ls.previewOwners, p)
+		}
+	}
+	return flat
+}
+
+// dropPreviewPathLocked removes a staged override and its ownership
+// record. Caller must hold ls.mu.
+func (ls *LayeredStore) dropPreviewPathLocked(path string) {
+	deleteNested(ls.previewData, strings.Split(path, "."))
+	delete(ls.previewOwners, path)
+}
+
+// deleteNested removes the leaf at segs and prunes emptied parents.
+func deleteNested(m map[string]any, segs []string) {
+	if len(segs) == 0 {
+		return
+	}
+	if len(segs) == 1 {
+		delete(m, segs[0])
+		return
+	}
+	if next, ok := m[segs[0]].(map[string]any); ok {
+		deleteNested(next, segs[1:])
+		if len(next) == 0 {
+			delete(m, segs[0])
+		}
+	}
 }
 
 // PreviewBatch applies multiple in-memory overrides.
@@ -513,18 +578,20 @@ func (ls *LayeredStore) PreviewBatch(settings map[string]any, opts QueryOpts) er
 	return nil
 }
 
-// CancelPreview discards any active preview overrides without touching disk.
+// CancelPreview discards the caller's active preview overrides without
+// touching disk. Overrides staged by other callers are left in place.
 func (ls *LayeredStore) CancelPreview(opts QueryOpts) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
-	if len(ls.previewData) == 0 {
+	flat := ls.ownedPreviewLocked(previewScope(opts))
+	if len(flat) == 0 {
 		return
 	}
 
-	flat := make(map[string]any)
-	FlattenMap("", ls.previewData, flat)
-	ls.previewData = make(map[string]any)
+	for p := range flat {
+		ls.dropPreviewPathLocked(p)
+	}
 
 	for p, oldPreviewVal := range flat {
 		effectiveVal, winningLayer, _ := ls.valueLocked(p, opts)
@@ -545,17 +612,16 @@ func (ls *LayeredStore) HasActivePreview() bool {
 	return len(ls.previewData) > 0
 }
 
-// CommitPreview persists all current preview overrides to the specified layer.
+// CommitPreview persists the caller's staged preview overrides to the
+// specified layer. Overrides staged by other callers remain staged.
 func (ls *LayeredStore) CommitPreview(targetLayer Layer, opts QueryOpts) error {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
-	if len(ls.previewData) == 0 {
+	flat := ls.ownedPreviewLocked(previewScope(opts))
+	if len(flat) == 0 {
 		return nil
 	}
-
-	flat := make(map[string]any)
-	FlattenMap("", ls.previewData, flat)
 
 	layer := targetLayer
 	if layer == "" {
@@ -577,7 +643,9 @@ func (ls *LayeredStore) CommitPreview(targetLayer Layer, opts QueryOpts) error {
 		}
 	}
 
-	ls.previewData = make(map[string]any)
+	for p := range flat {
+		ls.dropPreviewPathLocked(p)
+	}
 
 	for p, v := range flat {
 		ls.emit(ChangeEvent{

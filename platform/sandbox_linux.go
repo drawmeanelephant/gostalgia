@@ -23,10 +23,6 @@ const (
 	linuxRLimitAS     = 9
 )
 
-// sandboxInitEnv carries the serialized confinement program to the re-exec'd
-// init helper running inside the new namespaces (see linuxSandboxInit).
-const sandboxInitEnv = "GOSTALGIA_SANDBOX_INIT"
-
 var (
 	linuxCapsOnce sync.Once
 	linuxCaps     HostSecurityCapabilities

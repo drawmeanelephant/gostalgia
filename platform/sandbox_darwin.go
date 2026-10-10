@@ -3,12 +3,25 @@
 package platform
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
+)
+
+// XNU resource selectors accepted by setrlimit(2). Darwin has no prlimit64
+// and XNU rejects RLIMIT_DATA (2) and RLIMIT_AS/RLIMIT_RSS (5) with EINVAL,
+// so MaxMemoryBytes is not enforceable on this platform; the rest are
+// applied by the sandbox init trampoline inside the confined process.
+const (
+	darwinRLimitCPU    = 0 // RLIMIT_CPU
+	darwinRLimitNProc  = 7 // RLIMIT_NPROC
+	darwinRLimitNoFile = 8 // RLIMIT_NOFILE
 )
 
 var (
@@ -28,7 +41,13 @@ func GetHostSecurityCapabilities() HostSecurityCapabilities {
 			caps.NetworkIsolation = true
 			caps.DescendantControl = true
 			caps.FilesystemSandbox = true
-			caps.ResourceLimits = true
+			// ResourceLimits stays false: the flag promises that every
+			// ExecutionPolicy limit is enforced, and MaxMemoryBytes cannot
+			// be — XNU rejects setrlimit for RLIMIT_AS/RLIMIT_DATA and no
+			// stdlib mechanism replaces them. The launch trampoline still
+			// enforces the enforceable subset (open files, CPU seconds,
+			// process count) inside the sandbox, but the capability matrix
+			// must not claim resource limiting macOS cannot fully deliver.
 		} else {
 			caps.Supported = false
 			caps.Reason = "/usr/bin/sandbox-exec not found"
@@ -52,18 +71,111 @@ func ConfigureSandbox(cmd *exec.Cmd, policy ExecutionPolicy) (PostStartHook, err
 		return nil, fmt.Errorf("%w: %s", ErrSandboxUnsupported, caps.Reason)
 	}
 
-	profile := buildDarwinSandboxProfile(policy, cmd.Path)
-	origPath := cmd.Path
-	origArgs := append([]string(nil), cmd.Args...)
-	if len(origArgs) > 0 {
-		origArgs = origArgs[1:]
+	// Resource limits can only be applied to one's own process on macOS —
+	// there is no prlimit64 and Seatbelt has no rlimit mechanism — so the
+	// confined child is launched through a self-limiting trampoline: this
+	// same binary re-executed inside the Seatbelt sandbox, which applies
+	// the enforceable rlimits and then execs the real target.
+	self, err := os.Executable()
+	if err != nil || self == "" {
+		return nil, fmt.Errorf("%w: cannot resolve sandbox init trampoline: %v", ErrSandboxUnsupported, err)
 	}
 
+	profile := buildDarwinSandboxProfile(policy, cmd.Path, self)
+	initCfg := darwinSandboxInitConfig{
+		Path:          cmd.Path,
+		Argv:          append([]string(nil), cmd.Args...),
+		MaxCPUSeconds: policy.MaxCPUSeconds,
+		MaxOpenFiles:  policy.MaxOpenFiles,
+		MaxProcesses:  policy.MaxProcesses,
+	}
+	payload, err := json.Marshal(initCfg)
+	if err != nil {
+		return nil, fmt.Errorf("platform: encode sandbox init: %w", err)
+	}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, sandboxInitEnv+"="+base64.StdEncoding.EncodeToString(payload))
+
 	cmd.Path = "/usr/bin/sandbox-exec"
-	sandboxArgs := []string{"sandbox-exec", "-p", profile, origPath}
-	cmd.Args = append(sandboxArgs, origArgs...)
+	cmd.Args = []string{"sandbox-exec", "-p", profile, self}
 
 	return nil, nil
+}
+
+// darwinSandboxInitConfig is serialized into sandboxInitEnv and interpreted
+// by the init() hook of the re-executed process image running inside the
+// Seatbelt sandbox. MaxMemoryBytes is deliberately absent: XNU rejects
+// setrlimit for RLIMIT_AS/RLIMIT_DATA, so address-space limits cannot be
+// enforced on darwin (see GetHostSecurityCapabilities).
+type darwinSandboxInitConfig struct {
+	Path          string   `json:"path"`
+	Argv          []string `json:"argv"`
+	MaxCPUSeconds uint64   `json:"max_cpu_seconds,omitempty"`
+	MaxOpenFiles  uint64   `json:"max_open_files,omitempty"`
+	MaxProcesses  uint64   `json:"max_processes,omitempty"`
+}
+
+func init() { darwinSandboxInit() }
+
+// darwinSandboxInit is the re-exec hook. It runs in every binary that links
+// this package (runtime, test binaries, helpers), but is a no-op unless the
+// parent staged a sandbox init payload in the environment. When staged, it
+// applies the requested rlimits to itself — already under the Seatbelt
+// profile applied by sandbox-exec — and execs the real target; it never
+// returns to main.
+func darwinSandboxInit() {
+	enc := os.Getenv(sandboxInitEnv)
+	if enc == "" {
+		return
+	}
+	os.Unsetenv(sandboxInitEnv) // never leak the payload into the target
+	var cfg darwinSandboxInitConfig
+	raw, err := base64.StdEncoding.DecodeString(enc)
+	if err != nil || json.Unmarshal(raw, &cfg) != nil || cfg.Path == "" {
+		fmt.Fprintln(os.Stderr, "platform: invalid sandbox init payload")
+		os.Exit(126)
+	}
+	if err := darwinApplySandboxLimits(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "platform: sandbox init: %v\n", err)
+		os.Exit(126)
+	}
+	if len(cfg.Argv) == 0 {
+		cfg.Argv = []string{cfg.Path}
+	}
+	if err := syscall.Exec(cfg.Path, cfg.Argv, os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "platform: sandbox exec %s: %v\n", cfg.Path, err)
+		os.Exit(127)
+	}
+}
+
+// darwinApplySandboxLimits sets the policy's enforceable rlimits on the
+// current (soon-to-be-exec'd) process. Limits are inherited across exec, so
+// the confined target is bounded by them. Any failure fails closed: a
+// sandboxed child must never launch with fewer restrictions than requested.
+func darwinApplySandboxLimits(cfg darwinSandboxInitConfig) error {
+	if cfg.MaxCPUSeconds > 0 {
+		if err := darwinSetRlimit(darwinRLimitCPU, cfg.MaxCPUSeconds); err != nil {
+			return fmt.Errorf("set RLIMIT_CPU: %w", err)
+		}
+	}
+	if cfg.MaxOpenFiles > 0 {
+		if err := darwinSetRlimit(darwinRLimitNoFile, cfg.MaxOpenFiles); err != nil {
+			return fmt.Errorf("set RLIMIT_NOFILE: %w", err)
+		}
+	}
+	if cfg.MaxProcesses > 0 {
+		if err := darwinSetRlimit(darwinRLimitNProc, cfg.MaxProcesses); err != nil {
+			return fmt.Errorf("set RLIMIT_NPROC: %w", err)
+		}
+	}
+	return nil
+}
+
+func darwinSetRlimit(resource int, limit uint64) error {
+	rlim := syscall.Rlimit{Cur: limit, Max: limit}
+	return syscall.Setrlimit(resource, &rlim)
 }
 
 // Host filesystem subtrees a sandboxed child may read: everything needed to
@@ -169,7 +281,11 @@ func sbMaskExcludes(masks []string) string {
 	return fmt.Sprintf(" (require-all%s)", b.String())
 }
 
-func buildDarwinSandboxProfile(policy ExecutionPolicy, exePath string) string {
+// buildDarwinSandboxProfile emits the Seatbelt profile for policy. exePaths
+// are the binaries the confined process must be able to read and exec: the
+// target executable plus the sandbox init trampoline (this binary) when
+// limits enforcement is staged.
+func buildDarwinSandboxProfile(policy ExecutionPolicy, exePaths ...string) string {
 	// Seatbelt evaluates file filters against both raw and canonicalized
 	// spellings depending on the operation, so masks are emitted in both
 	// forms and whitelist prefixes are emitted raw + canonical.
@@ -231,10 +347,12 @@ func buildDarwinSandboxProfile(policy ExecutionPolicy, exePath string) string {
 	for _, root := range readPaths {
 		writePathFilter(root)
 	}
-	for _, p := range []string{exePath, sbCanonical(exePath)} {
-		if p != "" && !seen["L:"+p] {
-			seen["L:"+p] = true
-			fmt.Fprintf(&b, " (literal %q)", p)
+	for _, exePath := range exePaths {
+		for _, p := range []string{exePath, sbCanonical(exePath)} {
+			if p != "" && !seen["L:"+p] {
+				seen["L:"+p] = true
+				fmt.Fprintf(&b, " (literal %q)", p)
+			}
 		}
 	}
 	b.WriteString(")\n")
@@ -257,7 +375,9 @@ func buildDarwinSandboxProfile(policy ExecutionPolicy, exePath string) string {
 	for _, root := range append(readPaths, darwinWriteRoots...) {
 		writeAncestors(root)
 	}
-	writeAncestors(exePath)
+	for _, exePath := range exePaths {
+		writeAncestors(exePath)
+	}
 	fmt.Fprintf(&b, "(allow file-read-metadata%s)\n", meta.String())
 
 	if policy.ReadOnlyFS {

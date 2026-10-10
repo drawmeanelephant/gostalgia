@@ -69,9 +69,10 @@ type Runtime struct {
 	Services *service.Manager
 	Tokens   *security.TokenStore
 	Policy   *security.PolicyStore
-	User     security.User
 
 	svcCtx    *service.Context
+	userMu    sync.RWMutex // guards user: the profile-switch callback writes it from IPC handler goroutines
+	user      security.User
 	logFile   *os.File
 	hostFS    *vfs.HostFS   // closed at shutdown; Windows cannot delete an open directory tree
 	done      chan struct{} // closed when shutdown begins
@@ -128,7 +129,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		logFile:    logFile,
 		done:       make(chan struct{}),
 		completed:  make(chan struct{}),
-		User:       security.User{ID: "u-guest", Name: "guest"},
+		user:       security.User{ID: "u-guest", Name: "guest"},
 	}
 	rt.Log = log
 
@@ -164,10 +165,10 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 	}
 	rt.Profiles = profilesMgr
 	activeProfile := rt.Profiles.Active()
-	rt.User = activeProfile.User()
+	rt.setUser(activeProfile.User())
 
 	rt.Profiles.OnSwitch(func(prev, next profile.Profile) {
-		rt.User = next.User()
+		rt.setUser(next.User())
 		if rt.Apps != nil {
 			rt.Apps.SetUser(next.User())
 		}
@@ -197,7 +198,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		return nil, err
 	}
 	rt.Apps = app.NewManager(registry, rt.Procs, rt.Router, rt.Bus, log)
-	rt.Apps.SetUser(rt.User)
+	rt.Apps.SetUser(rt.CurrentUser())
 	rt.Apps.SetRoot(root)
 
 	token, err := newToken()
@@ -206,7 +207,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		return nil, err
 	}
 	tokens := security.NewTokenStore()
-	if err := tokens.RegisterOperator(token, rt.User); err != nil {
+	if err := tokens.RegisterOperator(token, rt.CurrentUser()); err != nil {
 		logFile.Close()
 		return nil, err
 	}
@@ -278,8 +279,9 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		return nil, err
 	}
 
-	// Session for the default user.
-	sess, err := rt.Sessions.Create(rt.User)
+	// Session for the current user. An operator may have switched profiles
+	// over IPC while services started, so read the identity under its lock.
+	sess, err := rt.Sessions.Create(rt.CurrentUser())
 	if err != nil {
 		rt.Shutdown("boot failure")
 		return nil, err
@@ -349,6 +351,21 @@ func InitRoot(root string) error {
 	return nil
 }
 
+// CurrentUser returns the active profile's user identity. It is safe for
+// concurrent use: the profile-switch callback updates the identity from
+// IPC handler goroutines while boot and services read it.
+func (rt *Runtime) CurrentUser() security.User {
+	rt.userMu.RLock()
+	defer rt.userMu.RUnlock()
+	return rt.user
+}
+
+func (rt *Runtime) setUser(u security.User) {
+	rt.userMu.Lock()
+	defer rt.userMu.Unlock()
+	rt.user = u
+}
+
 // Done is closed when shutdown begins (via signal handling in the caller
 // or a sys/shutdown request).
 func (rt *Runtime) Done() <-chan struct{} { return rt.done }
@@ -373,6 +390,11 @@ func (rt *Runtime) Shutdown(reason string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 
+		// Block new application launches for the whole sequence: a launch
+		// accepted now would land after the Running() snapshot and be
+		// orphaned. The process manager itself refuses registrations once
+		// flagged, so a racing launch can never outlive shutdown.
+		rt.Procs.BeginShutdown()
 		for id := range rt.Apps.Running() {
 			if err := rt.Apps.Stop(id, 5*time.Second); err != nil {
 				rt.Log.Warn("application shutdown problem", "app", id, "err", err)

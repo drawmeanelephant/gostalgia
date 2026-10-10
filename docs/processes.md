@@ -43,6 +43,10 @@ processes configured via `process.SupervisionConfig`:
 - **User stop & shutdown suppression:** Explicit calls to `Stop(id)` or `StopAll()`
   flag the process as operator-stopped and cancel the master context, ensuring
   no restart loops occur when a service is deliberately stopped.
+- **Shutdown gate:** Once `BeginShutdown`/`StopAll` marks the manager as
+  draining, `StartInProc` and `StartChild` refuse to register new processes
+  (callers undo the refused start), so no process can be created during or
+  after the shutdown sequence and slip past `StopAll` as an orphan.
 - **Crash loop cutoff:** Tracks restarts within a sliding time window
   (`Window`, default 1 minute). If restart attempts exceed `MaxRestarts`
   (default 3) within that window, the process transitions to `crashloop` state

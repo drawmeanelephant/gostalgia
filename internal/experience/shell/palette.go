@@ -21,27 +21,28 @@ func (m *Model) paletteItems() []paletteItem {
 	// Apps
 	for _, a := range m.apps {
 		app := a
+		name, id := viewText(app.Manifest.Name), viewText(app.Manifest.ID)
 		if app.Running {
 			items = append(items, paletteItem{
 				Tag:    "APP",
-				Title:  "Switch to " + app.Manifest.Name,
-				Detail: fmt.Sprintf("%s · PID %d (LIVE)", app.Manifest.ID, app.PID),
+				Title:  "Switch to " + name,
+				Detail: fmt.Sprintf("%s · PID %d (LIVE)", id, app.PID),
 				Action: func(m *Model) tea.Cmd {
 					return m.openView(app)
 				},
 			})
 			items = append(items, paletteItem{
 				Tag:    "APP",
-				Title:  "Stop " + app.Manifest.Name,
-				Detail: fmt.Sprintf("Graceful stop %s (PID %d)", app.Manifest.ID, app.PID),
+				Title:  "Stop " + name,
+				Detail: fmt.Sprintf("Graceful stop %s (PID %d)", id, app.PID),
 				Action: func(m *Model) tea.Cmd {
 					return m.submit("stop " + app.Manifest.ID)
 				},
 			})
 			items = append(items, paletteItem{
 				Tag:    "APP",
-				Title:  "Launch " + app.Manifest.Name + " (relaunch)",
-				Detail: fmt.Sprintf("%s (already running, single-instance)", app.Manifest.ID),
+				Title:  "Launch " + name + " (relaunch)",
+				Detail: fmt.Sprintf("%s (already running, single-instance)", id),
 				Action: func(m *Model) tea.Cmd {
 					return m.submit("launch " + app.Manifest.ID)
 				},
@@ -49,8 +50,8 @@ func (m *Model) paletteItems() []paletteItem {
 		} else {
 			items = append(items, paletteItem{
 				Tag:    "APP",
-				Title:  "Launch " + app.Manifest.Name,
-				Detail: app.Manifest.ID,
+				Title:  "Launch " + name,
+				Detail: id,
 				Action: func(m *Model) tea.Cmd {
 					return m.submit("launch " + app.Manifest.ID)
 				},
@@ -187,8 +188,8 @@ func (m *Model) paletteItems() []paletteItem {
 		doc := d
 		items = append(items, paletteItem{
 			Tag:    "DOC",
-			Title:  "Open " + doc.Name,
-			Detail: fmt.Sprintf("%s (%d B)", doc.Path, doc.Size),
+			Title:  "Open " + viewText(doc.Name),
+			Detail: fmt.Sprintf("%s (%d B)", viewText(doc.Path), doc.Size),
 			Action: func(m *Model) tea.Cmd {
 				return m.submit("type " + doc.Path)
 			},

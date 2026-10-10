@@ -98,12 +98,29 @@ func (s *FSService) grantStore() (*vfs.GrantStore, error) {
 }
 
 func (s *FSService) requireReadAccess(ctx context.Context, envPath string) error {
+	return fsAccessChecker{s.ctx}.read(ctx, envPath)
+}
+
+func (s *FSService) requireWriteAccess(ctx context.Context, envPath string) error {
+	return fsAccessChecker{s.ctx}.write(ctx, envPath)
+}
+
+// fsAccessChecker evaluates the per-path access rules shared by fs/* and
+// backup/*: shared host mounts obey the operator hostfs policy (and require
+// the hostfs capabilities for app callers), app-private storage is open to
+// its owner, granted paths are open to their grantee, and everything else
+// falls back to the filesystem capabilities.
+type fsAccessChecker struct {
+	sctx *service.Context
+}
+
+func (c fsAccessChecker) read(ctx context.Context, envPath string) error {
 	principal := ipc.CallerPrincipal(ctx)
-	if v, ok := s.ctx.VFS.(*vfs.VFS); ok {
+	if v, ok := c.sctx.VFS.(*vfs.VFS); ok {
 		if isShared, hostPath, _ := v.SharedHostInfo(envPath); isShared {
 			policy := security.DefaultOperatorPolicy()
-			if s.ctx.Policy != nil {
-				policy = s.ctx.Policy.Get()
+			if c.sctx.Policy != nil {
+				policy = c.sctx.Policy.Get()
 			}
 			if err := policy.CheckHostFS(hostPath, false); err != nil {
 				return err
@@ -119,7 +136,7 @@ func (s *FSService) requireReadAccess(ctx context.Context, envPath string) error
 		if vfs.IsAppPrivatePath(principal.AppID, envPath) {
 			return nil
 		}
-		if v, ok := s.ctx.VFS.(*vfs.VFS); ok && v.Grants() != nil {
+		if v, ok := c.sctx.VFS.(*vfs.VFS); ok && v.Grants() != nil {
 			if _, ok := v.Grants().FindMatchingGrant(principal.AppID, envPath); ok {
 				return nil
 			}
@@ -128,16 +145,16 @@ func (s *FSService) requireReadAccess(ctx context.Context, envPath string) error
 	return ipc.RequireCap(ctx, security.CapFileRead)
 }
 
-func (s *FSService) requireWriteAccess(ctx context.Context, envPath string) error {
+func (c fsAccessChecker) write(ctx context.Context, envPath string) error {
 	principal := ipc.CallerPrincipal(ctx)
-	if v, ok := s.ctx.VFS.(*vfs.VFS); ok {
+	if v, ok := c.sctx.VFS.(*vfs.VFS); ok {
 		if isShared, hostPath, readOnly := v.SharedHostInfo(envPath); isShared {
 			if readOnly {
 				return &vfs.Error{Op: "write", Path: envPath, Code: vfs.ErrReadOnly, Message: "shared host mount is read-only"}
 			}
 			policy := security.DefaultOperatorPolicy()
-			if s.ctx.Policy != nil {
-				policy = s.ctx.Policy.Get()
+			if c.sctx.Policy != nil {
+				policy = c.sctx.Policy.Get()
 			}
 			if err := policy.CheckHostFS(hostPath, true); err != nil {
 				return err
@@ -153,7 +170,7 @@ func (s *FSService) requireWriteAccess(ctx context.Context, envPath string) erro
 		if vfs.IsAppPrivatePath(principal.AppID, envPath) {
 			return nil
 		}
-		if v, ok := s.ctx.VFS.(*vfs.VFS); ok && v.Grants() != nil {
+		if v, ok := c.sctx.VFS.(*vfs.VFS); ok && v.Grants() != nil {
 			if g, ok := v.Grants().FindMatchingGrant(principal.AppID, envPath); ok && g.Access == vfs.AccessReadWrite {
 				return nil
 			}

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Router maps method names to handlers. The same router serves in-process
@@ -13,10 +14,14 @@ import (
 //
 // Route retraction is safe against in-flight dispatches: a dispatch that
 // has resolved a route holds a reference to it, and Unhandle and
-// UnhandlePrefix wait for those references to drain before returning. Once
-// either returns, no dispatch has or will reach a retracted handler.
-// Handlers run outside the router lock — a handler may register routes
-// (application launch does exactly that) — but a handler must not
+// UnhandlePrefix wait for those references to drain before returning —
+// bounded by routeRetractWait. Once either returns normally, no dispatch
+// has or will reach a retracted handler. If the bound elapses first the
+// routes are still retracted and can never be entered again, but a stale
+// in-flight dispatch keeps its dead route reference and may still run (or
+// hang); this keeps one wedged handler from blocking a cleanup path
+// forever. Handlers run outside the router lock — a handler may register
+// routes (application launch does exactly that) — but a handler must not
 // synchronously retract its own route: retraction waits for the handler
 // to return.
 type Router struct {
@@ -71,18 +76,26 @@ func (r *Router) HandleBatch(routes map[string]Handler) error {
 	return nil
 }
 
-// Unhandle removes one method and waits for in-flight dispatches to it to
-// complete.
+// routeRetractWait bounds how long Unhandle and UnhandlePrefix wait for
+// in-flight dispatches to release a retracted route. The wait exists so
+// teardown code can free handler resources without racing a live dispatch;
+// a handler that ignores its cancellation longer than this bound forfeits
+// that guarantee (it keeps running on a route that is already gone).
+const routeRetractWait = 2 * time.Second
+
+// Unhandle removes one method and waits, up to routeRetractWait, for
+// in-flight dispatches to it to complete.
 func (r *Router) Unhandle(method string) {
 	rt := r.remove(method)
 	if rt != nil {
-		rt.flight.Wait()
+		waitFlights([]*route{rt}, routeRetractWait)
 	}
 }
 
-// UnhandlePrefix removes every method with the prefix and waits for
-// in-flight dispatches to any of them to complete; applications use it to
-// retract all their routes ("app/<id>") on exit.
+// UnhandlePrefix removes every method with the prefix and waits, up to
+// routeRetractWait total, for in-flight dispatches to any of them to
+// complete; applications use it to retract all their routes ("app/<id>")
+// on exit.
 func (r *Router) UnhandlePrefix(prefix string) {
 	r.mu.Lock()
 	var removed []*route
@@ -93,8 +106,30 @@ func (r *Router) UnhandlePrefix(prefix string) {
 		}
 	}
 	r.mu.Unlock()
-	for _, rt := range removed {
-		rt.flight.Wait()
+	waitFlights(removed, routeRetractWait)
+}
+
+// waitFlights blocks until every route's in-flight dispatches drain or d
+// elapses, whichever comes first. On expiry the routes stay retracted (no
+// dispatch can ever reach them again) but the call returns anyway; the
+// goroutine waiting on the flights then leaks along with the wedged
+// handlers — bounded and rare, never fatal.
+func waitFlights(rts []*route, d time.Duration) {
+	if len(rts) == 0 || d <= 0 {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		for _, rt := range rts {
+			rt.flight.Wait()
+		}
+		close(done)
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-done:
+	case <-timer.C:
 	}
 }
 
