@@ -95,6 +95,12 @@ The runtime defends against local threats operating on the host machine:
   Exceeding the maximum connection budget (256 concurrent connections) or
   flooding the server with in-flight requests (> 32 per connection) terminates
   the offending connection immediately.
+- **Socket path privacy:** On Unix, all IPC sockets — the operator listener
+  and the per-app child listeners — live inside a per-boot private directory
+  (`$TMPDIR/gostalgia-ipc-*`, mode `0700`), never at a predictable or shared
+  temp path. No outside process can pre-plant an occupant to block boot or
+  app launch, and on Linux the directory is additionally hidden under the
+  child's fresh `/tmp` tmpfs while on macOS it is a masked path.
 - **Malformed frames and oversized payloads:** The NDJSON framing scanner
   enforces a 4 MiB frame size limit (`maxLine`). Malformed JSON, non-object
   payloads, unterminated lines, duplicate request IDs, and negative IDs fail
@@ -209,7 +215,8 @@ Gostalgia supports four explicit isolation levels declared in application manife
     temp dirs, the executable itself, and `AllowedPaths`); `MaskedPaths`
     (including the environment root) are carved out of covering prefixes with
     `require-not` filters. Host filesystem writes are permitted except into
-    masked paths.
+    masked paths. The runtime's per-boot IPC socket directory is masked the
+    same way, so a confined app cannot discover or unlink live socket files.
   - Resource limits are applied by a self-limiting trampoline: macOS has no
     `prlimit64` and Seatbelt cannot set rlimits, so the confined child is
     launched as a re-exec of the runtime binary inside the sandbox
