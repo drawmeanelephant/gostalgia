@@ -172,6 +172,20 @@ func TestSandboxIsolationE2E(t *testing.T) {
 				t.Fatal("sandboxed app connected to the runtime's unix socket (remote unix-socket was allowed)")
 			}
 			t.Logf("unix socket connect denied: %s", unixRes.Error)
+
+			// The socket lives in the runtime's private IPC directory, which
+			// is masked for sandboxed children: a same-uid app must not be
+			// able to write into it (e.g. to replace or unlink the socket).
+			var writeSockRes struct {
+				Written bool   `json:"written"`
+				Error   string `json:"error"`
+			}
+			target := filepath.Join(filepath.Dir(strings.TrimPrefix(envInfo.Endpoint, "unix://")), "probe")
+			must(t, client.Call(ctx, "app/com.test.sandboxed/probe_write", map[string]string{"path": target}, &writeSockRes))
+			if writeSockRes.Written {
+				t.Fatalf("sandboxed app wrote into the IPC socket directory %s", target)
+			}
+			t.Logf("IPC socket dir write denied: %s", writeSockRes.Error)
 		}
 	}
 
