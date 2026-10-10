@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"gostalgia/internal/filex"
 )
 
 // validFSName enforces the io/fs name contract on the raw backends:
@@ -353,7 +355,9 @@ func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 	if h.saveRenameHook != nil {
 		if hookErr := h.saveRenameHook(stageName, name); hookErr != nil {
 			recoverName := fmt.Sprintf("%s.recover", name)
-			if rErr := h.root.Rename(stageName, recoverName); rErr != nil {
+			if rErr := filex.RenameRetry(func() error {
+				return h.root.Rename(stageName, recoverName)
+			}); rErr != nil {
 				recoverName = stageName
 			} else {
 				h.syncDir(dir)
@@ -369,10 +373,14 @@ func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
 		}
 	}
 
-	if err := h.root.Rename(stageName, name); err != nil {
+	if err := filex.RenameRetry(func() error {
+		return h.root.Rename(stageName, name)
+	}); err != nil {
 		// Preserve staged data as a recoverable artifact rather than silently losing it.
 		recoverName := fmt.Sprintf("%s.recover", name)
-		if rErr := h.root.Rename(stageName, recoverName); rErr != nil {
+		if rErr := filex.RenameRetry(func() error {
+			return h.root.Rename(stageName, recoverName)
+		}); rErr != nil {
 			recoverName = stageName
 		} else {
 			h.syncDir(dir)

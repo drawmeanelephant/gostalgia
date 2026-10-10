@@ -15,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"gostalgia/internal/filex"
 )
 
 // Store is the configuration document for one environment.
@@ -224,7 +226,9 @@ func (s *Store) saveLocked() error {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("config: write: %w", err)
 	}
-	if err := os.Rename(tmp, s.path); err != nil {
+	if err := filex.RenameRetry(func() error {
+		return os.Rename(tmp, s.path)
+	}); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("config: rename: %w", err)
 	}
