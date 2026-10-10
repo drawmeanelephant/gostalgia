@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -344,6 +345,10 @@ func invoke(phase string, fn func() error) (err error) {
 func (m *Manager) Launch(ctx context.Context, id string) (*process.Process, error) {
 	// Reserve before reading the registry, so maintenance cannot race a stale launch.
 	m.mu.Lock()
+	if m.procs != nil && m.procs.IsShuttingDown() {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("app: environment is shutting down")
+	}
 	if m.maintenance[id] {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("app: %s is undergoing package maintenance", id)
@@ -370,12 +375,24 @@ func (m *Manager) Launch(ctx context.Context, id string) (*process.Process, erro
 		m.mu.Lock()
 		delete(m.running, id)
 		m.mu.Unlock()
+		close(ra.done)
 		return nil, fmt.Errorf("app: unsupported mode %q", man.Mode)
 	}
 }
 
 func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp) (*process.Process, error) {
 	id := man.ID
+	var doneOnce sync.Once
+	closeDone := func() { doneOnce.Do(func() { close(ra.done) }) }
+	// A failed launch never gets a run goroutine to close ra.done; close it
+	// here so a racing Stop returns promptly instead of reporting a spurious
+	// cleanup timeout for an app that no longer exists.
+	failed := true
+	defer func() {
+		if failed {
+			closeDone()
+		}
+	}()
 	factory, ok := m.reg.factory(man.Entrypoint)
 	if !ok {
 		m.mu.Lock()
@@ -467,9 +484,15 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 		if !security.NewCapabilities(caps...).Has(security.CapIPC) {
 			return fmt.Errorf("permission denied: missing capability %q", security.CapIPC)
 		}
+		if !validRouteName(name) {
+			return fmt.Errorf("app: invalid route name %q", name)
+		}
 		method := base + name
 		if _, dup := routes[method]; dup {
 			return fmt.Errorf("app: duplicate route %q", name)
+		}
+		if len(routes) >= maxAppRoutes {
+			return fmt.Errorf("app: too many routes (limit %d)", maxAppRoutes)
 		}
 		routes[method] = func(parent context.Context, req ipc.Request) (any, error) {
 			if err := ipc.RequireCap(parent, security.CapIPC); err != nil {
@@ -506,9 +529,7 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 			m.grants.RevokeAppSession(id)
 		}
 		if registered {
-			for method := range routes {
-				m.router.Unhandle(method)
-			}
+			m.router.UnhandlePrefix(base)
 		}
 		stopCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
@@ -554,7 +575,7 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 			ra.cleanupErr = cleanup()
 			runErr = errors.Join(runErr, ra.cleanupErr)
 			forget()
-			close(ra.done)
+			closeDone()
 			msg := ""
 			if runErr != nil {
 				msg = runErr.Error()
@@ -568,6 +589,7 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 		forget()
 		return nil, errors.Join(err, stopErr)
 	}
+	failed = false // the run goroutine owns ra.done from here on
 	m.mu.Lock()
 	ra.pid = proc.ID()
 	m.mu.Unlock()
@@ -611,7 +633,35 @@ const (
 	maxChildInFlight = 32
 )
 
+// maxAppRoutes bounds how many routes one application may register, both
+// for in-proc apps (declared during Init) and external apps (declared in
+// the ready handshake). Real applications declare a handful; the bound
+// keeps a buggy or hostile external app from amplifying one <=4 MiB ready
+// frame into hundreds of megabytes of route-table memory. maxRouteNameLen
+// bounds a single route name; names are identifiers matching
+// [a-z][a-z0-9_-]*, the same shape sdk enforces for entrypoints and
+// in-proc route declarations.
+const (
+	maxAppRoutes    = 1024
+	maxRouteNameLen = 64
+)
+
 var errWireFrameTooLarge = errors.New("app: wire frame exceeds 4 MiB limit")
+
+// validRouteName reports whether name is a valid local route identifier:
+// [a-z] followed by [a-z0-9_-], at most maxRouteNameLen bytes.
+func validRouteName(name string) bool {
+	if len(name) == 0 || len(name) > maxRouteNameLen || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		c := name[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // readWireLine reads one newline-delimited frame, aborting once it exceeds
 // maxWireLine. Unlike ReadBytes it cannot buffer an unterminated line
@@ -707,6 +757,17 @@ func childWireLoop(conn net.Conn, reader *bufio.Reader, writeMu *sync.Mutex, pen
 }
 
 func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningApp) (*process.Process, error) {
+	var doneOnce sync.Once
+	closeDone := func() { doneOnce.Do(func() { close(ra.done) }) }
+	// Every failure return below forgets the app but would leave ra.done
+	// open forever; closing it here lets a racing Stop return promptly
+	// instead of waiting out its whole timeout for a nonexistent app.
+	failed := true
+	defer func() {
+		if failed {
+			closeDone()
+		}
+	}()
 	forget := func() {
 		m.mu.Lock()
 		delete(m.running, man.ID)
@@ -976,7 +1037,8 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 		Token string `json:"token"`
 	}
 	_ = json.Unmarshal(authReq.Params, &authParams)
-	if authParams.Token != appToken {
+	if appToken == "" || authParams.Token == "" ||
+		subtle.ConstantTimeCompare([]byte(authParams.Token), []byte(appToken)) != 1 {
 		_ = writeWireMessage(conn, &writeMu, rpcWireMessage{
 			ID:    authReq.ID,
 			OK:    false,
@@ -1074,6 +1136,38 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 		cancel()
 		forget()
 		return nil, fmt.Errorf("app: %s: mismatched app_id %q", man.ID, readyParams.AppID)
+	}
+	if len(readyParams.Routes) > maxAppRoutes {
+		_ = writeWireMessage(conn, &writeMu, rpcWireMessage{
+			ID:    readyReq.ID,
+			OK:    false,
+			Error: fmt.Sprintf("too many routes declared (%d > %d)", len(readyParams.Routes), maxAppRoutes),
+		})
+		dropConn()
+		_ = m.procs.Stop(proc.ID(), 2*time.Second)
+		if m.tokens != nil && appToken != "" {
+			m.tokens.Revoke(appToken)
+		}
+		cancel()
+		forget()
+		return nil, fmt.Errorf("app: %s: too many routes declared (%d > %d)", man.ID, len(readyParams.Routes), maxAppRoutes)
+	}
+	for _, rName := range readyParams.Routes {
+		if !validRouteName(rName) {
+			_ = writeWireMessage(conn, &writeMu, rpcWireMessage{
+				ID:    readyReq.ID,
+				OK:    false,
+				Error: fmt.Sprintf("invalid route name %q", rName),
+			})
+			dropConn()
+			_ = m.procs.Stop(proc.ID(), 2*time.Second)
+			if m.tokens != nil && appToken != "" {
+				m.tokens.Revoke(appToken)
+			}
+			cancel()
+			forget()
+			return nil, fmt.Errorf("app: %s: invalid route name %q", man.ID, rName)
+		}
 	}
 	if len(readyParams.Routes) > 0 && !security.NewCapabilities(caps...).Has(security.CapIPC) {
 		_ = writeWireMessage(conn, &writeMu, rpcWireMessage{
@@ -1218,9 +1312,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 				m.grants.RevokeAppSession(man.ID)
 			}
 			if registered {
-				for method := range routes {
-					m.router.Unhandle(method)
-				}
+				m.router.UnhandlePrefix(base)
 			}
 			platform.RemoveChildSocket(endpoint)
 			drained := make(chan struct{})
@@ -1249,11 +1341,12 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 	}
 	go childWireLoop(conn, reader, &writeMu, &pendingMu, pendingCalls, dispatch, m.log)
 
+	failed = false // the proc-done watcher owns ra.done from here on
 	go func() {
 		<-proc.Done()
 		ra.cleanupErr = cleanup()
 		forget()
-		close(ra.done)
+		closeDone()
 		info := proc.Info()
 		m.bus.Publish("app", Event{ID: man.ID, PID: proc.ID(), State: "exited", Err: info.Err})
 		m.log.Info("external application exited", "app", man.ID, "pid", proc.ID(), "err", info.Err)

@@ -40,11 +40,15 @@ Handlers must protect their own shared state and honor connection cancellation.
 There is no call-cancellation wire method: canceled calls may still execute.
 
 Route retraction is safe against in-flight dispatches: `Unhandle` and
-`UnhandlePrefix` wait for dispatches that already resolved a route to
-finish before returning, so after either returns no dispatch has or will
-reach a retracted handler. Handlers run outside the router lock (a handler
-may register routes — application launch does), but a handler must not
-synchronously retract its own route.
+`UnhandlePrefix` wait — for up to two seconds — for dispatches that
+already resolved a route to finish before returning, so after either
+returns normally no dispatch has or will reach a retracted handler. If the
+bound elapses first, the routes are still retracted and can never be
+entered again, but a stale in-flight dispatch keeps its dead route
+reference and may still run or hang; the bound keeps one wedged handler
+from blocking a cleanup path forever. Handlers run outside the router lock
+(a handler may register routes — application launch does), but a handler
+must not synchronously retract its own route.
 
 ## Authentication
 
