@@ -80,6 +80,8 @@ The runtime exposes configuration management over IPC via `ConfigService`. Acces
 
 Preview overrides are staged per caller: application callers own the paths they stage under their own application ID, while operator and in-process callers share the global scope. `config/cancel_preview` and `config/commit_preview` only affect the caller's own staged values, so one principal can never commit or discard another's preview. Staged values remain visible in effective reads while active, preserving live theme previews; `config/unset` and `config/reset` on the `preview` layer are likewise scoped to the caller's own staged paths. For `config/unset`, `config/reset`, `config/get`, `config/list`, `config/snapshot`, and `config/explain`, an application caller's `app_id` is pinned to the calling application — applications may only address their own app layer, while operators may address any.
 
+The user layer's `apps.<id>.*` subtree is each application's app-layer backing store, so raw paths under it carry the same boundary: an application caller may only address `apps.<its-own-id>` and its descendants — `config/get`, `config/set`, `config/unset`, `config/reset`, `config/preview`, and `config/explain` reject foreign `apps.*` paths (including the bare `apps` root and partial app-ID prefixes), and `config/list`/`config/snapshot` confine the `apps` subtree of the effective, user-layer, and preview-layer views to the caller's own namespace. Operators are unconstrained.
+
 ## 5. Live updates and event subscriptions
 
 When configuration values change via `Set`, `Preview`, `CancelPreview`, `CommitPreview`, or `Reset`, the store publishes a `config.changed` event over the event bus:

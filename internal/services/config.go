@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"gostalgia/internal/config"
 	"gostalgia/internal/ipc"
@@ -110,6 +111,9 @@ func (s *ConfigService) get(ctx context.Context, req ipc.Request) (any, error) {
 			return nil, errors.New("config/get: cannot read preferences for another application")
 		}
 		p.AppID = principal.AppID
+		if foreignAppPath(p.Path, principal.AppID) {
+			return nil, errors.New("config/get: cannot read preferences for another application")
+		}
 	}
 
 	opts := config.QueryOpts{
@@ -178,6 +182,12 @@ func (s *ConfigService) set(ctx context.Context, req ipc.Request) (any, error) {
 		}
 	}
 
+	// The user layer's "apps.<id>.*" subtree is another application's app
+	// layer; the pinned app_id parameter alone does not confine raw paths.
+	if principal.IsApp() && foreignAppPath(p.Path, principal.AppID) {
+		return nil, errors.New("config/set: cannot modify preferences for another application")
+	}
+
 	opts := config.QueryOpts{
 		AppID: p.AppID,
 		Layer: targetLayer,
@@ -233,6 +243,9 @@ func (s *ConfigService) unset(ctx context.Context, req ipc.Request) (any, error)
 			return nil, errors.New("config/unset: cannot modify preferences for another application")
 		}
 		p.AppID = principal.AppID
+		if foreignAppPath(p.Path, principal.AppID) {
+			return nil, errors.New("config/unset: cannot modify preferences for another application")
+		}
 	}
 
 	opts := config.QueryOpts{
@@ -282,6 +295,9 @@ func (s *ConfigService) reset(ctx context.Context, req ipc.Request) (any, error)
 			return nil, errors.New("config/reset: cannot modify preferences for another application")
 		}
 		p.AppID = principal.AppID
+		if p.Path != "" && foreignAppPath(p.Path, principal.AppID) {
+			return nil, errors.New("config/reset: cannot modify preferences for another application")
+		}
 	}
 
 	opts := config.QueryOpts{
@@ -312,11 +328,13 @@ func (s *ConfigService) list(ctx context.Context, req ipc.Request) (any, error) 
 	var p listReq
 	_ = ipc.DecodeParams(req.Params, &p)
 
+	var callerAppID string
 	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
 		if p.AppID != "" && p.AppID != principal.AppID {
 			return nil, errors.New("config/list: cannot read preferences for another application")
 		}
 		p.AppID = principal.AppID
+		callerAppID = principal.AppID
 	}
 
 	opts := config.QueryOpts{AppID: p.AppID}
@@ -327,6 +345,15 @@ func (s *ConfigService) list(ctx context.Context, req ipc.Request) (any, error) 
 		config.LayerUser:    s.store.LayerSnapshot(config.LayerUser, opts),
 		config.LayerApp:     s.store.LayerSnapshot(config.LayerApp, opts),
 		config.LayerPreview: s.store.LayerSnapshot(config.LayerPreview, opts),
+	}
+
+	// The merged and per-layer snapshots expose the shared user store's
+	// "apps.<id>.*" subtrees — every application's app layer. Confine app
+	// callers to their own namespace.
+	if callerAppID != "" {
+		effective = confineAppsTree(effective, callerAppID)
+		layers[config.LayerUser] = confineAppsTree(layers[config.LayerUser].(map[string]any), callerAppID)
+		layers[config.LayerPreview] = confineAppsTree(layers[config.LayerPreview].(map[string]any), callerAppID)
 	}
 
 	return listResp{
@@ -357,6 +384,18 @@ func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, erro
 	opts := config.QueryOpts{}
 	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
 		opts.AppID = principal.AppID
+		if p.Path != "" && foreignAppPath(p.Path, principal.AppID) {
+			return nil, errors.New("config/preview: cannot modify preferences for another application")
+		}
+		if p.Settings != nil {
+			flat := make(map[string]any)
+			config.FlattenMap("", p.Settings, flat)
+			for path := range flat {
+				if foreignAppPath(path, principal.AppID) {
+					return nil, errors.New("config/preview: cannot modify preferences for another application")
+				}
+			}
+		}
 	}
 	if p.Settings != nil {
 		if err := s.store.PreviewBatch(p.Settings, opts); err != nil {
@@ -498,8 +537,67 @@ func (s *ConfigService) explain(ctx context.Context, req ipc.Request) (any, erro
 			return nil, errors.New("config/explain: cannot read preferences for another application")
 		}
 		p.AppID = principal.AppID
+		if foreignAppPath(p.Path, principal.AppID) {
+			return nil, errors.New("config/explain: cannot read preferences for another application")
+		}
 	}
 
 	exp := s.store.Explain(p.Path, config.QueryOpts{AppID: p.AppID})
 	return exp, nil
+}
+
+// foreignAppPath reports whether path reaches outside appID's own
+// namespace inside the shared user layer's "apps" subtree — the backing
+// store for per-application app-layer preferences ("apps.<app-id>.*").
+// Application callers may only address "apps.<own-id>" and its
+// descendants; the bare "apps" root and every other subtree — including
+// app-ID prefixes that merely share a leading segment — belong to other
+// applications.
+func foreignAppPath(path, appID string) bool {
+	if path != "apps" && !strings.HasPrefix(path, "apps.") {
+		return false
+	}
+	own := "apps." + appID
+	return path != own && !strings.HasPrefix(path, own+".")
+}
+
+// confineAppsTree reduces the "apps" subtree of a config snapshot map to
+// appID's own namespace, hiding other applications' app-layer
+// preferences. The map is mutated and returned for convenient chaining.
+func confineAppsTree(m map[string]any, appID string) map[string]any {
+	apps, ok := m["apps"].(map[string]any)
+	if !ok {
+		return m
+	}
+	segs := strings.Split(appID, ".")
+	own, ok := lookupNested(apps, segs)
+	if !ok {
+		delete(m, "apps")
+		return m
+	}
+	m["apps"] = wrapNested(segs, own)
+	return m
+}
+
+func lookupNested(m map[string]any, segs []string) (any, bool) {
+	var cur any = m
+	for _, seg := range segs {
+		cm, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = cm[seg]
+		if !ok {
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func wrapNested(segs []string, leaf any) map[string]any {
+	m := map[string]any{segs[len(segs)-1]: leaf}
+	for i := len(segs) - 2; i >= 0; i-- {
+		m = map[string]any{segs[i]: m}
+	}
+	return m
 }
