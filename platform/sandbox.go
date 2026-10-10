@@ -16,6 +16,13 @@ const (
 // is requested on a platform or configuration that cannot enforce it.
 var ErrSandboxUnsupported = errors.New("platform: host sandbox enforcement is unsupported")
 
+// sandboxInitEnv carries the serialized confinement program to a re-exec'd
+// init helper. Platforms that cannot express a confinement step through
+// os/exec (Linux namespace mounts, Darwin pre-exec rlimits) re-execute the
+// current binary with this payload; the platform init hook decodes it,
+// applies the confinement, and execs the real target.
+const sandboxInitEnv = "GOSTALGIA_SANDBOX_INIT"
+
 // ExecutionPolicy defines the host confinement guarantees applied to a process.
 type ExecutionPolicy struct {
 	Isolation       string   `json:"isolation"`                  // "trusted", "sandbox", "strict"

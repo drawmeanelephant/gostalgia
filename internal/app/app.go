@@ -797,6 +797,13 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 		if root := m.Root(); root != "" {
 			policy.MaskedPaths = append(policy.MaskedPaths, root)
 		}
+		// The IPC socket directory holds the live operator listener and
+		// every trusted-child socket. Same-uid confinement cannot rely on
+		// POSIX permissions alone, so hide it from the child entirely:
+		// an app that cannot see the socket path cannot unlink it.
+		if sockDir := platform.IPCSocketDir(); sockDir != "" {
+			policy.MaskedPaths = append(policy.MaskedPaths, sockDir)
+		}
 	} else {
 		ln, endpoint, err = platform.ListenChildIPC(man.ID)
 		if err != nil {
