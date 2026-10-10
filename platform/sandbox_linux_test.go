@@ -15,6 +15,33 @@ import (
 	"time"
 )
 
+// Regression for #181: /proc/self/mounts parsing feeds the read-only remount
+// walk; foreign-userns mounts (WSL 9p/drvfs) must reach the mask fallback,
+// not be skipped or mis-parsed.
+func TestLinuxParseMounts(t *testing.T) {
+	data := "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n" +
+		"/dev/sda / ext4 rw,relatime 0 0\n" +
+		"drvfs /mnt/c 9p rw,relatime,aname=drvfs 0 0\n" +
+		"none /mnt/space\\040dir ext4 rw 0 0\n" +
+		"garbage line\n"
+	mounts := linuxParseMounts(data)
+	if len(mounts) != 4 {
+		t.Fatalf("parsed %d mounts, want 4: %+v", len(mounts), mounts)
+	}
+	if mounts[1].point != "/" || mounts[1].fstype != "ext4" {
+		t.Fatalf("mount[1] = %+v", mounts[1])
+	}
+	if mounts[2].fstype != "9p" {
+		t.Fatalf("drvfs fstype = %q", mounts[2].fstype)
+	}
+	if mounts[3].point != "/mnt/space dir" {
+		t.Fatalf("escaped space = %q", mounts[3].point)
+	}
+	if !linuxPseudoFSTypes["sysfs"] || linuxPseudoFSTypes["9p"] || linuxPseudoFSTypes["ext4"] {
+		t.Fatal("pseudo fstype classification wrong")
+	}
+}
+
 // TestLinuxConfigureSandboxFlags checks that a sandboxed policy configures
 // user+mount namespaces and stages the init payload for the re-exec hook.
 func TestLinuxConfigureSandboxFlags(t *testing.T) {

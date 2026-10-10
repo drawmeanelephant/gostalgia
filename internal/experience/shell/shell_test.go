@@ -481,6 +481,70 @@ func TestThemeAndMotionCommands(t *testing.T) {
 	}
 }
 
+// Regression for #180: a failed handoff with no message printed a blank line.
+func TestOpenCommandFallbackMessage(t *testing.T) {
+	ctx := context.Background()
+	caller := callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if method != "doc/handoff" {
+			t.Fatalf("unexpected method %s", method)
+		}
+		return writeJSON(out, map[string]any{"success": false})
+	})
+	text, _, _, err := command(ctx, caller, "/users/guest", "open report.md")
+	if err != nil {
+		t.Fatalf("open failed: %v", err)
+	}
+	if !strings.Contains(text, "open: no handler for /users/guest/report.md") {
+		t.Fatalf("empty handoff produced no feedback: %q", text)
+	}
+}
+
+// Regression for #180: `theme` silently applied to the session only. Now the
+// choice is written to the user config layer and the transcript reports the
+// save outcome either way.
+func TestThemeCommandPersistsPreference(t *testing.T) {
+	ctx := context.Background()
+	var saved map[string]any
+	caller := callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if method == "config/set" {
+			raw, _ := json.Marshal(params)
+			_ = json.Unmarshal(raw, &saved)
+		}
+		return nil
+	})
+	m := New(ctx, caller, nil)
+	res := execute(ctx, m.client, m.cwd, "theme midnight")
+	_, cmd := m.Update(res)
+	if cmd == nil {
+		t.Fatal("theme change returned no persist command")
+	}
+	msg, ok := cmd().(themeSavedMsg)
+	if !ok {
+		t.Fatalf("persist cmd returned %T", msg)
+	}
+	if saved["path"] != "theme" || saved["value"] != "midnight" {
+		t.Fatalf("config/set params = %v", saved)
+	}
+	m.Update(msg)
+	foundSaved := false
+	for _, e := range m.transcript {
+		foundSaved = foundSaved || strings.Contains(e.text, "Theme saved")
+	}
+	if !foundSaved {
+		t.Fatalf("transcript missing save confirmation: %v", m.transcript)
+	}
+
+	// A failed save announces session-only scope instead of staying silent.
+	m.Update(themeSavedMsg{err: fmt.Errorf("ipc down")})
+	foundNote := false
+	for _, e := range m.transcript {
+		foundNote = foundNote || strings.Contains(e.text, "this session only")
+	}
+	if !foundNote {
+		t.Fatalf("transcript missing session-only note: %v", m.transcript)
+	}
+}
+
 func TestTerminalRestoration(t *testing.T) {
 	var buf bytes.Buffer
 	Restore(&buf)

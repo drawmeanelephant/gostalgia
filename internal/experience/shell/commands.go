@@ -608,7 +608,11 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		if res.Success && res.AppID != "" {
 			return ok(fmt.Sprintf("__SWITCH_VIEW__:%s", res.AppID))
 		}
-		return ok(safe(res.Message))
+		msg := strings.TrimSpace(safe(res.Message))
+		if msg == "" {
+			msg = fmt.Sprintf("open: no handler for %s", target)
+		}
+		return ok(msg)
 	case "search", "find":
 		if len(args) < 1 {
 			return fail(fmt.Errorf("usage: search QUERY [PATH]"))

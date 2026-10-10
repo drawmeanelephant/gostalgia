@@ -259,7 +259,10 @@ Gostalgia supports four explicit isolation levels declared in application manife
       except `/dev/null`, `/dev/zero`, temp/scratch dirs, and `AllowedPaths`.
     - Linux: every real mount is bind-remounted read-only inside the mount
       namespace; `AllowedPaths` are re-mounted writable. `MaskedPaths` stay
-      hidden.
+      hidden. Mounts owned by a foreign user namespace refuse the remount
+      (WSL 9p/drvfs host drives, some FUSE/network filesystems); these are
+      masked behind empty read-only space rather than left writable, and the
+      mask is reported in the child's captured output.
   - **Tighter Resource Limits:**
     - Linux (`prlimit64`): maximum file descriptors capped at 512
       (`RLIMIT_NOFILE`), virtual memory capped at 2 GB (`RLIMIT_AS`), and
