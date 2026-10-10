@@ -1,0 +1,54 @@
+MIT License
+
+Copyright (c) 2026 draw me an elephant
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+
+Third-Party Notices
+
+Gostalgia's terminal experience is built on the Charm ecosystem. The
+following dependencies are used under their respective licenses:
+
+  github.com/charmbracelet/bubbletea        MIT   (c) 2020-2025 Charmbracelet, Inc
+  github.com/charmbracelet/bubbles          MIT   (c) 2020-2025 Charmbracelet, Inc
+  github.com/charmbracelet/lipgloss         MIT   (c) 2021-2023 Charmbracelet, Inc
+  github.com/charmbracelet/x/ansi           MIT   (c) 2023 Charmbracelet, Inc
+  github.com/charmbracelet/x/cellbuf        MIT   (c) 2023 Charmbracelet, Inc
+  github.com/charmbracelet/x/term           MIT   (c) 2023 Charmbracelet, Inc
+  github.com/charmbracelet/colorprofile     MIT   (c) 2020-2024 Charmbracelet, Inc
+  github.com/muesli/termenv                 MIT   (c) 2019 Christian Muehlhaeuser
+  github.com/muesli/ansi                    MIT   (c) 2021 Christian Muehlhaeuser
+  github.com/muesli/cancelreader            MIT   (c) 2022 Erik Geiser and Christian Muehlhaeuser
+  github.com/aymanbagabas/go-osc52/v2       MIT   (c) 2022 Ayman Bagabas
+  github.com/clipperhouse/displaywidth      MIT   (c) 2025 Matt Sherman
+  github.com/clipperhouse/stringish         MIT   (c) 2025 Matt Sherman
+  github.com/clipperhouse/uax29/v2          MIT   (c) 2020 Matt Sherman
+  github.com/erikgeiser/coninput            MIT   (c) 2021 Erik G.
+  github.com/lucasb-eyer/go-colorful        MIT   (c) 2013 Lucas Beyer
+  github.com/mattn/go-isatty                MIT   (c) Yasuhiro Matsumoto
+  github.com/mattn/go-runewidth             MIT   (c) 2016 Yasuhiro Matsumoto
+  github.com/rivo/uniseg                    MIT   (c) 2019 Oliver Kuederle
+  github.com/xo/terminfo                    MIT   (c) 2016 Anmol Sethi
+  golang.org/x/sys                          BSD-3 (c) 2009 The Go Authors
+  golang.org/x/text                         BSD-3 (c) 2009 The Go Authors
+
+Note: github.com/mattn/go-localereader is a Windows-only transitive
+dependency of bubbletea and ships without a LICENSE file in v0.0.1.

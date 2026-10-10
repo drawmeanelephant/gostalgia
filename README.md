@@ -66,3 +66,8 @@ gofmt -l .  # empty output = clean
 ```
 
 Requires Go ≥ 1.25.
+
+## License
+
+MIT — see [LICENSE](LICENSE), which also credits the Charm ecosystem and other
+dependencies that power the terminal experience.
