@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/notifications"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/taskmanager"
@@ -1006,7 +1006,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(entry{"Theme saved to your settings.", "muted"})
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		keyStr := msg.String()
 		switch keyStr {
 		case "ctrl+c", "ctrl+d":
@@ -1237,8 +1237,33 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+// deleteClusterBackward removes the grapheme cluster immediately before the
+// cursor, the way Backspace and Ctrl-H do.
+func (m *Model) deleteClusterBackward() {
+	if m.cursor > 0 {
+		prev := prevClusterRune(m.input, m.cursor)
+		m.input = append(m.input[:prev], m.input[m.cursor:]...)
+		m.cursor = prev
+	}
+}
+
+func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.Key()
+	if key.Mod.Contains(tea.ModCtrl) {
+		switch key.Code {
+		case 'a':
+			m.cursor = 0
+		case 'e':
+			m.cursor = len(m.input)
+		case 'u':
+			m.input = nil
+			m.cursor = 0
+		case 'h':
+			m.deleteClusterBackward()
+		}
+		return m, nil
+	}
+	switch key.Code {
 	case tea.KeyEnter:
 		line := strings.TrimSpace(string(m.input))
 		if line == "" {
@@ -1273,12 +1298,8 @@ func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.submit(line)
-	case tea.KeyBackspace, tea.KeyCtrlH:
-		if m.cursor > 0 {
-			prev := prevClusterRune(m.input, m.cursor)
-			m.input = append(m.input[:prev], m.input[m.cursor:]...)
-			m.cursor = prev
-		}
+	case tea.KeyBackspace:
+		m.deleteClusterBackward()
 	case tea.KeyDelete:
 		if m.cursor < len(m.input) {
 			next := nextClusterRune(m.input, m.cursor)
@@ -1288,13 +1309,10 @@ func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = prevClusterRune(m.input, m.cursor)
 	case tea.KeyRight:
 		m.cursor = nextClusterRune(m.input, m.cursor)
-	case tea.KeyHome, tea.KeyCtrlA:
+	case tea.KeyHome:
 		m.cursor = 0
-	case tea.KeyEnd, tea.KeyCtrlE:
+	case tea.KeyEnd:
 		m.cursor = len(m.input)
-	case tea.KeyCtrlU:
-		m.input = nil
-		m.cursor = 0
 	case tea.KeyUp, tea.KeyDown:
 		if len(m.history) == 0 {
 			break
@@ -1302,7 +1320,7 @@ func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.historyPos == len(m.history) {
 			m.draft = string(m.input)
 		}
-		if msg.Type == tea.KeyUp {
+		if key.Code == tea.KeyUp {
 			m.historyPos = max(0, m.historyPos-1)
 		} else {
 			m.historyPos = min(len(m.history), m.historyPos+1)
@@ -1315,14 +1333,11 @@ func (m *Model) handlePromptKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursor = len(m.input)
 	case tea.KeyTab:
 		m.complete()
-	case tea.KeyRunes, tea.KeySpace:
-		if len(m.input) == 0 && msg.Type == tea.KeyRunes && string(msg.Runes) == "/" {
+	default:
+		text := safe(key.Text)
+		if len(m.input) == 0 && text == "/" {
 			m.openPalette()
 			return m, nil
-		}
-		text := safe(string(msg.Runes))
-		if msg.Type == tea.KeySpace {
-			text = " "
 		}
 		text = strings.ReplaceAll(text, "\n", " ")
 		if len(m.input)+len([]rune(text)) <= 4096 {
@@ -1471,7 +1486,16 @@ func safe(s string) string { return ui.Sanitize(s) }
 
 func dosPath(p string) string { return "C:" + strings.ReplaceAll(p, "/", `\`) }
 
-func (m *Model) View() string {
+// View declares the shell frame plus the terminal modes it needs. Alternate
+// screen and other v1 program options are declarative View fields in v2, so
+// the shell owns its screen mode here instead of at NewProgram time.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.render())
+	v.AltScreen = true
+	return v
+}
+
+func (m *Model) render() string {
 	m.initExperience()
 	if m.width <= 0 || m.height <= 0 {
 		return ""
@@ -1729,11 +1753,11 @@ func Restore(w io.Writer) {
 }
 
 // Run takes over the terminal, restoring it on every exit. Passing options is
-// useful for tests; production runs in the alternate screen with bracketed paste.
+// useful for tests; production runs in the alternate screen declared by View.
 func Run(ctx context.Context, c Caller, closed <-chan struct{}, notifs *notifications.Manager, options ...tea.ProgramOption) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
+	opts := []tea.ProgramOption{tea.WithContext(ctx)}
 	opts = append(opts, options...)
 	model := NewWithNotifs(ctx, c, closed, notifs)
 	defer func() {
@@ -1751,7 +1775,7 @@ func Run(ctx context.Context, c Caller, closed <-chan struct{}, notifs *notifica
 func RunAttached(ctx context.Context, c Caller, closed <-chan struct{}, options ...tea.ProgramOption) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
+	opts := []tea.ProgramOption{tea.WithContext(ctx)}
 	opts = append(opts, options...)
 	model := New(ctx, c, closed)
 	model.SetAttached(true)

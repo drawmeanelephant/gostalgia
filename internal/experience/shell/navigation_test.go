@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func mockApps() []appStatus {
@@ -72,17 +72,17 @@ func TestViewModeTransitionsAndFocus(t *testing.T) {
 	}
 
 	// F1 toggles between Home and Prompt.
-	m.Update(tea.KeyMsg{Type: tea.KeyF1})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after F1, got %v", m.Focus())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyF1})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF1})
 	if m.Focus() != FocusHome {
 		t.Fatalf("expected FocusHome after second F1, got %v", m.Focus())
 	}
 
 	// F2 switches to Launcher.
-	m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
 	if m.Focus() != FocusLauncher {
 		t.Fatalf("expected FocusLauncher after F2, got %v", m.Focus())
 	}
@@ -91,24 +91,24 @@ func TestViewModeTransitionsAndFocus(t *testing.T) {
 	}
 
 	// Esc in Launcher returns to Prompt.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after Esc in Launcher, got %v", m.Focus())
 	}
 
 	// F2 toggles back and forth.
-	m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
 	if m.Focus() != FocusLauncher {
 		t.Fatalf("expected FocusLauncher, got %v", m.Focus())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after toggling F2 off, got %v", m.Focus())
 	}
 
 	// Ctrl+P opens Command Palette overlay.
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{}, Alt: false})
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlP})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended})
+	m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 	if m.Focus() != FocusPalette {
 		t.Fatalf("expected FocusPalette after Ctrl+P, got %v", m.Focus())
 	}
@@ -117,7 +117,7 @@ func TestViewModeTransitionsAndFocus(t *testing.T) {
 	}
 
 	// Esc closes Command Palette overlay.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after closing palette, got %v", m.Focus())
 	}
@@ -125,11 +125,11 @@ func TestViewModeTransitionsAndFocus(t *testing.T) {
 	// '/' at empty prompt opens palette.
 	m.input = nil
 	m.cursor = 0
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	if m.Focus() != FocusPalette {
 		t.Fatalf("expected FocusPalette after '/' at empty prompt, got %v", m.Focus())
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 }
 
 func TestLauncherSearchFiltering(t *testing.T) {
@@ -143,7 +143,7 @@ func TestLauncherSearchFiltering(t *testing.T) {
 
 	// Type search query: "clk" should not match, but "clo" should match Clock.
 	for _, r := range "clo" {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if m.launcherQuery != "clo" {
 		t.Fatalf("expected launcher query 'clo', got %q", m.launcherQuery)
@@ -154,7 +154,7 @@ func TestLauncherSearchFiltering(t *testing.T) {
 	}
 
 	// Backspace removes characters.
-	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if m.launcherQuery != "cl" {
 		t.Fatalf("expected launcher query 'cl', got %q", m.launcherQuery)
 	}
@@ -172,13 +172,13 @@ func TestLauncherSearchFiltering(t *testing.T) {
 	if len(filtered) != 0 {
 		t.Fatalf("expected 0 matches, got %d", len(filtered))
 	}
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "No matching apps") {
 		t.Fatalf("expected 'No matching apps' in view, got:\n%s", view)
 	}
 
 	// Esc with non-empty query clears query first.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.launcherQuery != "" {
 		t.Fatalf("expected empty query after first Esc, got %q", m.launcherQuery)
 	}
@@ -187,7 +187,7 @@ func TestLauncherSearchFiltering(t *testing.T) {
 	}
 
 	// Second Esc exits Launcher to Prompt.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after second Esc, got %v", m.Focus())
 	}
@@ -203,19 +203,19 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 	}
 
 	// Down arrow moves selection.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.selected != 1 {
 		t.Fatalf("expected selected 1 after down arrow, got %d", m.selected)
 	}
 
 	// Up arrow moves selection back.
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if m.selected != 0 {
 		t.Fatalf("expected selected 0 after up arrow, got %d", m.selected)
 	}
 
 	// Enter on selected app returns launch cmd.
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected launch command on Enter")
 	}
@@ -224,7 +224,7 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 	m.busy = false
 
 	// F3 on selected app returns stop cmd.
-	_, stopCmd := m.Update(tea.KeyMsg{Type: tea.KeyF3})
+	_, stopCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF3})
 	if stopCmd == nil {
 		t.Fatal("expected stop command on F3")
 	}
@@ -250,7 +250,7 @@ func TestHomeDashboardNavigationAndShortcuts(t *testing.T) {
 		t.Fatalf("expected 3 home items, got %d", len(items))
 	}
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "1h 1m") {
 		t.Fatalf("expected uptime '1h 1m' in view, got:\n%s", view)
 	}
@@ -262,13 +262,13 @@ func TestHomeDashboardNavigationAndShortcuts(t *testing.T) {
 	}
 
 	// Navigate down to first document.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.homeSelected != 1 {
 		t.Fatalf("expected homeSelected 1, got %d", m.homeSelected)
 	}
 
 	// Pressing Enter on document submits "type <path>".
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected command on document Enter")
 	}
@@ -278,7 +278,7 @@ func TestHomeDashboardNavigationAndShortcuts(t *testing.T) {
 
 	// Typing letters from home screen switches to prompt mode seamlessly.
 	m.setMode(modeHome)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d', 'i', 'r'}})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "dir"})
 	if m.Focus() != FocusPrompt {
 		t.Fatalf("expected FocusPrompt after typing runes in Home, got %v", m.Focus())
 	}
@@ -306,7 +306,7 @@ func TestCommandPalette(t *testing.T) {
 
 	// Filter by document name.
 	for _, r := range "notes" {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	if m.paletteQuery != "notes" {
 		t.Fatalf("expected paletteQuery 'notes', got %q", m.paletteQuery)
@@ -317,7 +317,7 @@ func TestCommandPalette(t *testing.T) {
 	}
 
 	// Enter executes the action and closes the palette.
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("expected command on palette Enter")
 	}
@@ -341,7 +341,7 @@ func TestCommandPalette(t *testing.T) {
 	}
 
 	// Esc closes palette without executing.
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.paletteOpen {
 		t.Fatal("expected palette to close on Esc")
 	}
@@ -354,7 +354,7 @@ func TestPromptCommandNavigation(t *testing.T) {
 	// Typing "home" and pressing Enter switches to Home mode.
 	m.input = []rune("home")
 	m.cursor = 4
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.Focus() != FocusHome {
 		t.Fatalf("expected FocusHome after typing 'home', got %v", m.Focus())
 	}
@@ -363,7 +363,7 @@ func TestPromptCommandNavigation(t *testing.T) {
 	m.setMode(modePrompt)
 	m.input = []rune("launcher")
 	m.cursor = 8
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.Focus() != FocusLauncher {
 		t.Fatalf("expected FocusLauncher after typing 'launcher', got %v", m.Focus())
 	}
@@ -372,7 +372,7 @@ func TestPromptCommandNavigation(t *testing.T) {
 	m.setMode(modePrompt)
 	m.input = []rune("palette")
 	m.cursor = 7
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.Focus() != FocusPalette {
 		t.Fatalf("expected FocusPalette after typing 'palette', got %v", m.Focus())
 	}

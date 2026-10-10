@@ -14,7 +14,7 @@ func TestNamedThemes(t *testing.T) {
 			}
 			for _, state := range []State{Normal, Disabled, Busy, Success, Error, Empty} {
 				s := th.Status(state)
-				if s.Text == "" || s.Fill == "" || s.Symbol == "" || s.Label == "" || s.Message == "" {
+				if s.Text == nil || s.Fill == nil || s.Symbol == "" || s.Label == "" || s.Message == "" {
 					t.Errorf("incomplete %s status: %+v", state, s)
 				}
 			}

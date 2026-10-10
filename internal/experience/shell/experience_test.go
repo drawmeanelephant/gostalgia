@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/notifications"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/taskmanager"
@@ -96,7 +96,7 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	}
 
 	// Press F5 to open Task Manager
-	m.Update(tea.KeyMsg{Type: tea.KeyF5})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF5})
 	if !m.taskView {
 		t.Fatal("expected taskView active after F5")
 	}
@@ -104,7 +104,7 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	// Feed process update
 	m.Update(procUpdateMsg{procs: client.procs})
 
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "LIVE TASK MANAGER") {
 		t.Fatal("expected LIVE TASK MANAGER header in view")
 	}
@@ -113,17 +113,17 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	}
 
 	// Navigate down to worker (index 1)
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if m.tasks.SelectedIndex() != 1 {
 		t.Fatalf("expected selected index 1, got %d", m.tasks.SelectedIndex())
 	}
 
 	// View logs with 'l'
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "l"})
 	// Simulate log arrival
 	m.Update(procLogsMsg{pid: 2, name: "worker", content: client.logs[2]})
 
-	logView := m.View()
+	logView := m.View().Content
 	if !strings.Contains(logView, "CHILD LOG TAIL: worker (PID 2)") {
 		t.Fatalf("expected child log tail header, got:\n%s", logView)
 	}
@@ -132,13 +132,13 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	}
 
 	// Close logs modal with Esc
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.tasks.Mode() != taskmanager.ModeTable {
 		t.Fatal("expected return to ModeTable after Esc")
 	}
 
 	// Stop worker with 'x'
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"})
 	m.Update(procActionMsg{status: "Stopped process 2"})
 	status, _ := m.tasks.Status()
 	if !strings.Contains(status, "Stopped process 2") {
@@ -146,7 +146,7 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	}
 
 	// Esc returns to Home view
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.taskView {
 		t.Fatal("expected taskView=false after Esc")
 	}
@@ -170,7 +170,7 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	})
 
 	// Toasts should be visible in home view
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "broken-daemon Crashed") {
 		t.Fatalf("expected toast in home view, got:\n%s", view)
 	}
@@ -187,12 +187,12 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	}
 
 	// Open Notification Center with F6
-	m.Update(tea.KeyMsg{Type: tea.KeyF6})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF6})
 	if !m.notifView {
 		t.Fatal("expected notifView active after F6")
 	}
 
-	panelView := m.View()
+	panelView := m.View().Content
 	if !strings.Contains(panelView, "NOTIFICATION CENTER") {
 		t.Fatalf("expected NOTIFICATION CENTER header, got:\n%s", panelView)
 	}
@@ -201,7 +201,7 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	}
 
 	// Mark seen / inspect receipt with Enter
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.notifs.History()[0].Seen != true {
 		t.Fatal("expected notification to be marked seen after viewing")
 	}
@@ -209,7 +209,7 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	if !m.taskView || m.tasks.Mode() != taskmanager.ModeReceipt {
 		t.Fatal("expected receipt view to open upon Enter")
 	}
-	receiptView := m.View()
+	receiptView := m.View().Content
 	if !strings.Contains(receiptView, "CRASH RECEIPT") || !strings.Contains(receiptView, "panic: nil pointer dereference") {
 		t.Fatalf("expected crash receipt with panic log excerpt, got:\n%s", receiptView)
 	}
@@ -238,7 +238,7 @@ func TestDoNotDisturbSuppressesToasts(t *testing.T) {
 	if len(m.notifs.ActiveToasts()) != 0 {
 		t.Fatalf("expected 0 active toasts under DND, got %d", len(m.notifs.ActiveToasts()))
 	}
-	view := m.View()
+	view := m.View().Content
 	if strings.Contains(view, "Background Sync Alert") {
 		t.Fatal("toast should not appear in home view under DND")
 	}

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/ui"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/runtime"
@@ -29,25 +29,25 @@ func (noopCaller) Call(context.Context, string, any, any) error { return nil }
 
 func TestEditingHistoryCompletionAndBounds(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("héllo")})
-	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "héllo"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if string(m.input) != "hélo" {
 		t.Fatalf("edited = %s", string(m.input))
 	}
 	m.history = []string{"apps", "echo hello"}
 	m.historyPos = 2
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if string(m.input) != "echo hello" {
 		t.Fatal("history up failed")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if string(m.input) != "hélo" {
 		t.Fatal("draft not restored")
 	}
 	m.input = []rune("laun")
 	m.cursor = 4
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if string(m.input) != "launch" {
 		t.Fatal("completion failed")
 	}
@@ -60,7 +60,7 @@ func TestEditingHistoryCompletionAndBounds(t *testing.T) {
 	m.cursor = 90
 	for _, size := range [][2]int{{80, 24}, {40, 12}, {30, 10}, {20, 8}, {120, 40}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		view := m.View()
+		view := m.View().Content
 		if strings.Contains(view, "\a") {
 			t.Fatal("rendered terminal control")
 		}
@@ -81,7 +81,7 @@ func TestShelfKeepsSelectedAppVisible(t *testing.T) {
 		m.apps = append(m.apps, a)
 	}
 	m.selected = 19
-	if !strings.Contains(m.View(), "APP-19") {
+	if !strings.Contains(m.View().Content, "APP-19") {
 		t.Fatal("selected app offscreen")
 	}
 }
@@ -202,8 +202,8 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	p.Send(tea.WindowSizeMsg{Width: 80, Height: 24})
 	submit := func(line, step string) resultMsg {
 		t.Helper()
-		p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(line)})
-		p.Send(tea.KeyMsg{Type: tea.KeyEnter})
+		p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: line})
+		p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 		return await(step)
 	}
 	if r := submit("apps", "apps"); !strings.Contains(r.text, "com.gostalgia.echo") {
@@ -248,16 +248,16 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 			return viewMsg{}
 		}
 	}
-	p.Send(tea.KeyMsg{Type: tea.KeyF4})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyF4})
 	if v := awaitView("open Echo view"); v.data.Title != "Echo" || v.data.State != sdk.ViewReady {
 		t.Fatal("Echo view did not open through the shell")
 	}
-	p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("from the app view")})
-	p.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "from the app view"})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if v := awaitView("shell action through app view"); !v.action || v.data.Status != "2 echoes this launch" || v.data.Items[0].Detail != "from the app view" {
 		t.Fatal("shell action did not reach the owning app over IPC")
 	}
-	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if r := submit("ps", "ps"); !strings.Contains(r.text, "com.gostalgia.echo") || !strings.Contains(r.text, "STATE / STATUS") {
 		t.Fatalf("ps output unexpected: %s", r.text)
 	}
@@ -268,16 +268,16 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 		t.Fatal(r.cwd)
 	}
 	submit("dir", "dir")
-	p.Send(tea.KeyMsg{Type: tea.KeyF2})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyF2})
 	// Filter the shelf to Echo: the first app by ID is not necessarily Echo.
-	p.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("echo")})
-	p.Send(tea.KeyMsg{Type: tea.KeyF3})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "echo"})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyF3})
 	await("shelf stop") // stop through the app shelf
-	p.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await("shelf relaunch") // relaunch through the app shelf
 	// The first Esc clears the shelf filter; the second returns to the prompt.
-	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
-	p.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	submit("exit", "exit")
 	// Bubble Tea flushes its renderer on quit; verify the actual rendered UI.
 	exitTimer := time.NewTimer(perStep)
@@ -298,44 +298,44 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 }
 
 func TestCharmBaselineVersions(t *testing.T) {
-	if CharmBubbleTeaVersion != "v1.3.10" {
-		t.Errorf("Bubble Tea version = %s, want v1.3.10", CharmBubbleTeaVersion)
+	if CharmBubbleTeaVersion != "v2.0.10" {
+		t.Errorf("Bubble Tea version = %s, want v2.0.10", CharmBubbleTeaVersion)
 	}
-	if CharmLipGlossVersion != "v1.1.0" {
-		t.Errorf("Lip Gloss version = %s, want v1.1.0", CharmLipGlossVersion)
+	if CharmLipGlossVersion != "v2.0.6" {
+		t.Errorf("Lip Gloss version = %s, want v2.0.6", CharmLipGlossVersion)
 	}
-	if CharmBubblesVersion != "v1.0.0" {
-		t.Errorf("Bubbles version = %s, want v1.0.0", CharmBubblesVersion)
+	if CharmBubblesVersion != "v2.2.1" {
+		t.Errorf("Bubbles version = %s, want v2.2.1", CharmBubblesVersion)
 	}
 }
 
 func TestGraphemeClusterEditing(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
 	// Test combining character cluster e + acute accent (e\u0301)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e\u0301clair")})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "e\u0301clair"})
 	if string(m.input) != "e\u0301clair" {
 		t.Fatalf("input = %s, want e\\u0301clair", string(m.input))
 	}
 	// Move left 5 clusters (past r, i, a, l, c)
 	for i := 0; i < 5; i++ {
-		m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	}
 	// Cursor should now be right after the 2-rune cluster "e\u0301" (index 2)
 	if m.cursor != 2 {
 		t.Fatalf("cursor after 5 left steps = %d, want 2", m.cursor)
 	}
 	// Move left once more; cursor should leap over the whole grapheme cluster to 0
-	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.cursor != 0 {
 		t.Fatalf("cursor at start = %d, want 0", m.cursor)
 	}
 	// Move right once; cursor should land at 2 (not 1 in the middle of combining cluster)
-	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if m.cursor != 2 {
 		t.Fatalf("cursor after right = %d, want 2", m.cursor)
 	}
 	// Backspace deletes the entire "e\u0301" cluster
-	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if string(m.input) != "clair" || m.cursor != 0 {
 		t.Fatalf("after backspace cluster: input=%s, cursor=%d", string(m.input), m.cursor)
 	}
@@ -343,22 +343,22 @@ func TestGraphemeClusterEditing(t *testing.T) {
 	// Test ZWJ sequence (woman technologist: 👩 + ZWJ + 💻 = 3 runes)
 	m.input = nil
 	m.cursor = 0
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("👩\u200d💻!")})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "👩\u200d💻!"})
 	if len(m.input) != 4 { // 3 runes for emoji + 1 rune for '!'
 		t.Fatalf("input runes count = %d, want 4", len(m.input))
 	}
 	// Cursor is at 4. Move left: cursor is at 3 (before '!').
-	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.cursor != 3 {
 		t.Fatalf("cursor before ! = %d, want 3", m.cursor)
 	}
 	// Move left again: leaps over 👩\u200d💻 to index 0.
-	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if m.cursor != 0 {
 		t.Fatalf("cursor before ZWJ = %d, want 0", m.cursor)
 	}
 	// Delete key on cluster at index 0 deletes the entire 3-rune emoji
-	m.Update(tea.KeyMsg{Type: tea.KeyDelete})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
 	if string(m.input) != "!" || m.cursor != 0 {
 		t.Fatalf("after delete on emoji: input=%s, cursor=%d", string(m.input), m.cursor)
 	}
@@ -468,14 +468,14 @@ func TestThemeAndMotionCommands(t *testing.T) {
 	// Test tab completion for theme and motion
 	m.input = []rune("theme mono")
 	m.cursor = len(m.input)
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if string(m.input) != "theme monochrome" {
 		t.Fatalf("completed theme = %s", string(m.input))
 	}
 
 	m.input = []rune("motion of")
 	m.cursor = len(m.input)
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if string(m.input) != "motion off" {
 		t.Fatalf("completed motion = %s", string(m.input))
 	}
@@ -714,7 +714,7 @@ func TestSmallViewportDegradation(t *testing.T) {
 			{Width: 0, Height: 0},
 		} {
 			m.Update(tea.WindowSizeMsg{Width: size.Width, Height: size.Height})
-			view := m.View()
+			view := m.View().Content
 			if size.Width == 0 || size.Height == 0 {
 				if view != "" {
 					t.Fatalf("expected empty for %dx%d", size.Width, size.Height)
@@ -939,7 +939,7 @@ func TestShellProfileCommandsAndSwitching(t *testing.T) {
 	}
 
 	// Verify View reflects active profile in badge
-	view := m.View()
+	view := m.View().Content
 	if !strings.Contains(view, "developer · C: environment drive") {
 		t.Fatalf("expected developer in badge view, got: %s", view)
 	}
