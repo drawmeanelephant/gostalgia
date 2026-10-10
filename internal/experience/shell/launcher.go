@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -87,7 +87,7 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	return lines
 }
 
-func (m *Model) handleLauncherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredApps()
 	switch msg.String() {
 	case "up":
@@ -133,12 +133,8 @@ func (m *Model) handleLauncherKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
-		text := string(msg.Runes)
-		if msg.Type == tea.KeySpace {
-			text = " "
-		}
-		m.launcherQuery += text
+	if msg.Text != "" {
+		m.launcherQuery += msg.Text
 		m.selected = 0
 		return m, nil
 	}

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 	"gostalgia/sdk"
@@ -122,7 +122,7 @@ func TestShellSettingsCommandAndF7Toggle(t *testing.T) {
 	}
 
 	// 3. F7 toggles off active Settings view
-	_, cancelCmd := m.Update(tea.KeyMsg{Type: tea.KeyF7})
+	_, cancelCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF7})
 	if m.presentation != nil {
 		t.Fatal("expected presentation to be dismissed on F7")
 	}

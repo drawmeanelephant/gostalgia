@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -62,7 +62,7 @@ func TestShellVisualSnapshots(t *testing.T) {
 					m.presentation.focus = 1
 				}
 			}
-			rendered := strings.Split(m.View(), "\n")
+			rendered := strings.Split(m.View().Content, "\n")
 			for i := range rendered {
 				rendered[i] = strings.TrimRight(rendered[i], " ")
 			}
@@ -131,7 +131,7 @@ func TestPresentationV2Snapshots(t *testing.T) {
 				tc.setup(v)
 			}
 			m.presentation = v
-			rendered := strings.Split(m.View(), "\n")
+			rendered := strings.Split(m.View().Content, "\n")
 			for i := range rendered {
 				rendered[i] = strings.TrimRight(rendered[i], " ")
 			}
@@ -165,7 +165,7 @@ func TestPresentationV2Snapshots(t *testing.T) {
 		m.presentation = &appView{
 			data: padData(), instance: "launch", version: 2, values: map[string]string{"text": "draft"},
 		}
-		stripped = append(stripped, ansi.Strip(m.View()))
+		stripped = append(stripped, ansi.Strip(m.View().Content))
 	}
 	if stripped[0] != stripped[1] {
 		t.Fatal("theme selection changed version-2 layout")
@@ -176,13 +176,13 @@ func TestShellExplicitThemeAndViewport(t *testing.T) {
 	for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI256, ui.TrueColor} {
 		warm := NewWithTheme(context.Background(), noopCaller{}, nil, theme.Nostalgia(), mode)
 		dark := NewWithTheme(context.Background(), noopCaller{}, nil, theme.Midnight(), mode)
-		if ansi.Strip(warm.View()) != ansi.Strip(dark.View()) {
+		if ansi.Strip(warm.View().Content) != ansi.Strip(dark.View().Content) {
 			t.Fatal("theme selection changed shell layout")
 		}
-		if mode == ui.Plain && strings.Contains(warm.View(), "\x1b") {
+		if mode == ui.Plain && strings.Contains(warm.View().Content, "\x1b") {
 			t.Fatal("plain shell contains ANSI")
 		}
-		if mode != ui.Plain && warm.View() == dark.View() {
+		if mode != ui.Plain && warm.View().Content == dark.View().Content {
 			t.Fatal("shell ignored explicit palette")
 		}
 		warm.cwd = "/users/guest/" + strings.Repeat("界e\u0301👩‍💻/", 50)
@@ -195,7 +195,7 @@ func TestShellExplicitThemeAndViewport(t *testing.T) {
 				{Width: 30, Height: 10}, {Width: 80, Height: 24}, {Width: 120, Height: 40}, {Width: 240, Height: 80},
 			} {
 				warm.Update(tea.WindowSizeMsg{Width: size.Width, Height: size.Height})
-				view := warm.View()
+				view := warm.View().Content
 				if size.Width == 0 || size.Height == 0 {
 					if view != "" {
 						t.Fatal("zero viewport was not empty")
@@ -250,7 +250,7 @@ func TestShellAccessibleSnapshots(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(m)
 			}
-			view := m.View()
+			view := m.View().Content
 			rendered := strings.Split(view, "\n")
 			for i := range rendered {
 				rendered[i] = strings.TrimRight(rendered[i], " ")
@@ -304,7 +304,7 @@ func TestShellAccessibleModesAndViewport(t *testing.T) {
 					case "prompt":
 						m.setMode(modePrompt)
 					}
-					view := m.View()
+					view := m.View().Content
 					if size.Width == 0 || size.Height == 0 {
 						if view != "" {
 							t.Fatalf("expected empty for %dx%d, got %q", size.Width, size.Height, view)
