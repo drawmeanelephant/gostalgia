@@ -1,6 +1,8 @@
 package profile
 
 import (
+	"errors"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"testing"
@@ -126,6 +128,55 @@ func TestProfileManagerLifecycleAndSwitch(t *testing.T) {
 	}
 	if _, ok := mgr.Get("developer"); ok {
 		t.Fatal("expected developer profile to be deleted")
+	}
+}
+
+// #158: deleting a profile must remove its /users/<id>/ data tree —
+// documents, config (including workspace history), downloads, desktop,
+// trash — not just the registry entry.
+func TestProfileDeleteRemovesUserTree(t *testing.T) {
+	memFS := vfs.NewMem()
+	mgr, err := NewManager(memFS, DefaultProfilesPath, events.NewBus(), slog.Default())
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	if _, err := mgr.Create("alice", "Alice"); err != nil {
+		t.Fatalf("Create alice failed: %v", err)
+	}
+	for path, data := range map[string]string{
+		"users/alice/documents/secret.txt":     "TOP SECRET",
+		"users/alice/config/workspace.json":    `{"history":["cmd"]}`,
+		"users/alice/downloads/payload.bin":    "data",
+		"users/alice/.trash/files/x/meta.json": "{}",
+	} {
+		if err := memFS.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	if err := mgr.Delete("alice"); err != nil {
+		t.Fatalf("Delete alice failed: %v", err)
+	}
+	if _, err := memFS.Stat("users/alice"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("users/alice still exists after Delete (stat err %v)", err)
+	}
+	// Other profiles' trees are untouched.
+	if info, err := memFS.Stat("users/guest/documents"); err != nil || !info.IsDir() {
+		t.Fatalf("guest tree damaged by alice's delete: %v", err)
+	}
+
+	// A missing tree is not an error — the registry entry still goes away.
+	if _, err := mgr.Create("bob", "Bob"); err != nil {
+		t.Fatalf("Create bob failed: %v", err)
+	}
+	if err := memFS.RemoveAll("users/bob"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.Delete("bob"); err != nil {
+		t.Fatalf("Delete with missing tree failed: %v", err)
+	}
+	if _, ok := mgr.Get("bob"); ok {
+		t.Fatal("bob still registered after Delete")
 	}
 }
 

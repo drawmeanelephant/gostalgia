@@ -466,7 +466,12 @@ func (m *Manager) Update(id string, name, description, avatar string, preference
 	return p, nil
 }
 
-// Delete removes a profile. The active profile and the last remaining profile cannot be deleted.
+// Delete removes a profile and its data tree. The active profile and the
+// last remaining profile cannot be deleted. Deleting a profile also removes
+// its entire /users/<id>/ tree — documents, config (including workspace
+// history), and trash — so private data does not outlive the profile. A
+// missing tree is not an error; a removal failure is reported after the
+// registry change has already committed.
 func (m *Manager) Delete(id string) error {
 	id = strings.TrimSpace(strings.ToLower(id))
 	m.mu.Lock()
@@ -487,6 +492,12 @@ func (m *Manager) Delete(id string) error {
 	if err := m.saveLocked(); err != nil {
 		m.profiles[id] = p
 		return fmt.Errorf("save after delete: %w", err)
+	}
+
+	if m.fsys != nil {
+		if err := m.fsys.RemoveAll(fsPath(UserDir(id))); err != nil {
+			return fmt.Errorf("profile %q deleted but removing data tree %s failed: %w", id, UserDir(id), err)
+		}
 	}
 
 	if m.bus != nil {

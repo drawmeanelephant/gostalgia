@@ -249,6 +249,10 @@ and personal workspace separation under `/users/<profile_id>/`:
 - **IPC profile service**: Endpoints under `profile/*` (`list`, `get`, `active`, `create`,
   `update`, `switch`, `delete`) enable programmatic profile administration, guarded by
   `profile.read` and `profile.write` capabilities.
+- **Profile deletion**: `Delete` removes the profile from the registry and deletes its
+  entire `/users/<profile_id>/` data tree (documents, config including workspace history,
+  downloads, desktop, trash), so private data does not outlive the profile. The active
+  profile and the last remaining profile cannot be deleted.
 
 ### 3.8b Portable backup and disaster recovery (`internal/recovery`)
 

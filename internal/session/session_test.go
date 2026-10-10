@@ -321,6 +321,105 @@ func TestWorkspaceStatePersistenceAndSanitization(t *testing.T) {
 	}
 }
 
+// #144: sessions of the same user share one workspace store — the store
+// persists per user, so per-session stores would clobber each other's
+// interleaved updates on disk.
+func TestWorkspaceSharedAcrossUserSessions(t *testing.T) {
+	m, _ := newTestManager(t)
+	a, err := m.Create(security.User{ID: "u-guest", Name: "guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.Create(security.User{ID: "u-guest", Name: "guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := m.Create(security.User{ID: "u-other", Name: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wsA := m.Workspace(a.ID)
+	wsB := m.Workspace(b.ID)
+	if wsA == nil || wsB == nil {
+		t.Fatal("no workspace for a live session")
+	}
+	if wsA != wsB {
+		t.Fatal("sessions of one user got independent workspace stores")
+	}
+	if wsOther := m.Workspace(other.ID); wsOther == wsA || wsOther == nil {
+		t.Fatal("distinct users must not share a workspace store")
+	}
+
+	// Interleaved appends through the two sessions all survive.
+	if err := wsA.AppendHistory("from-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wsB.AppendHistory("from-b"); err != nil {
+		t.Fatal(err)
+	}
+	hist := wsA.Get().History
+	for _, want := range []string{"from-a", "from-b"} {
+		found := false
+		for _, h := range hist {
+			if h == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("history missing %q: %v", want, hist)
+		}
+	}
+
+	// Closing one of the user's sessions keeps the shared store alive for
+	// the other; closing the last one reaps it.
+	if err := m.Close(a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if m.Workspace(b.ID) != wsB {
+		t.Fatal("shared workspace reaped while a same-user session is still live")
+	}
+	if err := m.Close(b.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ws := m.Workspace(b.ID); ws != nil {
+		t.Fatal("workspace still resolves after the user's last session closed")
+	}
+}
+
+// SetVFS swaps each store's filesystem under the store lock so it cannot
+// race an in-flight save. Run under -race.
+func TestSetVFSDoesNotRaceWorkspaceWrites(t *testing.T) {
+	m, _ := newTestManager(t)
+	s, err := m.Create(security.User{ID: "u-guest", Name: "guest"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := m.Workspace(s.ID)
+	if ws == nil {
+		t.Fatal("no workspace for a live session")
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = ws.AppendHistory(fmt.Sprintf("cmd-%d-%d", i, j))
+			}
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for j := 0; j < 10; j++ {
+			m.SetVFS(vfs.NewMem())
+		}
+	}()
+	wg.Wait()
+}
+
 func TestWorkspaceCorruptedFileRecovery(t *testing.T) {
 	memFS := vfs.NewMem()
 	_ = memFS.MkdirAll("users/guest/config")
