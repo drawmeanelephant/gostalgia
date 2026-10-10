@@ -10,7 +10,7 @@ import (
 
 func TestShutdownSignals(t *testing.T) {
 	got := ShutdownSignals()
-	want := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	want := []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP}
 	if len(got) != len(want) {
 		t.Fatalf("ShutdownSignals() = %v, want %v", got, want)
 	}

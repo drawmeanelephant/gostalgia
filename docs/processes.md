@@ -62,12 +62,17 @@ and `platform.KillProcessTree`):
   group (`Setpgid: true` on Unix).
 - **Descendant termination:** On `Stop()` or shutdown, `KillProcessTree` sends
   `SIGKILL` to `-pid` (the process group), killing any background workers or
-  grandchildren that remained in the child's process group. A descendant that
-  escaped the group (`setpgid`/`setsid`) is only reachable while still linked
-  by ppid — `KillDescendants` (used for `strict` children with
-  `DenyDescendants`) sweeps both sets on Linux. On macOS, `strict` children
-  cannot create descendants at all (`deny process-fork`), and on Windows
-  sandboxed execution fails closed, so no confined descendant can exist.
+  grandchildren that remained in the child's process group. The group signal
+  is only sent while the group provably still belongs to the child (alive or
+  unreaped zombie, or a group outliving a freed leader pid), so a pgid
+  recycled after `Wait` cannot redirect the kill to an unrelated group.
+  A descendant that escaped the group (`setpgid`/`setsid`) is only reachable
+  while still linked by ppid — `KillDescendants` (used for `strict` children
+  with `DenyDescendants`) sweeps both sets on Linux, re-verifying each
+  candidate's `/proc` start time before signaling so a pid or pgid recycled
+  mid-sweep is never signaled. On macOS, `strict` children cannot create
+  descendants at all (`deny process-fork`), and on Windows sandboxed
+  execution fails closed, so no confined descendant can exist.
 
 ## Bounded exit history and process reaping
 

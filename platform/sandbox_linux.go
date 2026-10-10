@@ -372,14 +372,15 @@ func KillDescendants(pid int) {
 	if err != nil {
 		return
 	}
-	_, pgid, ok := linuxParseProcStat(string(leaderStat))
+	_, pgid, leaderStart, ok := linuxParseProcStat(string(leaderStat))
 	if !ok {
 		return
 	}
 
 	type procEnt struct {
-		ppid int
-		pgid int
+		ppid  int
+		pgid  int
+		start uint64
 	}
 	procs := make(map[int]procEnt)
 	entries, err := os.ReadDir("/proc")
@@ -395,9 +396,9 @@ func KillDescendants(pid int) {
 		if err != nil {
 			continue
 		}
-		ppid, pg, ok := linuxParseProcStat(string(data))
+		ppid, pg, start, ok := linuxParseProcStat(string(data))
 		if ok {
-			procs[p] = procEnt{ppid: ppid, pgid: pg}
+			procs[p] = procEnt{ppid: ppid, pgid: pg, start: start}
 		}
 	}
 
@@ -416,29 +417,37 @@ func KillDescendants(pid int) {
 		}
 	}
 
-	for p, st := range procs {
-		if p != pid && (st.pgid == pgid || inTree[p]) {
-			_ = syscall.Kill(p, syscall.SIGKILL)
+	// The /proc scan above is already stale: the leader can exit and its
+	// pid — hence its pgid — can be recycled into an unrelated process
+	// group before the sweep below runs. The pgid match is trusted only
+	// while the group provably still belongs to this child: the child is
+	// its own group leader (pgid == pid via Setpgid), and either the
+	// process now at that pid is still our leader (same start time, so not
+	// a recycled pid) or the leader slot is empty — a dead leader means the
+	// pgid could not have been reissued while members survive, so remaining
+	// members are stragglers of the group the child created.
+	groupSweep := pgid == pid
+	if groupSweep {
+		if stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid)); err == nil {
+			_, _, start, ok := linuxParseProcStat(string(stat))
+			groupSweep = ok && start == leaderStart
 		}
 	}
-}
 
-// linuxParseProcStat parses /proc/<pid>/stat and returns (ppid, pgid). comm
-// may contain spaces and parens, so parsing starts after the last ')'.
-func linuxParseProcStat(stat string) (ppid, pgid int, ok bool) {
-	i := strings.LastIndexByte(stat, ')')
-	if i < 0 || i+2 >= len(stat) {
-		return 0, 0, false
+	for p, st := range procs {
+		if p == pid || !(inTree[p] || (groupSweep && st.pgid == pgid)) {
+			continue
+		}
+		// The candidate's own pid may also have been recycled since the
+		// scan; require its start time to still match before signaling.
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", p))
+		if err != nil {
+			continue
+		}
+		_, _, start, ok := linuxParseProcStat(string(stat))
+		if !ok || start != st.start {
+			continue
+		}
+		_ = syscall.Kill(p, syscall.SIGKILL)
 	}
-	fields := strings.Fields(stat[i+1:])
-	// fields: state ppid pgrp ...
-	if len(fields) < 3 {
-		return 0, 0, false
-	}
-	ppid, err1 := strconv.Atoi(fields[1])
-	pg, err2 := strconv.Atoi(fields[2])
-	if err1 != nil || err2 != nil {
-		return 0, 0, false
-	}
-	return ppid, pg, true
 }
