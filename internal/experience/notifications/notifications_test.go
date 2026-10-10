@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"

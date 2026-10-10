@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 type mockSessionCaller struct {
@@ -145,13 +145,13 @@ func TestShellAttachedModeAndDetach(t *testing.T) {
 	}
 
 	// Verify ATTACHED badge in View()
-	view := model.View()
+	view := model.View().Content
 	if !strings.Contains(view, "ATTACHED") {
 		t.Fatalf("expected 'ATTACHED' in view, got: %s", view)
 	}
 
 	model.setMode(modePrompt)
-	view = model.View()
+	view = model.View().Content
 	if !strings.Contains(view, "DETACH") {
 		t.Fatalf("expected 'DETACH' in help bindings, got: %s", view)
 	}

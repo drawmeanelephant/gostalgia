@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/events"
 	"gostalgia/internal/experience/theme"
@@ -83,17 +83,17 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 	}), nil)
 	a := screenStatus()
 	m.apps = []appStatus{a}
-	_, open := m.Update(tea.KeyMsg{Type: tea.KeyF4})
-	if m.presentation == nil || !strings.Contains(m.View(), "Loading") {
+	_, open := m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	if m.presentation == nil || !strings.Contains(m.View().Content, "Loading") {
 		t.Fatal("opening has no loading state")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ignored while loading")})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "ignored while loading"})
 	batch := open().(tea.BatchMsg)
 	m.Update(batch[0]())
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("héllo")})
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	_, action := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "héllo"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, action := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action == nil || !m.presentation.busy || len(m.input) != 0 {
 		t.Fatal("app did not own focus while shell retained terminal ownership")
 	}
@@ -102,10 +102,10 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 		received.Instance != "launch" || received.Version != 1 || received.RequestID == "" {
 		t.Fatalf("semantic action routing: %+v", received)
 	}
-	if m.presentation.busy || !strings.Contains(m.View(), "Sent héllo") {
+	if m.presentation.busy || !strings.Contains(m.View().Content, "Sent héllo") {
 		t.Fatal("action snapshot not rendered")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if m.presentation != nil {
 		t.Fatal("Esc did not return focus to the shell")
 	}
@@ -123,13 +123,13 @@ func TestPresentationCancellationAndLateReplies(t *testing.T) {
 	m.openView(screenStatus())
 	epoch := m.presentation.epoch
 	m.Update(viewMsg{epoch: epoch, data: screenData()})
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
-	_, action := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"})
+	_, action := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action == nil {
 		t.Fatal("action not dispatched")
 	}
 	oldSeq, request := m.presentation.seq, m.presentation.request
-	_, cancel := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, cancel := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cancel == nil {
 		t.Fatal("no cancellation route")
 	}
@@ -140,16 +140,16 @@ func TestPresentationCancellationAndLateReplies(t *testing.T) {
 	late := screenData()
 	late.Status = "late reply must not render"
 	m.Update(viewMsg{epoch: epoch, seq: oldSeq, data: late, action: true})
-	if strings.Contains(m.View(), late.Status) {
+	if strings.Contains(m.View().Content, late.Status) {
 		t.Fatal("canceled operation replaced current view")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	m.openView(screenStatus())
 	m.Update(viewMsg{epoch: epoch, data: late})
 	if m.presentation.data.Status == late.Status {
 		t.Fatal("dismissed view's reply reopened it")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyF2})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
 	if m.presentation != nil || !m.shelf {
 		t.Fatal("global shelf hotkey lost ownership")
 	}
@@ -177,14 +177,14 @@ func TestPresentationLifecycleRetraction(t *testing.T) {
 				msg.data = &data
 			}
 			m.Update(msg)
-			if m.presentation != nil || !strings.Contains(m.View(), "view") {
+			if m.presentation != nil || !strings.Contains(m.View().Content, "view") {
 				t.Fatal("lost app still owns focus or view")
 			}
 			m.Update(viewMsg{epoch: epoch, data: screenData()})
 			if m.presentation != nil {
 				t.Fatal("late lifecycle reply restored retracted view")
 			}
-			m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("prompt works")})
+			m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "prompt works"})
 			if string(m.input) != "prompt works" {
 				t.Fatal("shell focus was not restored")
 			}
@@ -197,7 +197,7 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 	m.openView(screenStatus())
 	epoch := m.presentation.epoch
 	m.Update(viewMsg{epoch: epoch, err: errors.New("view unavailable")})
-	if !strings.Contains(m.View(), "view unavailable") {
+	if !strings.Contains(m.View().Content, "view unavailable") {
 		t.Fatal("load error banner missing")
 	}
 	data := screenData()
@@ -208,7 +208,7 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 	m.Update(viewMsg{epoch: epoch, data: data})
 	for _, size := range [][2]int{{80, 24}, {30, 10}, {20, 8}, {120, 40}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		view := m.View()
+		view := m.View().Content
 		if strings.Contains(view, "\a") || strings.Contains(view, "\r") || strings.Contains(view, "clipboard") {
 			t.Fatal("app-controlled terminal sequences were rendered")
 		}
@@ -216,7 +216,7 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 			t.Fatal("app view escaped terminal bounds")
 		}
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if m.presentation.data.Title != data.Title {
 		t.Fatal("global quit was routed to an app")
 	}
@@ -241,15 +241,15 @@ func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing
 	}
 	m.applyView(data)
 	m.height = 16
-	if !strings.Contains(m.View(), "[Send]") {
+	if !strings.Contains(m.View().Content, "[Send]") {
 		t.Fatal("focused action hidden below a long list")
 	}
 	v.item, v.itemFocus = 99, true
-	if !strings.Contains(m.View(), "ROW-099") {
+	if !strings.Contains(m.View().Content, "ROW-099") {
 		t.Fatal("selected item hidden below a long list")
 	}
 	m.Update(viewCheckMsg{epoch: v.epoch, apps: []appStatus{screenStatus()}, viewErr: errors.New("temporary snapshot failure")})
-	if m.presentation == nil || !strings.Contains(m.View(), "temporary snapshot failure") {
+	if m.presentation == nil || !strings.Contains(m.View().Content, "temporary snapshot failure") {
 		t.Fatal("recoverable snapshot failure did not keep an error banner")
 	}
 }
@@ -263,7 +263,7 @@ func TestPresentationItemWithoutDetailRendersNoColon(t *testing.T) {
 		{ID: "two", Label: "Two", Detail: "second"},
 	}
 	m.presentation = &appView{data: data, instance: data.Instance, values: map[string]string{}}
-	view := ansi.Strip(m.View())
+	view := ansi.Strip(m.View().Content)
 	if strings.Contains(view, "THE BRASS ELEPHANT:") {
 		t.Fatalf("item without detail rendered a dangling colon:\n%s", view)
 	}
@@ -282,7 +282,7 @@ func TestPresentationUsesExplicitThemeAndFocusTokens(t *testing.T) {
 		data: data, instance: data.Instance, focus: 1,
 		values: map[string]string{"text": "e\u0301👩‍💻界"},
 	}
-	view := custom.View()
+	view := custom.View().Content
 	if strings.Contains(view, "\x1b") || !strings.Contains(view, "* One") ||
 		!strings.Contains(view, "[Send] (disabled)") || strings.Contains(view, "* [Send]") ||
 		!strings.Contains(view, "(Enter) ACTION") {
@@ -294,12 +294,12 @@ func TestPresentationUsesExplicitThemeAndFocusTokens(t *testing.T) {
 		m.presentation = &appView{
 			data: data, instance: data.Instance, values: map[string]string{"text": "e\u0301👩‍💻界"},
 		}
-		rendered = append(rendered, m.View())
+		rendered = append(rendered, m.View().Content)
 		for _, size := range []tea.WindowSizeMsg{
 			{Width: 30, Height: 10}, {Width: 80, Height: 24}, {Width: 120, Height: 40}, {Width: 240, Height: 80},
 		} {
 			m.Update(size)
-			if view := m.View(); lipgloss.Width(view) != size.Width || lipgloss.Height(view) != size.Height {
+			if view := m.View().Content; lipgloss.Width(view) != size.Width || lipgloss.Height(view) != size.Height {
 				t.Fatalf("app view escaped %dx%d bounds", size.Width, size.Height)
 			}
 		}
@@ -327,16 +327,16 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 		t.Fatalf("negotiated version = %d, want 2", v.version)
 	}
 	// The grid is the last tab stop: field, action, then grid.
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if !v.gridFocused() {
 		t.Fatal("tab ring did not reach the grid stop")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyRight})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyRight})
 	if v.cell != 1 {
 		t.Fatalf("cell = %d, want 1", v.cell)
 	}
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("cell enter did not dispatch its action")
 	}
@@ -346,27 +346,27 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 		t.Fatalf("cell action routing: %+v", received)
 	}
 	// Down lands on the disabled SE cell; activation is a no-op.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatal("disabled cell dispatched an action")
 	}
 	// Left lands on the datum cell (no action); activation is a no-op.
-	m.Update(tea.KeyMsg{Type: tea.KeyLeft})
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatal("datum cell dispatched an action")
 	}
 	// Up clamps back to NW rather than wrapping.
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if v.cell != 0 {
 		t.Fatalf("cell = %d after clamping, want 0", v.cell)
 	}
 	// A list action rides along with the selected cell_id and item_id.
-	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
 	if v.gridFocused() {
 		t.Fatal("shift+tab stayed on the grid")
 	}
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("focused action did not dispatch")
 	}
@@ -386,8 +386,8 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 	// After the swap the disabled se cell sits at index 0; a list action must
 	// not attach its cell_id, which the SDK would reject as meaningless input.
 	v.cell = 0
-	m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	_, cmd = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("list action did not dispatch with a disabled cell selected")
 	}
@@ -532,7 +532,7 @@ func TestPresentationV2ElementsStayInBounds(t *testing.T) {
 	m.Update(viewMsg{epoch: epoch, data: data})
 	for _, size := range [][2]int{{80, 24}, {30, 10}, {120, 40}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		view := m.View()
+		view := m.View().Content
 		if strings.Contains(view, "\a") || strings.Contains(view, "\r") {
 			t.Fatal("version-2 elements leaked terminal controls")
 		}
@@ -576,21 +576,21 @@ func TestPresentationV3MultilineFieldEditing(t *testing.T) {
 	}
 	// Focus lands on the multiline field: runes edit, Enter is a newline,
 	// not the first action. Actions still fire from their own focus stop.
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("first")})
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "first"})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatal("Enter inside a multiline field dispatched an action")
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
-	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "second"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace})
 	if v.values["body"] != "first\nsecon" {
 		t.Fatalf("multiline draft = %q, want %q", v.values["body"], "first\nsecon")
 	}
 	m.height = 24
-	if view := ansi.Strip(m.View()); !strings.Contains(view, "first") || !strings.Contains(view, "secon") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "first") || !strings.Contains(view, "secon") {
 		t.Fatalf("multiline draft not rendered on separate lines:\n%s", view)
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
 		t.Fatal("focused action did not dispatch")
 	}
@@ -609,13 +609,13 @@ func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	v := m.presentation
 	m.height = 16
 	// The region is the last focus stop: field, action, then region.
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
-	m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if !v.regionFocused() {
 		t.Fatal("tab ring did not reach the region stop")
 	}
 	// Pinned shows the tail; the head is scrolled out.
-	view := ansi.Strip(m.View())
+	view := ansi.Strip(m.View().Content)
 	if !strings.Contains(view, "L39") {
 		t.Fatalf("pinned region lost its tail:\n%s", view)
 	}
@@ -627,22 +627,22 @@ func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 		t.Fatal("region did not scroll to its tail")
 	}
 	// Up scrolls inside the region instead of moving item focus.
-	m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if v.regionPinned || v.regionTop != tail-1 || v.itemFocus {
 		t.Fatalf("up did not scroll the region: top=%d pinned=%v itemFocus=%v", v.regionTop, v.regionPinned, v.itemFocus)
 	}
 	// Down back to the tail re-pins.
-	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if !v.regionPinned || v.regionTop != tail {
 		t.Fatalf("down did not re-pin the tail: top=%d pinned=%v", v.regionTop, v.regionPinned)
 	}
 	// Page keys move the whole window.
-	m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	if v.regionTop != tail-v.regionWindow {
 		t.Fatalf("pgup moved %d lines, want %d", tail-v.regionTop, v.regionWindow)
 	}
 	// Enter on a region is a no-op.
-	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatal("region dispatched an action")
 	}
 	// Unpinned: a fresh snapshot keeps the user's offset. Pinned: it follows
@@ -658,7 +658,7 @@ func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	v.regionPinned = true
 	m.applyView(data)
 	m.View()
-	if !v.regionPinned || !strings.Contains(ansi.Strip(m.View()), "L41") {
+	if !v.regionPinned || !strings.Contains(ansi.Strip(m.View().Content), "L41") {
 		t.Fatal("pinned refresh did not follow the appended tail")
 	}
 	data.Region = &sdk.Region{ID: "other", Label: "Transcript", Text: data.Region.Text}
