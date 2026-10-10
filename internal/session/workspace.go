@@ -113,6 +113,14 @@ func NewWorkspaceStore(fsys vfs.FS, storePath string) *WorkspaceStore {
 	}
 }
 
+// setFS swaps the backing filesystem under the store lock so a late
+// Manager.SetVFS cannot race an in-flight Load or Save.
+func (s *WorkspaceStore) setFS(fsys vfs.FS) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fsys = fsys
+}
+
 func fsPath(p string) string {
 	if norm, err := vfs.Normalize(p); err == nil {
 		return norm

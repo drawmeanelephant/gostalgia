@@ -143,11 +143,15 @@ type AttachEvent struct {
 func (AttachEvent) Type() string { return "session.attachment" }
 
 // Manager creates and tracks sessions and their workspace stores.
+// Workspace stores are keyed by user name, not session: workspace state
+// persists per user at /users/<name>/config/workspace.json, so every
+// session of one user must share a single store — independent stores over
+// the same file would silently lose each other's updates.
 type Manager struct {
 	mu         sync.Mutex
 	next       int
 	sessions   map[string]*Session
-	workspaces map[string]*WorkspaceStore
+	workspaces map[string]*WorkspaceStore // keyed by workspaceKey (user name)
 	fsys       vfs.FS
 	bus        *events.Bus
 	log        *slog.Logger
@@ -168,7 +172,7 @@ func (m *Manager) SetVFS(fsys vfs.FS) {
 	defer m.mu.Unlock()
 	m.fsys = fsys
 	for _, ws := range m.workspaces {
-		ws.fsys = fsys
+		ws.setFS(fsys)
 	}
 }
 
@@ -195,14 +199,26 @@ func (m *Manager) Create(user security.User) (*Session, error) {
 	return s, nil
 }
 
-// Close closes a session by ID and reaps it: the session and its workspace
-// are removed so ids cannot resolve or be mutated after close.
+// Close closes a session by ID and reaps it: the session is removed so its
+// id cannot resolve or be mutated after close. The shared per-user
+// workspace store is dropped only when the closing session is the user's
+// last live session.
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
 	if ok {
 		delete(m.sessions, id)
-		delete(m.workspaces, id)
+		key := workspaceKey(s)
+		lastForUser := true
+		for _, other := range m.sessions {
+			if workspaceKey(other) == key {
+				lastForUser = false
+				break
+			}
+		}
+		if lastForUser {
+			delete(m.workspaces, key)
+		}
 	}
 	m.mu.Unlock()
 	if !ok {
@@ -266,30 +282,35 @@ func (m *Manager) Detach(sessionID, attachmentID string) error {
 	return nil
 }
 
-// Workspace returns or lazily initializes the workspace store for a live
-// session. It returns nil for unknown or reaped session ids.
+// workspaceKey identifies the per-user workspace store a session maps to.
+func workspaceKey(s *Session) string {
+	if s.User.Name != "" {
+		return s.User.Name
+	}
+	return "guest"
+}
+
+// Workspace returns the workspace store shared by all live sessions of the
+// session's user, lazily initializing it on first use. It returns nil for
+// unknown or reaped session ids.
 func (m *Manager) Workspace(sessionID string) *WorkspaceStore {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	if ws, ok := m.workspaces[sessionID]; ok {
-		return ws
-	}
 
 	s, ok := m.sessions[sessionID]
 	if !ok {
 		return nil
 	}
-	userName := "guest"
-	if ok && s.User.Name != "" {
-		userName = s.User.Name
+	key := workspaceKey(s)
+	if ws, ok := m.workspaces[key]; ok {
+		return ws
 	}
-	wsPath := fmt.Sprintf("/users/%s/config/workspace.json", userName)
+	wsPath := fmt.Sprintf("/users/%s/config/workspace.json", key)
 	ws := NewWorkspaceStore(m.fsys, wsPath)
 	ws.state.SessionID = sessionID
 	// Attempt initial load from VFS if available
 	_, _ = ws.Load()
-	m.workspaces[sessionID] = ws
+	m.workspaces[key] = ws
 	return ws
 }
 
