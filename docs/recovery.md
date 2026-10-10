@@ -127,6 +127,16 @@ and `backup.write` capabilities:
 | `backup/preview` | `backup.read` | `path` | Reports create, identical, and conflicting files |
 | `backup/restore` | `backup.write` | `path`, `strategy`, `profile_id` | Applies backup transactionally |
 
+The capabilities gate *whether* a caller may use these methods; they do not
+widen filesystem access. Operator and admin callers operate on the full
+environment filesystem. Application principals operate through their
+grant-scoped VFS view — the same authorization `fs/*` applies — so an app can
+only export, inspect, preview, or restore paths covered by its own grants and
+its private storage partition. Paths on shared host mounts additionally
+require the `hostfs.read`/`hostfs.write` capabilities. A restore archive
+naming ungranted paths fails during planning, before any write; an export
+skips unreadable subtrees and records each omission in the result.
+
 ## CLI & Shell Usage
 
 ### Control Tool (`gctl`)

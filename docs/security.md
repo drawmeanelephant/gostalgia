@@ -87,6 +87,10 @@ The runtime distinguishes three classes of actors:
     document handoff (`doc/handoff`). Grants are checked per-operation and
     fail closed on revocation. Handoff grants are session-bound: they are
     revoked automatically when the receiving application's run ends.
+    Grant scoping applies to every service an app can reach, not just `fs/*`:
+    `backup/*` operations run entirely inside the caller's scoped view, and
+    `doc/recents/add`/`doc/favorites/add` ignore paths the caller cannot read
+    so the shared stores and search index never absorb ungranted entries.
 
 ### 3. Local-Attacker Threat Model (Adversarial)
 
