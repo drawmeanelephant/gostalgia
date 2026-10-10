@@ -235,10 +235,136 @@ func TestInstalledTamperingRejected(t *testing.T) {
 		t.Fatal("rollback accepted tampered payload")
 	}
 	_ = m.Close()
+	// The tampered payload is a rollback-only artifact, so boot must still
+	// succeed with the pointer dropped (#159) — but rollback stays refused.
 	rebootApps, _ := bareApps(t)
-	if reopened, err := NewManager(root, rebootApps, nil); err == nil {
-		reopened.Close()
-		t.Fatal("boot accepted tampered previous version")
+	reopened, err := NewManager(root, rebootApps, nil)
+	if err != nil {
+		t.Fatal("tampered previous version blocked boot", err)
+	}
+	defer reopened.Close()
+	if _, err := reopened.Rollback(context.Background(), man.ID, false); err == nil {
+		t.Fatal("rollback accepted tampered payload after reboot")
+	}
+	info, err := reopened.Inspect(man.ID)
+	if err != nil || info.Manifest.Version != "2.0.0" {
+		t.Fatal("reboot lost the intact active version", err)
+	}
+	if info.PreviousVersion != "" {
+		t.Fatal("tampered previous version still offered for rollback")
+	}
+}
+
+// #159a: a corrupt or missing previous-version artifact is rollback-only
+// state, so it must not brick the environment boot while the active version
+// is intact. Load drops the pointer; the package stays usable without a
+// rollback target.
+func TestCorruptPreviousVersionDoesNotBlockBoot(t *testing.T) {
+	damage := map[string]func(t *testing.T, prevDir string){
+		"missing": func(t *testing.T, prevDir string) {
+			t.Helper()
+			if err := os.RemoveAll(prevDir); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"corrupt": func(t *testing.T, prevDir string) {
+			t.Helper()
+			if err := os.WriteFile(filepath.Join(prevDir, "manifest.json"), []byte("{corrupt"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, damageFn := range damage {
+		t.Run(name, func(t *testing.T) {
+			m, _, root := testManager(t)
+			man := testManifest()
+			install(t, m, man, []byte("old executable"), false)
+			man.Version = "2.0.0"
+			install(t, m, man, []byte("new executable"), true)
+			if err := m.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			data, err := os.ReadFile(filepath.Join(root, man.ID, "state.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var state diskState
+			if err := json.Unmarshal(data, &state); err != nil || state.Previous == "" {
+				t.Fatalf("expected a previous pointer, got %s (%v)", data, err)
+			}
+			damageFn(t, filepath.Join(root, man.ID, "versions", state.Previous))
+
+			rebootApps, _ := bareApps(t)
+			reboot, err := NewManager(root, rebootApps, nil)
+			if err != nil {
+				t.Fatal("damaged previous version blocked boot", err)
+			}
+			defer reboot.Close()
+			out, err := reboot.Inspect(man.ID)
+			if err != nil || out.Manifest.Version != "2.0.0" {
+				t.Fatal("boot lost the intact active version", err)
+			}
+			if out.PreviousVersion != "" {
+				t.Fatal("dropped previous version still advertised")
+			}
+			if _, err := reboot.Rollback(context.Background(), man.ID, false); err == nil {
+				t.Fatal("rollback survived a dropped previous version")
+			}
+		})
+	}
+}
+
+// #159b: crash-orphaned install/uninstall staging artifacts (.staging-*,
+// .removed-*, .state-*) accumulated under the apps root forever. Load
+// collects them; lookalike names without a valid generation are left alone.
+func TestStagingArtifactsGarbageCollectedOnLoad(t *testing.T) {
+	m, _, root := testManager(t)
+	man := testManifest()
+	install(t, m, man, []byte("executable"), false)
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := "0123456789abcdef0123456789abcdef"
+	orphans := []string{
+		filepath.Join(root, ".staging-"+gen, "payload"),
+		filepath.Join(root, ".removed-"+gen, "payload"),
+		filepath.Join(root, man.ID, ".state-"+gen),
+	}
+	for _, orphan := range orphans {
+		if err := os.MkdirAll(filepath.Dir(orphan), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(orphan, []byte("orphan"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sentinel := filepath.Join(root, ".staging-notours")
+	if err := os.MkdirAll(sentinel, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	rebootApps, _ := bareApps(t)
+	reboot, err := NewManager(root, rebootApps, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reboot.Close()
+	if _, err := reboot.Inspect(man.ID); err != nil {
+		t.Fatal("installed package lost to staging GC", err)
+	}
+	for _, orphan := range []string{
+		filepath.Join(root, ".staging-"+gen),
+		filepath.Join(root, ".removed-"+gen),
+		filepath.Join(root, man.ID, ".state-"+gen),
+	} {
+		if _, err := os.Lstat(orphan); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("orphaned staging artifact %q survived load", orphan)
+		}
+	}
+	if _, err := os.Lstat(sentinel); err != nil {
+		t.Fatal("GC removed an entry it does not own", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"sync"
 	"time"
 
 	"gostalgia/internal/ipc"
@@ -17,6 +18,11 @@ import (
 // It owns the "backup/*" method namespace.
 type RecoveryService struct {
 	ctx *service.Context
+
+	// exportMu serializes default-path exports so the same-second name
+	// collision check cannot race a concurrent export into overwriting the
+	// same destination.
+	exportMu sync.Mutex
 }
 
 // NewRecovery creates a new RecoveryService.
@@ -106,7 +112,19 @@ func (s *RecoveryService) exportBackup(ctx context.Context, req ipc.Request) (an
 		if targetProfile == "" {
 			targetProfile = "guest"
 		}
-		destPath = fmt.Sprintf("/users/%s/downloads/backup-%d%s", targetProfile, time.Now().Unix(), recovery.FileExtension)
+		// Default names embed the wall-clock second. Claim a free destination
+		// under the lock so a repeated or concurrent same-second export lands
+		// on a -N suffix instead of silently overwriting the earlier backup.
+		s.exportMu.Lock()
+		defer s.exportMu.Unlock()
+		base := fmt.Sprintf("/users/%s/downloads/backup-%d", targetProfile, time.Now().Unix())
+		destPath = base + recovery.FileExtension
+		for n := 2; ; n++ {
+			if _, err := s.ctx.VFS.Stat(destPath); err != nil {
+				break
+			}
+			destPath = fmt.Sprintf("%s-%d%s", base, n, recovery.FileExtension)
+		}
 	}
 
 	includeSystem := true

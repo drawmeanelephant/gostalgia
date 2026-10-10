@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -175,10 +177,30 @@ func (m *Manager) load() error {
 		return err
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !sdk.ValidAppID(entry.Name()) {
+		name := entry.Name()
+		// Garbage-collect install/uninstall staging directories orphaned by a
+		// crash between staging and the atomic rename.
+		if gen, ok := strings.CutPrefix(name, ".staging-"); ok && validGeneration(gen) {
+			_ = m.root.RemoveAll(name)
 			continue
 		}
-		id := entry.Name()
+		if gen, ok := strings.CutPrefix(name, ".removed-"); ok && validGeneration(gen) {
+			_ = m.root.RemoveAll(name)
+			continue
+		}
+		if !entry.IsDir() || !sdk.ValidAppID(name) {
+			continue
+		}
+		id := name
+		// A crash between staging and the rename can orphan the staged
+		// state.json file; it is never a commit point.
+		if appEntries, err := fs.ReadDir(m.root.FS(), id); err == nil {
+			for _, appEntry := range appEntries {
+				if gen, ok := strings.CutPrefix(appEntry.Name(), ".state-"); ok && validGeneration(gen) {
+					_ = m.root.Remove(path.Join(id, appEntry.Name()))
+				}
+			}
+		}
 		stateFile := path.Join(id, "state.json")
 		info, err := m.root.Lstat(stateFile)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -210,11 +232,17 @@ func (m *Manager) load() error {
 		}
 		rec := &installed{state: state, active: active}
 		if state.Previous != "" {
-			rec.previous, err = m.loadVersion(id, state.Previous)
+			previous, err := m.loadVersion(id, state.Previous)
 			if err != nil {
-				return fmt.Errorf("package: load previous %s: %w", id, err)
+				// The previous pointer exists only for rollback; a corrupt or
+				// missing rollback artifact must not brick the environment
+				// boot while the active version is intact.
+				slog.Warn("package: dropping unusable previous version; rollback unavailable",
+					"id", id, "generation", state.Previous, "error", err)
+			} else {
+				previous.files = nil
+				rec.previous = previous
 			}
-			rec.previous.files = nil
 		}
 		active.files = nil
 		if err := m.apps.Registry().RegisterExternal(m.versionManifest(id, state.Active, active)); err != nil {
