@@ -3,8 +3,11 @@
 package platform
 
 import (
+	"crypto/sha1"
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +71,84 @@ func TestListenIPCUnixReplacesStaleSocket(t *testing.T) {
 	defer second.Close()
 	if endpoint2 != endpoint {
 		t.Errorf("endpoint = %q, want the same derived path %q", endpoint2, endpoint)
+	}
+}
+
+// TestListenIPCIgnoresPlantedOccupant: before sockets moved into a private
+// directory, the path was predictable — $TMPDIR/gostalgia-<sha1(root)[:5]>.sock —
+// and a non-empty directory planted there made the pre-bind os.Remove fail,
+// blocking boot. The planted occupant must now be irrelevant.
+func TestListenIPCIgnoresPlantedOccupant(t *testing.T) {
+	root := t.TempDir()
+	sum := sha1.Sum([]byte(root))
+	oldPath := filepath.Join(os.TempDir(), fmt.Sprintf("gostalgia-%x.sock", sum[:5]))
+	if err := os.MkdirAll(oldPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(oldPath, "occupant"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(oldPath)
+
+	ln, endpoint, err := ListenIPC(root)
+	if err != nil {
+		t.Fatalf("ListenIPC blocked by planted directory at %s: %v", oldPath, err)
+	}
+	defer ln.Close()
+	if path := strings.TrimPrefix(endpoint, "unix://"); path == oldPath {
+		t.Fatalf("endpoint still uses the shared predictable path %s", oldPath)
+	}
+}
+
+// TestListenIPCPrivateSocketDir: the socket file must live in a per-boot
+// directory under $TMPDIR that only the runtime can write (0700) — no other
+// principal can plant an occupant or unlink a live socket through it.
+func TestListenIPCPrivateSocketDir(t *testing.T) {
+	ln, endpoint, err := ListenIPC(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	path := strings.TrimPrefix(endpoint, "unix://")
+	dir := filepath.Dir(path)
+	if filepath.Dir(dir) != filepath.Clean(os.TempDir()) {
+		t.Fatalf("socket dir %s is not directly under $TMPDIR %s", dir, os.TempDir())
+	}
+	if !strings.HasPrefix(filepath.Base(dir), "gostalgia-ipc-") {
+		t.Fatalf("socket dir %s does not match the private gostalgia-ipc-* pattern", dir)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("socket dir perms = %o, want 700 (owner-only)", perm)
+	}
+}
+
+// TestListenChildIPCPrivateDirAndCleanup: child sockets share the private
+// directory, get random names that cannot collide with a predictable path,
+// and are still removed by RemoveChildSocket.
+func TestListenChildIPCPrivateDirAndCleanup(t *testing.T) {
+	ln, endpoint, err := ListenChildIPC("com.test.app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	path := strings.TrimPrefix(endpoint, "unix://")
+	dir := filepath.Dir(path)
+	if !strings.HasPrefix(filepath.Base(dir), "gostalgia-ipc-") {
+		t.Fatalf("child socket %s is not inside the private socket dir", path)
+	}
+	if !strings.HasPrefix(filepath.Base(path), "gs-app-") {
+		t.Fatalf("child socket name %s lost the gs-app- prefix", path)
+	}
+
+	RemoveChildSocket(endpoint)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("child socket %s still present after RemoveChildSocket (err=%v)", path, err)
 	}
 }
 
