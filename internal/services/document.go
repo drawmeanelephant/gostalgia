@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"fmt"
+	"path"
 	"strings"
+	"time"
 
 	"gostalgia/internal/document"
 	"gostalgia/internal/ipc"
@@ -196,19 +198,28 @@ func (s *DocumentService) recentsAdd(ctx context.Context, req ipc.Request) (any,
 		appID = principal.AppID
 	}
 
+	norm, err := vfs.Normalize(p.Path)
+	if err != nil {
+		return nil, err
+	}
+	clean := "/" + norm
+
+	if principal.IsApp() && !s.appCanRead(appID, clean) {
+		// Grant check before any stat/persist/index: an app may only record
+		// documents it can read. The add is ignored and answered with the
+		// redacted shape #82 established, indistinguishable from a miss.
+		return &sdk.RecentDocument{
+			Path:       clean,
+			AppID:      appID,
+			AccessedAt: time.Now().UTC(),
+		}, nil
+	}
+
 	entry, err := s.store.Recents().Add(p.Path, appID)
 	if err != nil {
 		return nil, err
 	}
 	_ = s.store.Searcher().IndexDocument(p.Path)
-	if principal.IsApp() && !s.appCanRead(appID, entry.Path) {
-		// Do not leak exists/size/mtime for paths outside the caller's grants.
-		redacted := *entry
-		redacted.Exists = false
-		redacted.Size = 0
-		redacted.ModTime = ""
-		return &redacted, nil
-	}
 	return entry, nil
 }
 
@@ -276,19 +287,31 @@ func (s *DocumentService) favoritesAdd(ctx context.Context, req ipc.Request) (an
 		return nil, fmt.Errorf("doc: path is required")
 	}
 
+	norm, err := vfs.Normalize(p.Path)
+	if err != nil {
+		return nil, err
+	}
+	clean := "/" + norm
+
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() && !s.appCanRead(principal.AppID, clean) {
+		// Same ordering rule as recentsAdd: never stat, persist, or index a
+		// path the calling app cannot read.
+		label := p.Label
+		if label == "" {
+			label = path.Base(clean)
+		}
+		return &sdk.FavoriteDocument{
+			Path:    clean,
+			Label:   label,
+			AddedAt: time.Now().UTC(),
+		}, nil
+	}
+
 	entry, err := s.store.Favorites().Add(p.Path, p.Label)
 	if err != nil {
 		return nil, err
 	}
 	_ = s.store.Searcher().IndexDocument(p.Path)
-	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() && !s.appCanRead(principal.AppID, entry.Path) {
-		// Do not leak exists/size/mtime for paths outside the caller's grants.
-		redacted := *entry
-		redacted.Exists = false
-		redacted.Size = 0
-		redacted.ModTime = ""
-		return &redacted, nil
-	}
 	return entry, nil
 }
 
