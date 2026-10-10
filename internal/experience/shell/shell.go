@@ -1609,7 +1609,7 @@ func (m *Model) View() string {
 	}
 
 	content := strings.Join([]string{tabs, ui.Truncate(badge, w), "", body, "", ui.Truncate(prompt, w)}, "\n")
-	return m.kit.Panel(ui.Panel{Title: "G O S T A L G I A  /  PERSONAL COMPUTING, REIMAGINED", Body: content},
+	return m.kit.Panel(ui.Panel{Title: "G O S T A L G I A  /  PERSONAL COMPUTING", Body: content},
 		panelBounds) + "\n" + m.kit.HelpBar(bindings, m.width)
 }
 
