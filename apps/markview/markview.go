@@ -42,6 +42,9 @@ const (
 	maxRows = 8192
 	// paraWrapRunes is the wrap width for paragraph rows.
 	paraWrapRunes = 110
+	// maxTableColRunes bounds pipe-table column padding so one wide cell
+	// cannot push every row toward the label bound.
+	maxTableColRunes = 64
 	// maxLabelBytes is the contract's label bound.
 	maxLabelBytes = 256
 )
