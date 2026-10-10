@@ -31,6 +31,14 @@ set lives behind build tags here.
 
 `platform.NetworkAdapter` provides outbound network transport (`platform/network.go`). In conjunction with `internal/services.NetService`, it enforces explicit `net.egress` capability checks and operator-configured destination whitelisting, port filtering, and HTTPS transport rules.
 
+### Host sandbox enforcement
+
+`platform.ConfigureSandbox` confines external child processes per `ExecutionPolicy`, and `platform.GetHostSecurityCapabilities` reports what the host can actually enforce:
+
+- **Linux:** unprivileged user/mount/network namespaces plus `prlimit64` resource ceilings applied post-start; a re-exec init hook (`GOSTALGIA_SANDBOX_INIT`) programs the mount namespace.
+- **macOS:** an Apple Seatbelt profile via `/usr/bin/sandbox-exec`. Limits that XNU honors (`MaxOpenFiles`, `MaxCPUSeconds`, `MaxProcesses`) are applied by a self-limiting trampoline — the runtime binary re-executed inside the sandbox via `GOSTALGIA_SANDBOX_INIT` — because macOS offers no `prlimit64`-style API for another process. `MaxMemoryBytes` is not enforceable (`setrlimit` rejects `RLIMIT_AS`/`RLIMIT_DATA`), so `ResourceLimits` reports `false` on darwin.
+- **Windows:** unsupported; sandboxed isolation fails closed with `ErrSandboxUnsupported`.
+
 ## Rules
 
 1. No `GOOS` conditionals outside `platform/` (and, rarely, build-tagged files
