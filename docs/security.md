@@ -323,6 +323,66 @@ detached and reaped under a hard timeout, so playback can never block IPC.
 Hosts without a player get an explicit `ErrAudioUnsupported` denial, not a
 silent drop.
 
+### Inbound Network Surface — SSH Attach (`--ssh`)
+
+`gostalgia boot --ssh ADDR` (implemented in `internal/experience/sshx`) is the
+runtime's **first and only inbound network listener**. It is opt-in only:
+without the flag the runtime opens zero listening TCP sockets and the
+threat model above is unchanged. Operators who enable it accept the
+following posture:
+
+- **Loopback-first binding.** A bare port (`--ssh 2222`, `--ssh :2222`) binds
+  `127.0.0.1`. Any other interface requires an explicit host in ADDR —
+  `--ssh 0.0.0.0:2222` exposes the operator shell to the local network by
+  deliberate operator choice, not by default.
+- **Public-key authentication only.** Password and keyboard-interactive
+  methods are never registered (the server does not offer them), and
+  anonymous login is impossible. The client key set lives at
+  `<root>/ssh/authorized_keys` in OpenSSH format; the listener **refuses to
+  start** if the file is missing, unreadable, or contains no valid keys —
+  there is no default credential path. Malformed lines and leading
+  key-options fields fail the parse rather than being silently skipped.
+- **Host identity.** An ed25519 host key is generated on first use at
+  `<root>/ssh/ssh_host_ed25519_key` (mode `0600`) and its SHA256 fingerprint
+  is printed at boot for trust-on-first-use pinning in `known_hosts`. A
+  corrupt host-key file fails boot rather than silently rotating identity.
+- **Authorized key = operator principal.** Each authenticated SSH session
+  dials the runtime's local IPC endpoint and authenticates with the per-boot
+  operator token, then attaches via the same `session/attach` machinery a
+  local `gostalgia attach` uses (recorded with `client_type: "ssh"`). This
+  means **an entry in `authorized_keys` is an operator credential with full
+  `admin` capability** — it must be protected like the operator token.
+- **Profile scoping.** An authorized key may carry a `gostalgia:user=<profile>`
+  comment tag; such a key can only attach to a live session owned by that
+  profile's user and fails closed otherwise. Unscoped keys may select a
+  session via the SSH login name (`ssh <profile>@host`) or fall back to the
+  runtime's default session resolution. Scoping limits *which* session the
+  key reaches; it does **not** reduce the operator capability of the
+  underlying IPC connection.
+- **Protocol surface minimization.** Only `session` channels are accepted,
+  only `shell` requests on them — `exec`, `subsystem`, `tcpip-forward`,
+  `direct-tcpip`, and agent forwarding are all denied. The session requires
+  a PTY and runs the attached shell over the channel; there is no command
+  execution path.
+- **Bounded resources.** The SSH handshake is budgeted (5 s, matching the
+  IPC handshake convention), concurrent connections are capped (16), and
+  each session consumes one IPC connection subject to the existing IPC
+  budgets (256-conn ceiling, 32 in-flight requests, 4 MiB frames). Shutdown
+  drops the listener and all remote sessions.
+- **New-dependency exception.** The inbound transport (`charm.land/ssh`, the
+  server library Wish v2 is built on, plus `x/crypto/ssh` and
+  `colorprofile`) is the first non-Charm-UI, non-stdlib dependency set the
+  repo admits. It is fenced to `internal/experience/sshx` by
+  `TestCharmRestrictedToExperience`, excluded from the core runtime by
+  `TestCoreDependencyBoundary`, and pinned in `TestApprovedCharmBaseline`.
+
+Residual risks accepted by enabling `--ssh`: a stolen authorized private
+key yields full operator control; an attacker who can reach the listener
+(non-loopback binds) can mount online attacks bounded only by connection
+caps; and the SSH stack itself becomes reachable code from the network —
+the same trade every SSH-served TUI makes, here constrained to opt-in
+loopback use by default.
+
 ---
 
 ## Host Limitations & Unprotected Vectors
