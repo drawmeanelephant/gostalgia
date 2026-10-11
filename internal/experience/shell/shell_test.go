@@ -670,17 +670,151 @@ func TestConfigPollResolvesUserTheme(t *testing.T) {
 	}
 }
 
+func TestBracketedPasteReachesEveryInsertPath(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+
+	// Prompt: multiline paste folds to one line like typed text.
+	m.Update(tea.PasteMsg{Content: "echo first\nsecond"})
+	if string(m.input) != "echo first second" {
+		t.Fatalf("prompt paste = %q", string(m.input))
+	}
+	m.input, m.cursor = nil, 0
+
+	// Home redirects paste into the prompt like it redirects typing.
+	m.setMode(modeHome)
+	m.Update(tea.PasteMsg{Content: "from home"})
+	if m.currentMode() != modePrompt || string(m.input) != "from home" {
+		t.Fatalf("home paste mode=%v input=%q", m.currentMode(), string(m.input))
+	}
+	m.input, m.cursor = nil, 0
+
+	// Launcher query.
+	m.setMode(modeLauncher)
+	m.Update(tea.PasteMsg{Content: "notes\napp"})
+	if m.launcherQuery != "notes app" {
+		t.Fatalf("launcher paste = %q", m.launcherQuery)
+	}
+	m.setMode(modePrompt)
+
+	// Palette query.
+	m.openPalette()
+	m.Update(tea.PasteMsg{Content: "theme"})
+	if m.paletteQuery != "theme" {
+		t.Fatalf("palette paste = %q", m.paletteQuery)
+	}
+	m.closePalette()
+
+	// App-view field: single-line folds newlines, multiline keeps them.
+	m.openView(screenStatus())
+	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
+	m.Update(tea.PasteMsg{Content: "pasted\nvalue"})
+	if got := m.presentation.values["text"]; got != "pasted value" {
+		t.Fatalf("view field paste = %q", got)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+
+	data := screenData()
+	data.Fields = []sdk.Field{{ID: "bio", Label: "Bio", Multiline: true}}
+	m.openView(screenStatus())
+	m.Update(viewMsg{epoch: m.presentation.epoch, data: data})
+	m.Update(tea.PasteMsg{Content: "line one\nline two"})
+	if got := m.presentation.values["bio"]; got != "line one\nline two" {
+		t.Fatalf("multiline paste = %q", got)
+	}
+}
+
+func TestKeypadKeysReachMainKeyboardPaths(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.setMode(modePrompt)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "echo hi"})
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpHome})
+	if m.cursor != 0 {
+		t.Fatalf("kp home cursor = %d", m.cursor)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpEnd})
+	if m.cursor != len(m.input) {
+		t.Fatalf("kp end cursor = %d", m.cursor)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpLeft})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpDelete})
+	if string(m.input) != "echo h" {
+		t.Fatalf("kp delete edited = %q", string(m.input))
+	}
+
+	// Keypad arrows drive history.
+	m.history = []string{"apps"}
+	m.historyPos = 1
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpUp})
+	if string(m.input) != "apps" {
+		t.Fatalf("kp up history = %q", string(m.input))
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpDown})
+	if string(m.input) != "echo h" {
+		t.Fatalf("kp down draft = %q", string(m.input))
+	}
+
+	// Keypad Enter submits.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyKpEnter})
+	if !m.busy || len(m.input) != 0 {
+		t.Fatal("kp enter did not submit")
+	}
+	if m.history[len(m.history)-1] != "echo h" {
+		t.Fatalf("submitted %q", m.history[len(m.history)-1])
+	}
+
+	// The launcher's keystroke paths see the same twins.
+	l := New(context.Background(), noopCaller{}, nil)
+	l.setMode(modeLauncher)
+	l.apps = []appStatus{screenStatus(), screenStatus()}
+	l.Update(tea.KeyPressMsg{Code: tea.KeyKpDown})
+	if l.selected != 1 {
+		t.Fatalf("launcher kp down = %d", l.selected)
+	}
+	l.Update(tea.KeyPressMsg{Code: tea.KeyKpEnter})
+	if got := l.transcript[len(l.transcript)-1].text; !strings.HasSuffix(got, "> launch com.test.screen") {
+		t.Fatalf("launcher kp enter = %q", got)
+	}
+}
+
+func TestAltGrTextBypassesCtrlChords(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.setMode(modePrompt)
+	m.input = []rune("ab")
+	m.cursor = 1
+	// Windows AltGr arrives as Ctrl+Alt with text: it must insert, not chord.
+	m.Update(tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl | tea.ModAlt, Text: "€"})
+	if string(m.input) != "a€b" || m.cursor != 2 {
+		t.Fatalf("altgr insert = %q cursor %d", string(m.input), m.cursor)
+	}
+	// Ordinary control chords still apply.
+	m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if len(m.input) != 0 {
+		t.Fatal("ctrl+u did not clear input")
+	}
+	// Ctrl+Backspace deletes a cluster like app-view fields do.
+	m.input = []rune("abc")
+	m.cursor = 3
+	m.Update(tea.KeyPressMsg{Code: tea.KeyBackspace, Mod: tea.ModCtrl})
+	if string(m.input) != "ab" || m.cursor != 2 {
+		t.Fatalf("ctrl+backspace = %q", string(m.input))
+	}
+}
+
 func TestTerminalRestoration(t *testing.T) {
 	var buf bytes.Buffer
 	Restore(&buf)
 	got := buf.String()
-	// Check for mouse disable, bracketed paste disable, cursor show, SGR reset, alt screen exit
+	// Check for mouse disable, bracketed paste disable, keyboard enhancement
+	// reset, cursor show, SGR reset, alt screen exit
 	for _, expected := range []string{
 		"\x1b[?1000l",
 		"\x1b[?1002l",
 		"\x1b[?1003l",
 		"\x1b[?1006l",
 		"\x1b[?2004l",
+		"\x1b[<1u",
+		"\x1b[>4m",
 		"\x1b[?25h",
 		"\x1b[0m",
 		"\x1b[?1049l",

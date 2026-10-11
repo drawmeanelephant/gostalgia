@@ -698,21 +698,22 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			limit = 32768 // matches the SDK maxAreaValue budget
 		}
 		k := key.Key()
-		switch {
-		case k.Code == tea.KeyBackspace || (k.Mod.Contains(tea.ModCtrl) && k.Code == 'h'):
-			if len(value) > 0 {
-				value = value[:len(value)-1]
-			}
-		case k.Mod.Contains(tea.ModCtrl) && k.Code == 'u':
-			value = nil
-		case k.Text != "":
-			text := safe(k.Text)
+		// Text-bearing keys insert before control-chord handling so Windows
+		// AltGr chords (Ctrl+Alt with text) reach the field.
+		switch text := safe(k.Text); {
+		case text != "":
 			if !f.Multiline {
 				text = strings.ReplaceAll(text, "\n", " ")
 			}
 			if len(string(value))+len(text) <= limit {
 				value = append(value, []rune(text)...)
 			}
+		case k.Code == tea.KeyBackspace || (k.Mod.Contains(tea.ModCtrl) && k.Code == 'h'):
+			if len(value) > 0 {
+				value = value[:len(value)-1]
+			}
+		case k.Mod.Contains(tea.ModCtrl) && k.Code == 'u':
+			value = nil
 		}
 		v.values[id] = string(value)
 	}

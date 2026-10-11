@@ -89,12 +89,13 @@ func TestApprovedCharmBaseline(t *testing.T) {
 	}
 
 	expectedDirect := map[string]string{
-		"gostalgia":                       "",
-		"charm.land/bubbles/v2":           "v2.2.1",
-		"charm.land/bubbletea/v2":         "v2.0.10",
-		"charm.land/lipgloss/v2":          "v2.0.6",
-		"github.com/charmbracelet/x/ansi": "v0.11.8",
-		"github.com/muesli/termenv":       "v0.16.0",
+		"gostalgia":                             "",
+		"charm.land/bubbles/v2":                 "v2.2.1",
+		"charm.land/bubbletea/v2":               "v2.0.10",
+		"charm.land/lipgloss/v2":                "v2.0.6",
+		"github.com/charmbracelet/x/ansi":       "v0.11.8",
+		"github.com/charmbracelet/colorprofile": "v0.4.3",
+		"github.com/muesli/termenv":             "v0.16.0",
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {

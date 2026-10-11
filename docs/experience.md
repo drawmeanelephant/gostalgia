@@ -57,10 +57,10 @@ view := kit.Panel(ui.Panel{
 }, bounds)
 ```
 
-The caller chooses `ui.Plain`, `ui.ANSI16`, `ui.ANSI256`, or `ui.TrueColor`. A kit owns an
-isolated renderer with an explicit profile and background setting, backed by
-`io.Discard`. It does not inspect terminal state, select adaptive colors, consult
-`NO_COLOR`/`COLORFGBG`, or modify Lip Gloss's global renderer. Plain output contains
+The caller chooses `ui.Plain`, `ui.ANSI16`, `ui.ANSI256`, or `ui.TrueColor`. A kit
+resolves every theme color through its own explicit `termenv` profile. It does not
+inspect terminal state, select adaptive colors, consult `NO_COLOR`/`COLORFGBG`, or
+modify Lip Gloss's global renderer. Plain output contains
 no ANSI styling, but retains borders and state/focus symbols.
 
 `shell.New` selects Nostalgia and ANSI256. `shell.NewWithTheme` accepts the theme
@@ -463,6 +463,8 @@ terminals must not be left in alternate screens, mouse tracking modes, or hidden
 `shell.RestoreTerminal()` writes explicit recovery sequences to standard output:
 - `\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l`: disables standard, button, any-event, and SGR mouse tracking.
 - `\x1b[?2004l`: disables bracketed paste mode.
+- `\x1b[<1u`: pops the Kitty keyboard enhancement entry Bubble Tea pushes.
+- `\x1b[>4m`: resets xterm `modifyOtherKeys`, which Bubble Tea sets to mode 2.
 - `\x1b[?25h`: restores cursor visibility.
 - `\x1b[0m`: resets all SGR attributes (colors, bold, underline, reverse).
 - `\x1b[?1049l`: exits the alternate screen buffer and returns to the normal screen.
@@ -471,15 +473,19 @@ terminals must not be left in alternate screens, mouse tracking modes, or hidden
 
 ## Dependencies and boundary
 
-The coordinated Bubble Tea v1.3.10, Lip Gloss v1.1.0, and Bubbles v1.0.0 baseline
-is unchanged. Issue #22 makes two already pinned transitive helpers direct:
+The coordinated Charm v2 baseline (`charm.land/bubbletea/v2`, `charm.land/lipgloss/v2`,
+`charm.land/bubbles/v2`) is pinned in `go.mod`. Three Charm-adjacent helpers are
+also direct experience imports:
 
-- `github.com/charmbracelet/x/ansi v0.11.6`: ANSI-safe grapheme cell layout.
-- `github.com/muesli/termenv v0.16.0`: explicit renderer profile selection, **not**
+- `github.com/charmbracelet/x/ansi`: ANSI-safe grapheme cell layout.
+- `github.com/muesli/termenv`: explicit color profile selection, **not**
   host dark/light probes.
+- `github.com/charmbracelet/colorprofile`: passed to `tea.WithColorProfile` at
+  program creation. The kit is the only downsampler, so Bubble Tea's detected
+  terminal profile (or `NO_COLOR`) never re-downsamples kit output below the
+  configured `accessibility.color_mode`.
 
-This is the dependency decision for those direct imports; it adds no new module
-or version. Both stay inside experience. The dependency tests allow Charm under
+All stay inside experience. The dependency tests allow Charm under
 `internal/experience/` and still verify stdlib-only runtime/SDK/apps/`gctl`
 closures. Rendering needs no cgo, external binary, host shell, or service.
 
