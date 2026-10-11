@@ -289,6 +289,16 @@ func (m *Model) renderPalette(w, bodyHeight int) []string {
 
 func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredPaletteItems()
+	if msg.Code == tea.KeyBackspace {
+		// Backspace deletes regardless of modifiers, matching app-view
+		// fields (Ctrl+Backspace included).
+		r := []rune(m.paletteQuery)
+		if len(r) > 0 {
+			m.paletteQuery = string(r[:len(r)-1])
+			m.paletteSelected = 0
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "up":
 		m.paletteSelected = max(0, m.paletteSelected-1)
@@ -309,7 +319,7 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc", "ctrl+p":
 		m.closePalette()
 		return m, nil
-	case "backspace", "ctrl+h":
+	case "ctrl+h":
 		r := []rune(m.paletteQuery)
 		if len(r) > 0 {
 			m.paletteQuery = string(r[:len(r)-1])
@@ -317,8 +327,8 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if msg.Text != "" {
-		m.paletteQuery += msg.Text
+	if text := safe(msg.Text); text != "" {
+		m.paletteQuery += text
 		m.paletteSelected = 0
 		return m, nil
 	}

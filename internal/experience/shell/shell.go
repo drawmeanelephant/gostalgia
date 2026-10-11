@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"gostalgia/internal/experience/notifications"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/taskmanager"
@@ -489,6 +491,9 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 	}
 }
 
+// isShortcut stays on strings.EqualFold rather than bubbles/key (issue #185):
+// key.Matches compares msg.String() exactly, while user-configured shortcuts
+// in the config layer need case-insensitive matching ("Ctrl-P" == "ctrl+p").
 func (m *Model) isShortcut(action, key string) bool {
 	target, ok := m.shortcuts[action]
 	if !ok || target == "" {
@@ -1042,6 +1047,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
+		// Kitty-protocol disambiguation reports keypad keys with their own
+		// codes; fold them onto the main-keyboard twins so every handler
+		// treats keypad input identically. Any associated text the decoder
+		// attached (e.g. "\r" on keypad Enter) would shadow the keystroke
+		// name, so it is dropped along with the keypad code.
+		if code := canonicalKeyCode(msg.Code); code != msg.Code {
+			msg.Code = code
+			msg.Text = ""
+		}
 		keyStr := msg.String()
 		switch keyStr {
 		case "ctrl+c", "ctrl+d":
@@ -1276,6 +1290,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleHomeKey(msg)
 		}
 		return m.handlePromptKey(msg)
+	case tea.PasteMsg:
+		// Bracketed paste delivers the whole paste as one message instead of
+		// typed keys; route it into the same insert paths as text input.
+		text := safe(msg.Content)
+		if text == "" {
+			return m, nil
+		}
+		if m.paletteOpen {
+			m.paletteQuery += strings.ReplaceAll(text, "\n", " ")
+			m.paletteSelected = 0
+			return m, nil
+		}
+		if m.busy {
+			return m, nil
+		}
+		if m.presentation != nil {
+			return m, m.viewKey(tea.KeyPressMsg{Code: tea.KeyExtended, Text: text})
+		}
+		if m.taskView || m.notifView {
+			return m, nil
+		}
+		if m.currentMode() == modeLauncher {
+			m.launcherQuery += strings.ReplaceAll(text, "\n", " ")
+			m.selected = 0
+			return m, nil
+		}
+		m.setMode(modePrompt)
+		m.insertPromptText(text)
+		return m, nil
 	}
 	return m, nil
 }
@@ -1290,8 +1333,71 @@ func (m *Model) deleteClusterBackward() {
 	}
 }
 
+// canonicalKeyCode maps keypad codes emitted under Kitty-protocol
+// disambiguation onto their main-keyboard twins.
+func canonicalKeyCode(code rune) rune {
+	switch code {
+	case tea.KeyKpEnter:
+		return tea.KeyEnter
+	case tea.KeyKpUp:
+		return tea.KeyUp
+	case tea.KeyKpDown:
+		return tea.KeyDown
+	case tea.KeyKpLeft:
+		return tea.KeyLeft
+	case tea.KeyKpRight:
+		return tea.KeyRight
+	case tea.KeyKpPgUp:
+		return tea.KeyPgUp
+	case tea.KeyKpPgDown:
+		return tea.KeyPgDown
+	case tea.KeyKpHome:
+		return tea.KeyHome
+	case tea.KeyKpEnd:
+		return tea.KeyEnd
+	case tea.KeyKpInsert:
+		return tea.KeyInsert
+	case tea.KeyKpDelete:
+		return tea.KeyDelete
+	case tea.KeyKpBegin:
+		return tea.KeyBegin
+	default:
+		return code
+	}
+}
+
+// insertPromptText splices text into the input at the cursor, folding
+// newlines into spaces and honoring the input budget. Typed keys and
+// bracketed paste share it.
+func (m *Model) insertPromptText(text string) {
+	text = strings.ReplaceAll(text, "\n", " ")
+	runes := []rune(text)
+	if len(m.input)+len(runes) <= 4096 {
+		tail := append([]rune(nil), m.input[m.cursor:]...)
+		m.input = append(append(m.input[:m.cursor], runes...), tail...)
+		m.cursor += len(runes)
+	}
+}
+
+// The prompt editor stays custom rather than adopting bubbles/textinput
+// (issue #185). Upstream edits at rune granularity: Backspace and the arrow
+// keys would split grapheme clusters (combining marks, ZWJ emoji) mid-cluster,
+// which the cluster-navigation tests in this package pin against. It also
+// owns a blinking cursor that needs scheduled ticks — against the
+// ReducedMotion and stateless-render contract — plus a suggestion engine the
+// prompt doesn't use. History and completion stay ours either way.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
+	if text := safe(key.Text); text != "" {
+		// Text-bearing keys insert before control-chord handling so Windows
+		// AltGr chords (Ctrl+Alt with text) reach the input.
+		if len(m.input) == 0 && text == "/" {
+			m.openPalette()
+			return m, nil
+		}
+		m.insertPromptText(text)
+		return m, nil
+	}
 	if key.Mod.Contains(tea.ModCtrl) {
 		switch key.Code {
 		case 'a':
@@ -1301,7 +1407,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case 'u':
 			m.input = nil
 			m.cursor = 0
-		case 'h':
+		case 'h', tea.KeyBackspace:
 			m.deleteClusterBackward()
 		}
 		return m, nil
@@ -1376,18 +1482,6 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cursor = len(m.input)
 	case tea.KeyTab:
 		m.complete()
-	default:
-		text := safe(key.Text)
-		if len(m.input) == 0 && text == "/" {
-			m.openPalette()
-			return m, nil
-		}
-		text = strings.ReplaceAll(text, "\n", " ")
-		if len(m.input)+len([]rune(text)) <= 4096 {
-			tail := append([]rune(nil), m.input[m.cursor:]...)
-			m.input = append(append(m.input[:m.cursor], []rune(text)...), tail...)
-			m.cursor += len([]rune(text))
-		}
 	}
 	return m, nil
 }
@@ -1642,16 +1736,22 @@ func (m *Model) render() string {
 		}
 	}
 
+	var body string
 	if m.paletteOpen || m.currentMode() == modeLauncher || m.currentMode() == modeHome || m.presentation != nil || m.taskView || m.notifView {
 		if len(lines) > bodyHeight {
 			lines = lines[:bodyHeight]
 		}
+		body = ui.Fit(strings.Join(lines, "\n"), ui.Bounds{Width: w, Height: bodyHeight})
 	} else {
-		end := max(0, len(lines)-min(m.scroll, max(0, len(lines)-bodyHeight)))
-		start := max(0, end-bodyHeight)
-		lines = lines[start:end]
+		// Transcript scrollback delegates its window to bubbles/viewport
+		// (issue #185). m.scroll stays the canonical "lines back from the
+		// tail" offset; the viewport offsets from the top, so callers keep
+		// the same scroll contract.
+		vp := viewport.New(viewport.WithWidth(w), viewport.WithHeight(bodyHeight))
+		vp.SetContentLines(lines)
+		vp.SetYOffset(len(lines) - bodyHeight - m.scroll)
+		body = vp.View()
 	}
-	body := ui.Fit(strings.Join(lines, "\n"), ui.Bounds{Width: w, Height: bodyHeight})
 	if toastView != "" {
 		body = body + "\n" + toastView
 	}
@@ -1670,6 +1770,10 @@ func (m *Model) render() string {
 	} else if m.notifView {
 		prompt += m.kit.Muted("Notification Center owns focus. Esc returns to prompt.")
 	} else if m.busy {
+		// A static busy badge, not bubbles/spinner (issue #185): the kit is
+		// deliberately stateless and never schedules a tick, so ReducedMotion
+		// themes lose nothing. Install/update/rollback are one-shot IPC calls
+		// with no progress stream to animate anyway.
 		prompt += m.kit.Badge("", theme.Busy, max(0, w-lipgloss.Width(prompt)))
 	} else if m.currentMode() == modeLauncher {
 		filtered := m.filteredApps()
@@ -1782,7 +1886,8 @@ func (m *Model) render() string {
 
 // RestoreTerminal writes explicit control sequences to stdout to restore standard
 // terminal state (show cursor, exit alternate screen, reset styles, disable mouse
-// tracking, disable bracketed paste) on normal and abnormal exits.
+// tracking, disable bracketed paste, reset keyboard enhancements) on normal and
+// abnormal exits.
 func RestoreTerminal() {
 	Restore(os.Stdout)
 }
@@ -1792,7 +1897,9 @@ func Restore(w io.Writer) {
 	if w == nil {
 		return
 	}
-	_, _ = io.WriteString(w, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?25h\x1b[0m\x1b[?1049l")
+	// \x1b[<1u pops the Kitty keyboard enhancement entry and \x1b[>4m resets
+	// modifyOtherKeys — the keyboard modes v2 enables while running.
+	_, _ = io.WriteString(w, "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[<1u\x1b[>4m\x1b[?25h\x1b[0m\x1b[?1049l")
 }
 
 // Run takes over the terminal, restoring it on every exit. Passing options is
@@ -1800,7 +1907,10 @@ func Restore(w io.Writer) {
 func Run(ctx context.Context, c Caller, closed <-chan struct{}, notifs *notifications.Manager, options ...tea.ProgramOption) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	opts := []tea.ProgramOption{tea.WithContext(ctx)}
+	// The kit owns color downsampling by contract; pin the program's profile
+	// so terminal detection (or NO_COLOR) never re-downsamples kit output
+	// under the user's color_mode.
+	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithColorProfile(colorprofile.TrueColor)}
 	opts = append(opts, options...)
 	model := NewWithNotifs(ctx, c, closed, notifs)
 	defer func() {
@@ -1818,7 +1928,8 @@ func Run(ctx context.Context, c Caller, closed <-chan struct{}, notifs *notifica
 func RunAttached(ctx context.Context, c Caller, closed <-chan struct{}, options ...tea.ProgramOption) (err error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	opts := []tea.ProgramOption{tea.WithContext(ctx)}
+	// Same profile pin as Run: the kit downsamples, the program does not.
+	opts := []tea.ProgramOption{tea.WithContext(ctx), tea.WithColorProfile(colorprofile.TrueColor)}
 	opts = append(opts, options...)
 	model := New(ctx, c, closed)
 	model.SetAttached(true)

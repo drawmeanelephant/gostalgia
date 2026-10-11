@@ -167,7 +167,7 @@ func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setMode(modePrompt)
 		return m, nil
 	}
-	if msg.Text != "" {
+	if safe(msg.Text) != "" {
 		m.setMode(modePrompt)
 		return m.handlePromptKey(msg)
 	}
