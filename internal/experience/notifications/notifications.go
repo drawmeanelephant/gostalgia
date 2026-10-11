@@ -354,7 +354,10 @@ func (m *Manager) RenderToasts(kit ui.Kit, width int) string {
 	return strings.Join(rows, "\n")
 }
 
-// RenderPanel formats the full notification history panel.
+// RenderPanel formats the full notification history panel. The list windows
+// by selection rather than adopting bubbles/paginator (issue #185): the
+// selected entry must stay visible, and a page index can't express
+// "follow the cursor" for receipt, palette, and launcher lists either.
 func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

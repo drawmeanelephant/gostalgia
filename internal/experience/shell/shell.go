@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/notifications"
@@ -466,6 +467,9 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 	}
 }
 
+// isShortcut stays on strings.EqualFold rather than bubbles/key (issue #185):
+// key.Matches compares msg.String() exactly, while user-configured shortcuts
+// in the config layer need case-insensitive matching ("Ctrl-P" == "ctrl+p").
 func (m *Model) isShortcut(action, key string) bool {
 	target, ok := m.shortcuts[action]
 	if !ok || target == "" {
@@ -1257,6 +1261,13 @@ func (m *Model) deleteClusterBackward() {
 	}
 }
 
+// The prompt editor stays custom rather than adopting bubbles/textinput
+// (issue #185). Upstream edits at rune granularity: Backspace and the arrow
+// keys would split grapheme clusters (combining marks, ZWJ emoji) mid-cluster,
+// which the cluster-navigation tests in this package pin against. It also
+// owns a blinking cursor that needs scheduled ticks — against the
+// ReducedMotion and stateless-render contract — plus a suggestion engine the
+// prompt doesn't use. History and completion stay ours either way.
 func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.Key()
 	if key.Mod.Contains(tea.ModCtrl) {
@@ -1609,16 +1620,22 @@ func (m *Model) render() string {
 		}
 	}
 
+	var body string
 	if m.paletteOpen || m.currentMode() == modeLauncher || m.currentMode() == modeHome || m.presentation != nil || m.taskView || m.notifView {
 		if len(lines) > bodyHeight {
 			lines = lines[:bodyHeight]
 		}
+		body = ui.Fit(strings.Join(lines, "\n"), ui.Bounds{Width: w, Height: bodyHeight})
 	} else {
-		end := max(0, len(lines)-min(m.scroll, max(0, len(lines)-bodyHeight)))
-		start := max(0, end-bodyHeight)
-		lines = lines[start:end]
+		// Transcript scrollback delegates its window to bubbles/viewport
+		// (issue #185). m.scroll stays the canonical "lines back from the
+		// tail" offset; the viewport offsets from the top, so callers keep
+		// the same scroll contract.
+		vp := viewport.New(viewport.WithWidth(w), viewport.WithHeight(bodyHeight))
+		vp.SetContentLines(lines)
+		vp.SetYOffset(len(lines) - bodyHeight - m.scroll)
+		body = vp.View()
 	}
-	body := ui.Fit(strings.Join(lines, "\n"), ui.Bounds{Width: w, Height: bodyHeight})
 	if toastView != "" {
 		body = body + "\n" + toastView
 	}
@@ -1637,6 +1654,10 @@ func (m *Model) render() string {
 	} else if m.notifView {
 		prompt += m.kit.Muted("Notification Center owns focus. Esc returns to prompt.")
 	} else if m.busy {
+		// A static busy badge, not bubbles/spinner (issue #185): the kit is
+		// deliberately stateless and never schedules a tick, so ReducedMotion
+		// themes lose nothing. Install/update/rollback are one-shot IPC calls
+		// with no progress stream to animate anyway.
 		prompt += m.kit.Badge("", theme.Busy, max(0, w-lipgloss.Width(prompt)))
 	} else if m.currentMode() == modeLauncher {
 		filtered := m.filteredApps()

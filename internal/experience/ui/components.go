@@ -240,7 +240,10 @@ type Progress struct {
 }
 
 // Progress is a static indicator. Busy/indeterminate rendering never schedules
-// a tick or fabricates a percentage.
+// a tick or fabricates a percentage. bubbles/progress was evaluated and lost
+// (issue #185): its model is a spring-animated color ramp, while the theme
+// contract is two static glyphs (Progress.Filled/Track, ASCII under
+// monochrome) plus an explicitly non-animated indeterminate state.
 func (k Kit) Progress(progress Progress, width int) string {
 	if width <= 0 {
 		return ""
@@ -302,6 +305,9 @@ type Binding struct {
 
 // HelpBar is one row. Put the most important contextual bindings first; those
 // that don't fit are clipped rather than wrapping over a prompt or dialog.
+// bubbles/help was evaluated and lost (issue #185): it drops disabled
+// bindings outright and applies one style set to the whole bar, while the
+// contract renders disabled keys parenthesized in the disabled state.
 func (k Kit) HelpBar(bindings []Binding, width int) string {
 	var parts []string
 	for _, binding := range bindings {
