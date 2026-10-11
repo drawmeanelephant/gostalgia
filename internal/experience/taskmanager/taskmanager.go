@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -349,8 +350,13 @@ func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
 		lines = append(lines, kit.Muted("(no output captured yet)"))
 	} else {
 		availableRows := max(1, h-len(lines))
-		maxScroll := max(0, len(rawLines)-availableRows)
-		scroll := min(m.logsScroll, maxScroll)
+		// The log tail delegates its clamp to bubbles/viewport (issue #185);
+		// logsScroll stays the canonical offset so SelectPrev/SelectNext
+		// and tests keep the same contract.
+		vp := viewport.New(viewport.WithHeight(availableRows))
+		vp.SetContentLines(rawLines)
+		vp.SetYOffset(m.logsScroll)
+		scroll := vp.YOffset()
 		visible := rawLines[scroll:min(len(rawLines), scroll+availableRows)]
 		for _, l := range visible {
 			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
@@ -382,6 +388,11 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 		}, bounds)
 	}
 
+	// bubbles/table was evaluated and lost (issue #185): it marks the
+	// selected row only through style, which renders nothing in plain and
+	// monochrome modes where the contract requires the theme's text focus
+	// marker, and its self-sizing columns fight the fixed DOS column
+	// budget below.
 	// Columns:
 	// PID (5) | NAME (20) | STATE (14) | RESTARTS (8) | CPU (8) | MEMORY (10)
 	headerRow := fmt.Sprintf("%-5s %-20s %-14s %-8s %-8s %-10s",

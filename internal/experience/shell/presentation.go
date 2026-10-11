@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/theme"
@@ -681,6 +682,13 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 		if !fieldFocused {
 			return nil
 		}
+		// Field editing stays custom rather than adopting bubbles/textarea
+		// (issue #185). Upstream owns an ↑↓/Tab/Enter keymap that collides
+		// with the view's focus ring — items keep ↑↓ while a field is
+		// focused, and Enter in a multiline field must stay a newline —
+		// and it edits per rune, not per grapheme cluster. Field values
+		// also stay shell-owned drafts keyed by field ID, surviving view
+		// refreshes, which upstream's internal buffer can't express.
 		f := fields[v.focus]
 		id := f.ID
 		v.itemFocus, m.scroll = false, 0
@@ -846,12 +854,18 @@ func (m *Model) viewLines(height int) []string {
 	if r := v.region(); r != nil {
 		all := textLines(r.Text)
 		v.regionWindow = min(20, max(4, visible/2))
-		maxTop := max(0, len(all)-v.regionWindow)
+		// The region delegates its clamp to bubbles/viewport (issue #185);
+		// regionPinned means "stay at the tail", so GotoBottom is the pin.
+		// The regionTop field stays canonical: scrollRegion moves it between
+		// renders and the tests observe it directly.
+		vp := viewport.New(viewport.WithHeight(v.regionWindow))
+		vp.SetContentLines(all)
 		if v.regionPinned {
-			v.regionTop = maxTop
+			vp.GotoBottom()
 		} else {
-			v.regionTop = min(maxTop, v.regionTop)
+			vp.SetYOffset(v.regionTop)
 		}
+		v.regionTop = vp.YOffset()
 		label := viewText(r.Label)
 		if len(all) > v.regionWindow {
 			label += " " + m.kit.Muted(fmt.Sprintf("– %d/%d", v.regionTop+1, len(all)))
