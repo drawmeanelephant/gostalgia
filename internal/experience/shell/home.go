@@ -144,6 +144,10 @@ func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "enter":
+		if msg.IsRepeat {
+			// A held key opens once, not per auto-repeat.
+			return m, nil
+		}
 		if len(items) > 0 && m.homeSelected < len(items) {
 			it := items[m.homeSelected]
 			if it.kind == homeItemApp {

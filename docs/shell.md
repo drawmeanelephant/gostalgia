@@ -51,6 +51,23 @@ JSON is preserved, not passed through path/quote parsing.
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
   busy work or returns to the prompt. F2 returns to the shelf. See
   [the presentation contract](applications.md#7-dataaction-presentation-contract-version-1).
+- **Keyboard enhancements**: the shell asks the terminal for Kitty-protocol
+  event types on top of the disambiguation Bubble Tea v2 requests by default.
+  Terminals negotiate support per session; a terminal that doesn't answer keeps
+  exactly this keyset.
+  - **Shift-Enter**: in a version-3 multiline field (e.g. Notes' editor),
+    newline — the same as plain Enter, since legacy terminals report both as
+    Enter.
+  - **Ctrl-Enter**: submits — a multiline form's action without leaving the
+    field, or the command line at the prompt. Only disambiguating terminals
+    can name it.
+  - **Super-Space**: toggles the command palette, a chord that cannot collide
+    with typing because it carries no text.
+  - **Held keys**: where event types negotiated, a held activation key
+    (Enter on an app action, palette item, launcher card, home entry, task
+    row) commits once instead of repeating work per auto-repeat; key releases
+    are consumed and never type, submit, or activate. Where they didn't
+    negotiate, repeats behave as they always have.
 - **↑/↓** at prompt: history (100 commands, current draft restored).
 - **Tab**: complete an unambiguous command or ID after launch/run/stop.
 - **Left/Right, Home/End, Ctrl-A/E**: move cursor. Backspace/Delete edits;

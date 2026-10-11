@@ -600,6 +600,119 @@ func TestPresentationV3MultilineFieldEditing(t *testing.T) {
 	}
 }
 
+// TestPresentationV3MultilineEnhancedChords covers the kitty-capable
+// chords: Shift-Enter inserts a newline like plain Enter, Ctrl-Enter
+// submits the form's action without leaving the field, and the hint bar
+// advertises both. Terminals without disambiguation deliver Shift-Enter
+// as plain Enter, which the existing editing test already pins.
+func TestPresentationV3MultilineEnhancedChords(t *testing.T) {
+	var received sdk.ActionRequest
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		v := areaData()
+		if strings.HasSuffix(method, "/action") {
+			received = params.(sdk.ActionRequest)
+		}
+		return writeJSON(out, v)
+	}), nil)
+	m.openView(screenStatus())
+	epoch := m.presentation.epoch
+	m.Update(viewMsg{epoch: epoch, data: areaData()})
+	v := m.presentation
+
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "first"})
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}); cmd != nil {
+		t.Fatal("Shift-Enter inside a multiline field dispatched an action")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "second"})
+	if v.values["body"] != "first\nsecond" {
+		t.Fatalf("shift+enter draft = %q, want %q", v.values["body"], "first\nsecond")
+	}
+	m.height = 24
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Ctrl-Enter action") {
+		t.Fatalf("multiline hints did not advertise the submit chord:\n%s", view)
+	}
+	// Ctrl-Enter skips newline insertion and fires the form action.
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl-Enter in a multiline field did not dispatch")
+	}
+	m.Update(cmd())
+	if received.Action != "save" || received.Values["body"] != "first\nsecond" {
+		t.Fatalf("ctrl+enter submit lost the draft: %+v", received)
+	}
+}
+
+// TestPresentationHeldActivationCommitsOnce covers kitty event types:
+// the terminal reports held-key auto-repeat via Key.IsRepeat and ends it
+// with KeyReleaseMsg. A held activation key commits one action; repeats
+// and the release dispatch nothing. On terminals without event types no
+// press is flagged, so repeated presses keep today's dispatch behavior —
+// the fallback the issue requires.
+func TestPresentationHeldActivationCommitsOnce(t *testing.T) {
+	actions := 0
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if strings.HasSuffix(method, "/action") {
+			actions++
+		}
+		return writeJSON(out, screenData())
+	}), nil)
+	m.Update(tea.KeyboardEnhancementsMsg{Flags: ansi.KittyDisambiguateEscapeCodes | ansi.KittyReportEventTypes})
+	if !m.keyEnh.SupportsEventTypes() {
+		t.Fatal("negotiated event types not recorded")
+	}
+	m.openView(screenStatus())
+	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
+	v := m.presentation
+	// Focus starts on the single-line field; Enter submits it.
+	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("activation press did not dispatch")
+	}
+	m.Update(cmd())
+	if actions != 1 {
+		t.Fatalf("first press dispatched %d actions", actions)
+	}
+	for range 3 {
+		if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, IsRepeat: true}); cmd != nil {
+			t.Fatal("auto-repeat dispatched an action")
+		}
+	}
+	if _, cmd := m.Update(tea.KeyReleaseMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("key release dispatched an action")
+	}
+	if actions != 1 || v.busy {
+		t.Fatalf("held key dispatched %d actions, want 1", actions)
+	}
+}
+
+// TestPresentationLegacyHeldKeyRepeatsAsBefore is the graceful-fallback
+// half: without negotiated event types nothing flags a press, so a held
+// key's repeated presses dispatch each time — exactly today's behavior.
+func TestPresentationLegacyHeldKeyRepeatsAsBefore(t *testing.T) {
+	actions := 0
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if strings.HasSuffix(method, "/action") {
+			actions++
+		}
+		return writeJSON(out, screenData())
+	}), nil)
+	if m.keyEnh.SupportsEventTypes() {
+		t.Fatal("unnegotiated model claimed event types")
+	}
+	m.openView(screenStatus())
+	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
+	for i := range 2 {
+		_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+		if cmd == nil {
+			t.Fatalf("press %d did not dispatch", i)
+		}
+		m.Update(cmd())
+	}
+	if actions != 2 {
+		t.Fatalf("legacy repeats dispatched %d actions, want 2", actions)
+	}
+}
+
 func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
 	m.presentation = &appView{

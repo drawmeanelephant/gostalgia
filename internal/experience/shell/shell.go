@@ -161,6 +161,13 @@ type Model struct {
 	sessionID    string
 	attachmentID string
 	user         string
+
+	// keyEnh records the keyboard enhancement flags the terminal actually
+	// negotiated (KeyboardEnhancementsMsg). It is observational: every
+	// enhanced chord arrives as a distinct keystroke or message type that
+	// only a negotiating terminal can produce, so no handler needs to
+	// gate on it — a terminal that never answers keeps today's keyset.
+	keyEnh tea.KeyboardEnhancementsMsg
 }
 
 func (m *Model) SetUser(user string) {
@@ -1013,6 +1020,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(entry{"Theme saved to your settings.", "muted"})
 		}
 		return m, nil
+	case tea.KeyboardEnhancementsMsg:
+		// The terminal's answer to the enhancement flags View requests.
+		m.keyEnh = msg
+		return m, nil
+	case tea.KeyReleaseMsg:
+		// Releases exist only under negotiated event types; they end a
+		// held key. Held-key semantics live on the press side (IsRepeat)
+		// and the presentation contract stays semantic actions — apps
+		// never see keystrokes — so a release is consumed here: key-up
+		// never types, submits, or activates.
+		return m, nil
 	case tea.KeyPressMsg:
 		// Kitty-protocol disambiguation reports keypad keys with their own
 		// codes; fold them onto the main-keyboard twins so every handler
@@ -1035,7 +1053,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
-		if m.isShortcut("palette", keyStr) {
+		// super+space is a second palette chord that only key
+		// disambiguation can name; it never collides with typing because
+		// a super chord carries no text, and terminals without
+		// enhancements simply never deliver it.
+		if m.isShortcut("palette", keyStr) || keyStr == "super+space" {
 			if m.paletteOpen {
 				m.closePalette()
 			} else {
@@ -1181,6 +1203,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j":
 				m.tasks.SelectNext()
 			case "enter":
+				if msg.IsRepeat {
+					break // a held key drills in once, not per auto-repeat
+				}
 				if m.tasks.Mode() != taskmanager.ModeTable {
 					m.tasks.CloseModal()
 				} else if sel := m.tasks.SelectedProcess(); sel != nil {
@@ -1365,7 +1390,9 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.insertPromptText(text)
 		return m, nil
 	}
-	if key.Mod.Contains(tea.ModCtrl) {
+	// Ctrl-Enter (kitty-distinguishable) is exempt from the chord table so
+	// it reaches the Enter case and submits, matching its app-view meaning.
+	if key.Mod.Contains(tea.ModCtrl) && key.Code != tea.KeyEnter {
 		switch key.Code {
 		case 'a':
 			m.cursor = 0
@@ -1596,6 +1623,11 @@ func dosPath(p string) string { return "C:" + strings.ReplaceAll(p, "/", `\`) }
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Ask for kitty event types (key releases and repeat flags) on top of
+	// the disambiguation v2 already requests. The request is progressive:
+	// a terminal that doesn't speak the protocol ignores it, and the
+	// negotiated answer arrives as KeyboardEnhancementsMsg.
+	v.KeyboardEnhancements.ReportEventTypes = true
 	return v
 }
 

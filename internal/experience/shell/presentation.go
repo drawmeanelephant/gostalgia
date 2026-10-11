@@ -640,15 +640,31 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			v.moveCell(1, 0)
 			m.scroll = 0
 		}
-	case "enter":
+	case "enter", "shift+enter", "ctrl+enter":
 		if v.data.State == sdk.ViewLoading {
 			return nil
 		}
-		if fieldFocused && fields[v.focus].Multiline {
-			// In a version-3 multiline field Enter edits like a newline;
-			// actions still fire from their own focus stop.
+		if fieldFocused && fields[v.focus].Multiline && !key.Mod.Contains(tea.ModCtrl) {
+			// In a version-3 multiline field Enter edits like a newline —
+			// and Shift-Enter with it, matching the Notes-style chord;
+			// terminals without key disambiguation report both as plain
+			// Enter, so the chord is identical everywhere. Ctrl-Enter
+			// skips newline insertion and dispatches below, giving
+			// multiline forms a submit chord that only a disambiguating
+			// terminal can name.
 			v.itemFocus, m.scroll = false, 0
 			v.values[fields[v.focus].ID] += "\n"
+			return nil
+		}
+		if key.IsRepeat {
+			// A held activation key commits once, not once per
+			// auto-repeat: kitty event types flag the repeats and the
+			// closing KeyReleaseMsg is swallowed in Update. Held-key
+			// interactions in the bundled apps — Adventure's command
+			// field, Musictoy's step grid, Petwatch's task entry — can no
+			// longer storm the action route. Terminals without event
+			// types never flag repeats, so a held Enter there repeats
+			// exactly as before.
 			return nil
 		}
 		if v.regionFocused() {
@@ -732,6 +748,14 @@ func (m *Model) viewLines(height int) []string {
 		hints = "Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back"
 	case v.region() != nil:
 		hints = "Tab focus · Enter action · ↑↓ item/region · Esc cancel/back"
+	}
+	for _, f := range v.data.Fields {
+		if f.Multiline {
+			// A multiline field turns Enter into a newline, so the action
+			// hint names the Ctrl-Enter submit chord instead.
+			hints = strings.Replace(hints, "Enter action", "Enter/Shift-Enter newline · Ctrl-Enter action", 1)
+			break
+		}
 	}
 	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(hints)}
 	if v.busy || v.data.State == sdk.ViewLoading {
