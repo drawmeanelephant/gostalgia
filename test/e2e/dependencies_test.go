@@ -95,6 +95,16 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		"charm.land/lipgloss/v2":          "v2.0.6",
 		"github.com/charmbracelet/x/ansi": "v0.11.8",
 		"github.com/muesli/termenv":       "v0.16.0",
+		// SSH attach (internal/experience/sshx only): the inbound transport is
+		// charm.land/ssh — the server library wish v2 is built on — plus
+		// x/crypto for host-key marshaling and colorprofile for the emulated-
+		// PTY color profile. These are the deliberate first exception to the
+		// "no inbound network" baseline; they are fenced to the experience
+		// tree by TestCharmRestrictedToExperience and out of the core runtime
+		// by TestCoreDependencyBoundary.
+		"charm.land/ssh":                        "v0.4.3",
+		"github.com/charmbracelet/colorprofile": "v0.4.3",
+		"golang.org/x/crypto":                   "v0.54.0",
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {

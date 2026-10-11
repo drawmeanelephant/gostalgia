@@ -59,6 +59,19 @@ Everything an environment owns lives under one root directory:
 Shutdown is triggered by SIGINT/SIGTERM (handled by `cmd/gostalgia`) or by the
 `sys/shutdown` IPC method.
 
+## SSH attach (`--ssh`)
+
+`gostalgia boot --ssh ADDR` additionally serves the shell over SSH
+(`internal/experience/sshx`). A bare port or empty host binds loopback; an
+explicit host may bind other interfaces. Authentication is public-key only
+against `<root>/ssh/authorized_keys` (required — the listener refuses to
+start without it); a key's `gostalgia:user=<profile>` comment tag scopes it
+to that profile's session. The host key is generated once at
+`<root>/ssh/ssh_host_ed25519_key`. Each accepted session is a normal
+`session/attach` client with `client_type: "ssh"` — equivalent to running
+`gostalgia attach` remotely. See the SSH section of
+[docs/security.md](security.md) for the threat model.
+
 ## runtime.json
 
 Written when the IPC service starts, removed at shutdown:

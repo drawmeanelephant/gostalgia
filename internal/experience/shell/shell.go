@@ -159,6 +159,10 @@ type Model struct {
 	sessionID    string
 	attachmentID string
 	user         string
+
+	attachClientType string
+	attachClientID   string
+	attachSessionID  string
 }
 
 func (m *Model) SetUser(user string) {
@@ -176,8 +180,27 @@ func (m *Model) SetAttached(attached bool) {
 	m.attached = attached
 }
 
+// SetAttachIdentity overrides the parameters sent with session/attach when the
+// shell runs attached. Transports other than a local terminal (e.g. the SSH
+// attach listener) use it to name their client type and to pin the session the
+// connection was authorized for. Empty sessionID keeps the runtime's default
+// session resolution.
+func (m *Model) SetAttachIdentity(clientType, clientID, sessionID string) {
+	m.attachClientType = clientType
+	m.attachClientID = clientID
+	m.attachSessionID = sessionID
+}
+
 func (m *Model) Attached() bool {
 	return m.attached
+}
+
+// SessionIdentity reports the session attachment the shell registered through
+// session/attach, so a transport can release it explicitly when the connection
+// ends without a clean quit — an SSH disconnect must not leave a stale
+// attachment on the session. Empty strings when no attach completed.
+func (m *Model) SessionIdentity() (sessionID, attachmentID string) {
+	return m.sessionID, m.attachmentID
 }
 
 func (m *Model) currentMode() viewMode {
@@ -640,7 +663,17 @@ func (m *Model) Init() tea.Cmd {
 					History    []string `json:"history"`
 				} `json:"workspace"`
 			}
-			if aErr := m.client.Call(ctx, "session/attach", map[string]any{"client_type": "shell"}, &attResp); aErr == nil {
+			attachParams := map[string]any{"client_type": "shell"}
+			if m.attachClientType != "" {
+				attachParams["client_type"] = m.attachClientType
+			}
+			if m.attachClientID != "" {
+				attachParams["client_id"] = m.attachClientID
+			}
+			if m.attachSessionID != "" {
+				attachParams["session_id"] = m.attachSessionID
+			}
+			if aErr := m.client.Call(ctx, "session/attach", attachParams, &attResp); aErr == nil {
 				msg.sessionID = attResp.SessionID
 				msg.attachmentID = attResp.AttachmentID
 				msg.activeCount = attResp.ActiveCount
@@ -1797,6 +1830,28 @@ func RunAttached(ctx context.Context, c Caller, closed <-chan struct{}, options 
 	}()
 	_, err = tea.NewProgram(model, opts...).Run()
 	return err
+}
+
+// AttachedProgram is the program-construction half of RunAttached for
+// transports that must drive the program loop and the terminal themselves —
+// the SSH attach listener wires input, output, environment and window size
+// from the SSH session. It returns the program, the model (for
+// SetAttachIdentity and SessionIdentity), and the teardown the caller must
+// run after Program.Run exits: presentation-view dismissal plus context
+// release. Restoring the caller's terminal is the transport's job (Restore).
+func AttachedProgram(ctx context.Context, c Caller, closed <-chan struct{}, options ...tea.ProgramOption) (*tea.Program, *Model, func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	opts := []tea.ProgramOption{tea.WithContext(ctx)}
+	opts = append(opts, options...)
+	model := New(ctx, c, closed)
+	model.SetAttached(true)
+	teardown := func() {
+		defer cancel()
+		if cleanup := model.dismissView(); cleanup != nil {
+			cleanup()
+		}
+	}
+	return tea.NewProgram(model, opts...), model, teardown
 }
 
 // Keep the public boundary small: no runtime imports and no terminal IO in apps.
