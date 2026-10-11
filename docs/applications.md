@@ -496,8 +496,9 @@ concrete vocabulary is:
 - `sdk.Item`: stable local `id`, `label`, and textual `detail`.
 - `sdk.Field`: local `id`, `label`, initial text `value`, `required`, and
   `multiline` (version 3). Ordinary fields are single-line text with a
-  4096-byte value budget; `multiline` fields accept newlines — Enter inserts
-  a line break instead of invoking an action — and carry a 32768-byte value
+  4096-byte value budget; `multiline` fields accept newlines — Enter and
+  Shift-Enter insert a line break instead of invoking an action, Ctrl-Enter
+  fires the form action — and carry a 32768-byte value
   budget so Notes/Compendium can edit whole documents in place. The shell
   owns editing and focus either way; periodic snapshots preserve drafts for
   surviving field IDs. To reset an input, change its ID or reopen the view.
@@ -604,7 +605,11 @@ invokes the focused action (the first action when a single-line field is
 focused), inserts a newline inside a focused multiline field, or fires the
 focused cell's declared action; Up/Down select an item, scroll a focused
 region, and all four arrows move the cell selection while the grid is
-focused. A list action's request carries the current `item_id` and `cell_id`
+focused. On terminals that negotiate keyboard enhancements, Shift-Enter is a
+second newline chord inside a multiline field and Ctrl-Enter fires the form
+action from inside one; elsewhere both behave like Enter. A held activation
+key commits once per hold where event types negotiated. A list action's
+request carries the current `item_id` and `cell_id`
 selections (`cell_id` is omitted while a disabled cell is selected). F2
 always returns to the shelf,
 Ctrl-C/Ctrl-D always exit, and apps cannot intercept these global hotkeys.

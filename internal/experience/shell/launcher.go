@@ -107,6 +107,10 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.selected = min(max(0, len(filtered)-1), m.selected+1)
 		return m, nil
 	case "enter":
+		if msg.IsRepeat {
+			// A held key launches once, not per auto-repeat.
+			return m, nil
+		}
 		if len(filtered) > 0 && m.selected < len(filtered) {
 			a := filtered[m.selected]
 			return m, m.submit("launch " + a.Manifest.ID)

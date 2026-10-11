@@ -307,6 +307,11 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.paletteSelected = min(max(0, len(filtered)-1), m.paletteSelected+1)
 		return m, nil
 	case "enter":
+		if msg.IsRepeat {
+			// A held key executes once, not per auto-repeat (kitty event
+			// types flag the repeats; see viewKey for the full rule).
+			return m, nil
+		}
 		if len(filtered) > 0 && m.paletteSelected < len(filtered) {
 			item := filtered[m.paletteSelected]
 			m.closePalette()

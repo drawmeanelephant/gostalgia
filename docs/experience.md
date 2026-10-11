@@ -370,6 +370,12 @@ and Settings application (`com.gostalgia.settings`):
   from the Command Palette (`Ctrl-P`).
 - **Dynamic Keybinding Dispatch**: Shell key shortcuts (F1-F7, palette) are evaluated
   dynamically against the effective `shortcuts.*` configuration.
+- **Progressive keyboard enhancements**: The shell requests Kitty-protocol event
+  types per session (Bubble Tea already negotiates key disambiguation). Capable
+  terminals gain `Shift-Enter`/`Ctrl-Enter` inside multiline app fields, a
+  `Super-Space` palette chord, repeat-flagged held keys that commit an action
+  once, and swallowed `KeyReleaseMsg`s. Unsupported terminals keep the same
+  keyset — nothing degrades.
 - **Live Theme & Motion Switching**: Changes to `theme`, `accessibility.color_mode`,
   and `accessibility.reduced_motion` apply immediately across the running shell without
   rebooting.

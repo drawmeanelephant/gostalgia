@@ -801,6 +801,79 @@ func TestAltGrTextBypassesCtrlChords(t *testing.T) {
 	}
 }
 
+// TestSuperSpacePaletteChord covers the enhancement-only palette chord:
+// only a terminal with key disambiguation can name super+space, and the
+// chord carries no text so it can never collide with typing.
+func TestSuperSpacePaletteChord(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.setMode(modePrompt)
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Mod: tea.ModSuper})
+	if !m.paletteOpen {
+		t.Fatal("super+space did not open the palette")
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeySpace, Mod: tea.ModSuper})
+	if m.paletteOpen {
+		t.Fatal("super+space did not toggle the palette closed")
+	}
+}
+
+// TestCtrlEnterSubmitsAtPrompt pins the disambiguation-only chord: ctrl
+// chords at the prompt are editing commands, but Ctrl-Enter is exempt and
+// submits like Enter — the same submit semantics it carries in app views.
+func TestCtrlEnterSubmitsAtPrompt(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.setMode(modePrompt)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "echo hi"})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	if !m.busy || len(m.input) != 0 {
+		t.Fatal("ctrl+enter did not submit the prompt line")
+	}
+	if m.history[len(m.history)-1] != "echo hi" {
+		t.Fatalf("ctrl+enter submitted %q", m.history[len(m.history)-1])
+	}
+	// Other ctrl chords still edit instead of submitting.
+	m.busy = false
+	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "draft"})
+	m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if len(m.input) != 0 {
+		t.Fatal("ctrl+u no longer clears input")
+	}
+}
+
+// TestKeyReleaseIsInert pins the release contract: key-up events from a
+// terminal that negotiated event types never type, submit, or activate —
+// in every focus state.
+func TestKeyReleaseIsInert(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	m.setMode(modePrompt)
+	m.input = []rune("echo hi")
+	m.cursor = len(m.input)
+	transcript := len(m.transcript)
+
+	if _, cmd := m.Update(tea.KeyReleaseMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("enter release produced a command")
+	}
+	if _, cmd := m.Update(tea.KeyReleaseMsg{Code: tea.KeyExtended, Text: "x"}); cmd != nil {
+		t.Fatal("text release produced a command")
+	}
+	if m.busy || string(m.input) != "echo hi" || len(m.transcript) != transcript {
+		t.Fatal("releases mutated prompt state")
+	}
+
+	// The same holds inside an app view.
+	m.input, m.cursor = nil, 0
+	m.presentation = &appView{
+		data: screenData(), instance: "launch", version: 1,
+		values: map[string]string{},
+	}
+	if _, cmd := m.Update(tea.KeyReleaseMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("view release produced a command")
+	}
+	if m.presentation.busy || len(m.presentation.values) != 0 {
+		t.Fatal("release mutated view state")
+	}
+}
+
 func TestTerminalRestoration(t *testing.T) {
 	var buf bytes.Buffer
 	Restore(&buf)
