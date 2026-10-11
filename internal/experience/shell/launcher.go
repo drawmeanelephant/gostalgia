@@ -89,6 +89,16 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 
 func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredApps()
+	if msg.Code == tea.KeyBackspace {
+		// Backspace deletes regardless of modifiers, matching app-view
+		// fields (Ctrl+Backspace included).
+		r := []rune(m.launcherQuery)
+		if len(r) > 0 {
+			m.launcherQuery = string(r[:len(r)-1])
+			m.selected = 0
+		}
+		return m, nil
+	}
 	switch msg.String() {
 	case "up":
 		m.selected = max(0, m.selected-1)
@@ -125,7 +135,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.setMode(modePrompt)
 		return m, nil
-	case "backspace", "ctrl+h":
+	case "ctrl+h":
 		r := []rune(m.launcherQuery)
 		if len(r) > 0 {
 			m.launcherQuery = string(r[:len(r)-1])
@@ -133,8 +143,8 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	if msg.Text != "" {
-		m.launcherQuery += msg.Text
+	if text := safe(msg.Text); text != "" {
+		m.launcherQuery += text
 		m.selected = 0
 		return m, nil
 	}

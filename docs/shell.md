@@ -84,18 +84,18 @@ terminal rendering. The app SDK spec is [applications.md](applications.md).
 
 ### Approved versions (Issue #21)
 
-Gostalgia adopts a coordinated **Charm v1** baseline pinned in `go.mod`:
+Gostalgia adopts a coordinated **Charm v2** baseline pinned in `go.mod`:
 
-- **Bubble Tea**: `github.com/charmbracelet/bubbletea v1.3.10` — Elm-architecture terminal application lifecycle, alternate screen, and event loop.
-- **Lip Gloss**: `github.com/charmbracelet/lipgloss v1.1.0` — Style definitions, borders, colors, and layout blocks.
-- **Bubbles**: `github.com/charmbracelet/bubbles v1.0.0` — Reusable TUI components (text input, viewports, spinners, tables, key bindings) for upcoming visual language and launcher milestones (#22, #23).
+- **Bubble Tea**: `charm.land/bubbletea/v2` — Elm-architecture terminal application lifecycle, alternate screen (declared on `tea.View`), and event loop.
+- **Lip Gloss**: `charm.land/lipgloss/v2` — Style definitions, borders, colors, and layout blocks.
+- **Bubbles**: `charm.land/bubbles/v2` — Reusable TUI components (text input, viewports, spinners, tables, key bindings) for upcoming visual language and launcher milestones (#22, #23).
 
 ### Evaluation and decision rationale
 
 1. **v1 vs. v2 evaluation**:
-   - `bubbles v1.0.0`, `bubbletea v1.3.10`, and `lipgloss v1.1.0` were released as mutually aligned, production-proven companions. `bubbles v1.0.0` directly declares `bubbletea v1.3.10` and `lipgloss v1.1.0` as dependencies.
-   - Bubble Tea v2 (`charm.land/bubbletea/v2`) introduces breaking API migrations (`View() tea.View` instead of `View() string`, events modeled via `ultraviolet` / `uv.Event`, `tea.KeyPressMsg`, and vanity import paths `charm.land/*`). Bubble Tea v2 also requires Go 1.26+, whereas Gostalgia is built on Go 1.25.
-   - Pinned v1 versions provide maximum stability, eliminate version divergence across components, and compile cleanly without cgo (`CGO_ENABLED=0`) across macOS, Linux, and Windows.
+   - Issue #21 originally pinned the production-proven v1 trio (`bubbles v1.0.0`, `bubbletea v1.3.10`, `lipgloss v1.1.0`) while Bubble Tea v2 was still in flux.
+   - The migration to v2 (`charm.land/*` vanity paths, `View() tea.View`, `tea.KeyPressMsg` key events, bracketed paste as `tea.PasteMsg`, Kitty-protocol key disambiguation) has since landed; Go 1.26+ is required.
+   - The pinned v2 versions keep a single coordinated baseline, eliminate version divergence across components, and compile cleanly without cgo (`CGO_ENABLED=0`) across macOS, Linux, and Windows.
 
 2. **Evaluated extensions (Huh, Glamour, Harmonica)**:
    - **Huh** (form builder) and **Glamour** (markdown renderer): Evaluated and excluded from the direct baseline to minimize dependency surface. Neither is required for the DOS prompt shell or app shelf. They may be revisited in Milestone 2 if rich markdown manuals or complex interactive forms require them.
@@ -118,7 +118,7 @@ Gostalgia adopts a coordinated **Charm v1** baseline pinned in `go.mod`:
    - No host shell (`sh`, `bash`, `cmd.exe`) is invoked by the runtime or shell.
 
 5. **Terminal API assumptions**:
-   - Relies on standard ANSI escape sequences, alternate screen mode (`tea.WithAltScreen()`), raw terminal mode, and bracketed paste.
+   - Relies on standard ANSI escape sequences, alternate screen mode (declared via `tea.View.AltScreen`), raw terminal mode, and bracketed paste.
    - Output from files and untrusted processes is filtered to strip OSC and dangerous control sequences before rendering.
    - Viewport resizing is handled dynamically through `tea.WindowSizeMsg`, with graceful fallback down to 30×10.
 

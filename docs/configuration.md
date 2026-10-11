@@ -46,6 +46,11 @@ Default settings are declared in `internal/config/defaults.go`:
 | `shortcuts.settings` | `string` | `"f7"` | Shell shortcut for settings application. |
 | `shortcuts.palette` | `string` | `"ctrl+p"`| Shell shortcut for quick command palette. |
 
+Shortcut values are matched case-insensitively against Bubble Tea **v2** keystroke
+names (e.g. `f1`, `ctrl+p`, `shift+tab`, `pgdown`, `enter`). Names saved while the
+shell ran on Charm v1 that used v1-only spellings are not normalized or rewritten;
+if a migrated binding stops matching, set it again with the v2 name.
+
 ## 3. Validation and keybinding conflict prevention
 
 Before any configuration value is accepted by `Set` or `Preview`:
