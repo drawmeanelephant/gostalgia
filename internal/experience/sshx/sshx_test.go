@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -122,7 +123,8 @@ func TestLoadOrCreateHostKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat: %v", err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	// Windows does not honor Unix permission bits; the mode reads back 666.
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Errorf("host key mode = %o, want 600", info.Mode().Perm())
 	}
 	signer2, err := LoadOrCreateHostKey(path)
