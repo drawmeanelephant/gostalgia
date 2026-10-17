@@ -78,7 +78,7 @@ func TestCombatKills(t *testing.T) {
 	l := g.Levels[0]
 	l.Monsters = nil
 	dir, spot := adjacentFloor(t, g)
-	l.Monsters = append(l.Monsters, Monster{ID: 900, Def: "rat", Pos: spot, HP: 2, Alert: true})
+	l.Monsters = append(l.Monsters, Monster{ID: 900, Def: "giant_rat", Pos: spot, HP: 2, Alert: true})
 	for i := 0; i < 12 && len(l.Monsters) > 0; i++ {
 		g.Command(Cmd{Kind: CmdMove, Dir: dir})
 	}
@@ -302,13 +302,13 @@ func TestPotionHeals(t *testing.T) {
 	l.Monsters = nil
 	g.Player.HP = 5
 	g.Player.Inventory = append(g.Player.Inventory,
-		Item{ID: 800, Def: "heal_potion", Pos: Pos{-1, -1}})
+		Item{ID: 800, Def: "potion_heal", Pos: Pos{-1, -1}})
 	evs := g.Command(Cmd{Kind: CmdUseItem, ItemID: 800})
 	if !hasKind(evs, EvUse) {
 		t.Fatalf("no use event: %v", evs)
 	}
-	if g.Player.HP != 17 {
-		t.Fatalf("hp = %d, want 17", g.Player.HP)
+	if g.Player.HP != 19 {
+		t.Fatalf("hp = %d, want 19", g.Player.HP)
 	}
 	if len(g.Player.Inventory) != 0 {
 		t.Fatal("potion not consumed")
