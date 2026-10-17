@@ -1976,3 +1976,89 @@ the presentation `view`/`action`/`cancel` routes. View actions: `open`
 (uses the `open_path` field — denied paths surface an error banner),
 `reload`, `prev_page`, `next_page`. With no document open the view explains
 the grant-gated access model instead of pretending to have content.
+## 23. Delve: a roguelike beneath the Brass Elephant (`com.gostalgia.delve`)
+
+`apps/delve` (display name **Delve**) is the pack's roguelike, "Delve —
+Beneath the Brass Elephant": the cellar of Adventure's tavern opens into
+the Underhall, eight procedurally generated levels of monsters, loot,
+hunger, XP, and permadeath. The run is won by taking the Brass Idol from
+the Vault on the deepest level and carrying it back up the level-1
+stairs; dying engraves the run on a persisted top-ten ledger.
+
+```json
+{
+  "id": "com.gostalgia.delve",
+  "permissions": ["ipc", "fs.read", "fs.write", "sound"]
+}
+```
+
+`ipc` covers routes and presentation; `fs.read`/`fs.write` cover the run
+save and the score ledger; `sound` covers `sound/play` blips (with `ipc`
+covering the `sound/status` probe). The game core lives in
+`apps/delve/engine`, a pure stdlib-only deterministic package: the app
+shell owns only IPC, view composition, persistence, and sound, and drives
+the engine through a narrow `gameEngine` interface (the `newGame` /
+`reviveGame` package vars are the test seam).
+
+### The snapshot
+
+A version-3 snapshot renders the dungeon directly: the engine's verbatim
+`MapView` in a fixed-width `Block` (exactly 22 lines of 48 runes, inside
+the block budget), HP / satiety / XP as `Meters` (each fraction guards a
+zero divisor; `XPNext` 0 means max level), the message log as a `Region`
+scroll capped at the newest 40 lines, and the pack as selectable items —
+`item_N` ids (lettered, per the entry pattern) carrying kind and equipped
+slot in the detail. The `Grid` is a 3x3 movement pad of arrow cells
+(`nw`…`se` around a `·` wait), every cell declaring the shared `move`
+action so `cell_id` carries the compass step. Actions mirror the engine's
+`Flags`: `pickup`/`descend`/`ascend` dim without the underfoot
+affordance, `use`/`equip`/`drop` dim without a matching item kind in the
+pack, and `rest`, `new`, `help` stay live. `help` toggles the region
+between the log and a controls summary.
+
+Before any run exists the view is a tavern-door screen: an optional
+`name` field (24 runes, sanitized), a **Begin the delve** action, and the
+ledger rendered as items. Death swaps the map for an ASCII tombstone
+Block (name, cause, depth, score) and victory for a celebratory Block;
+both are new-run screens, so the name field returns. Version-2 snapshots
+keep map/meters/grid and render the log as a second block; version-1
+carries map, log tail, and pack as items — the whole shell degrades
+honestly, matching Musictoy's version dance.
+
+### Runs, saves, and the ledger
+
+A run only exists once begun: `new` (or the `restart` route) rolls a
+fresh `rand/v2` seed and calls `engine.New`, storing `{version, run,
+player_name, started, seed}` in
+`/apps/data/com.gostalgia.delve/save.json` — `run` is the engine's own
+`Marshal` bytes base64'd, RNG state included, so a resumed run stays
+deterministic. `fs/save` persists atomically after every state-changing
+command, and Stop flushes a pending write. A relaunch with a live save
+revives the run and waits pending behind **Continue** / **New delve**
+with the frozen map on screen and the pad dimmed; a save whose run
+already ended shows its tombstone or victory directly. Missing, corrupt,
+wrong-version, or unmarshallable saves heal to the pre-run screen with an
+honest "previous save unreadable" note and are never overwritten until a
+real change saves over them. A finished run appends its `engine.Score` to
+`/apps/data/com.gostalgia.delve/scores.json`, a bounded top-10 sorted by
+descending value; the ledger is cosmetic enough that a corrupt copy heals
+silently on the next recorded score.
+
+Event kinds double as sound cues, fire-and-forget with every error
+swallowed: hits `beep`, deaths `bark` (yes, dogs in the dungeon),
+level-ups and the win arpeggiate upward, the lose stinger descends, and
+pickups/uses get a soft blip — at most one call per kind per command in
+priority order, so a long rest cannot saturate the player. The grant and
+host adapter are probed once per launch exactly like Dogcalc's bark.
+
+### Routes
+
+Programmatic routes under `app/com.gostalgia.delve/`: `state` (run
+presence, outcome, vitals, final score, ledger), `command`
+(`{"kind":"move","dir":"se"}`, `{"kind":"use","item_id":3}`, or
+`wait`/`rest`/`pickup`/`descend`/`ascend`/`equip`/`drop` — the headless
+surface parallel to the presentation actions, returning the turn's
+events; a first command on a pending save resumes it), and `restart`
+(abandon the run, fresh seed, optional `name`). Malformed kinds and bad
+directions are IPC errors; a command with no run in progress answers "no
+delve in progress".
