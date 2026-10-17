@@ -15,8 +15,14 @@ import (
 )
 
 // wireReal points the package seams at the true engine for this test.
+// The seed is pinned: the app draws a fresh rand.Uint64 per run, and
+// ~3% of seeds kill a scripted mover inside 30 turns — a random seed
+// here is a CI flake, not coverage.
 func wireReal() {
-	newGame = func(cfg engine.Config) (gameEngine, error) { return engine.New(cfg) }
+	newGame = func(cfg engine.Config) (gameEngine, error) {
+		cfg.Seed = 1
+		return engine.New(cfg)
+	}
 	reviveGame = func(b []byte) (gameEngine, error) { return engine.Unmarshal(b) }
 }
 
@@ -58,9 +64,14 @@ func TestLiveRunThroughApp(t *testing.T) {
 		t.Fatal("movement pad missing or malformed")
 	}
 
-	// Play thirty real turns and confirm the world moves.
+	// Play thirty real turns and confirm the world moves. The pad
+	// disappears when the run ends, so stop politely if a seed change
+	// ever turns the scripted mover into a corpse.
 	moves := []string{"e", "s", "e", "w", "n", "se", "sw", "ne"}
 	for i := 0; i < 30; i++ {
+		if h.app.g.Outcome() != engine.OutcomeOngoing {
+			break
+		}
 		v = h.act(t, 3, sdk.ActionRequest{Action: "move", CellID: moves[i%len(moves)]})
 		if v.State == sdk.ViewError {
 			t.Fatalf("turn %d: view error %q", i, v.Error)
