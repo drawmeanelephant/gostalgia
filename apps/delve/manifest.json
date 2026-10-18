@@ -1,0 +1,8 @@
+{
+  "id": "com.gostalgia.delve",
+  "name": "Delve",
+  "version": "0.1.0",
+  "entrypoint": "delve",
+  "permissions": ["ipc", "fs.read", "fs.write", "sound"],
+  "description": "A roguelike descent beneath the Brass Elephant tavern: eight procgen levels, monsters, loot, hunger, permadeath, and a score ledger. Bring back the Brass Idol or die trying."
+}
