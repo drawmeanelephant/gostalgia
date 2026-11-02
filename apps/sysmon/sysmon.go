@@ -682,7 +682,7 @@ func parseItemPID(itemID string) (int32, string) {
 		kind string
 	}{{"proc_", "proc"}, {"hist_", "hist"}} {
 		if rest, ok := strings.CutPrefix(itemID, prefix.tag); ok {
-			n, err := strconv.Atoi(rest)
+			n, err := strconv.ParseInt(rest, 10, 32)
 			if err != nil || n <= 0 {
 				return 0, ""
 			}
