@@ -491,7 +491,12 @@ also direct experience imports:
   terminal profile (or `NO_COLOR`) never re-downsamples kit output below the
   configured `accessibility.color_mode`.
 
-All stay inside experience. The dependency tests allow Charm under
+`bloomfx.dev/bloom v0.0.0-alpha.6` is approved for layout and compositing,
+pinned exactly because it is pre-1.0 (see
+[shell.md](shell.md#bloom-layout-and-compositing-issue-207)). In #207 only a
+proof test imports it; the kit remains the visual vocabulary.
+
+All stay inside experience. The dependency tests allow Charm and bloom under
 `internal/experience/` and still verify stdlib-only runtime/SDK/apps/`gctl`
 closures. Rendering needs no cgo, external binary, host shell, or service.
 

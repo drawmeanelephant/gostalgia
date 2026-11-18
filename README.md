@@ -50,7 +50,8 @@ go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
   builds on.
 
 The runtime core and app SDK are standard-library-only. The terminal experience
-uses the allowed Charm family (and its transitive dependencies), without cgo.
+uses the allowed Charm family and the exactly pinned bloom layout engine (and
+their transitive dependencies), without cgo.
 See [docs/applications.md](docs/applications.md) for the complete app-writing
 spec, [docs/shell.md](docs/shell.md) for the terminal experience, and
 [docs/architecture.md](docs/architecture.md)
@@ -65,7 +66,9 @@ go build ./... && go vet ./... && go test -race ./...
 gofmt -l .  # empty output = clean
 ```
 
-Requires Go ≥ 1.25.
+Requires Go ≥ 1.27.3 (the floor set by the exactly pinned, pre-1.0
+`bloomfx.dev/bloom` layout dependency; see
+[docs/shell.md](docs/shell.md#bloom-layout-and-compositing-issue-207)).
 
 ## License
 

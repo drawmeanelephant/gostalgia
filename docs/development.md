@@ -10,7 +10,8 @@ go test ./...         # unit + integration tests
 go test -race ./...   # race detector (run before merging anything)
 ```
 
-Or `make build|vet|fmt|test|race`. Requires Go ≥ 1.25 (`os.Root.MkdirAll`).
+Or `make build|vet|fmt|test|race`. Requires Go ≥ 1.27.3, the floor set by the
+pinned `bloomfx.dev/bloom` (`os.Root.MkdirAll` alone needs 1.25).
 
 ## Run the environment
 

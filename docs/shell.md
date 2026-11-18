@@ -103,15 +103,22 @@ terminal rendering. The app SDK spec is [applications.md](applications.md).
 
 Gostalgia adopts a coordinated **Charm v2** baseline pinned in `go.mod`:
 
-- **Bubble Tea**: `charm.land/bubbletea/v2` — Elm-architecture terminal application lifecycle, alternate screen (declared on `tea.View`), and event loop.
-- **Lip Gloss**: `charm.land/lipgloss/v2` — Style definitions, borders, colors, and layout blocks.
-- **Bubbles**: `charm.land/bubbles/v2` — Reusable TUI components (text input, viewports, spinners, tables, key bindings) for upcoming visual language and launcher milestones (#22, #23).
+- **Bubble Tea**: `charm.land/bubbletea/v2 v2.1.1` — Elm-architecture terminal application lifecycle, alternate screen (declared on `tea.View`), and event loop.
+- **Lip Gloss**: `charm.land/lipgloss/v2 v2.0.6` — Style definitions, borders, colors, and layout blocks.
+- **Bubbles**: `charm.land/bubbles/v2 v2.2.1` — Reusable TUI components (text input, viewports, spinners, tables, key bindings) for upcoming visual language and launcher milestones (#22, #23).
+- **bloom**: `bloomfx.dev/bloom v0.0.0-alpha.6` — layout, compositing, and additive input for the experience layer only, approved in #207. See [bloom layout and compositing](#bloom-layout-and-compositing-issue-207).
+
+The direct helpers `github.com/charmbracelet/x/ansi v0.11.9`,
+`github.com/charmbracelet/colorprofile v0.4.3`, and
+`github.com/muesli/termenv v0.16.0`, and the SSH attach transport
+`charm.land/ssh v0.4.3` with `golang.org/x/crypto v0.54.0`, complete the
+approved direct baseline that `TestApprovedCharmBaseline` locks.
 
 ### Evaluation and decision rationale
 
 1. **v1 vs. v2 evaluation**:
    - Issue #21 originally pinned the production-proven v1 trio (`bubbles v1.0.0`, `bubbletea v1.3.10`, `lipgloss v1.1.0`) while Bubble Tea v2 was still in flux.
-   - The migration to v2 (`charm.land/*` vanity paths, `View() tea.View`, `tea.KeyPressMsg` key events, bracketed paste as `tea.PasteMsg`, Kitty-protocol key disambiguation) has since landed; Go 1.26+ is required.
+   - The migration to v2 (`charm.land/*` vanity paths, `View() tea.View`, `tea.KeyPressMsg` key events, bracketed paste as `tea.PasteMsg`, Kitty-protocol key disambiguation) has since landed. Go 1.27.3+ is required, the floor set by bloom's `go.mod` in #207.
    - The pinned v2 versions keep a single coordinated baseline, eliminate version divergence across components, and compile cleanly without cgo (`CGO_ENABLED=0`) across macOS, Linux, and Windows.
 
 2. **Evaluated extensions (Huh, Glamour, Harmonica)**:
@@ -124,9 +131,10 @@ Gostalgia adopts a coordinated **Charm v2** baseline pinned in `go.mod`:
    - Dependency fences in `test/e2e/dependencies_test.go` enforce that:
      - `go list -deps gostalgia/internal/runtime gostalgia/sdk gostalgia/apps/... gostalgia/cmd/gctl` contains zero non-stdlib and zero Charm dependencies.
      - Only packages under `internal/experience/` import Charm libraries.
+     - Only packages under `internal/experience/` import bloom (any `bloomfx.dev/` package, production or test imports).
      - Direct module dependencies in `go.mod` match the approved baseline.
    - Issue #22 promotes two already pinned transitive helpers to direct
-     experience imports: `x/ansi v0.11.6` for grapheme cell layout and
+     experience imports: `x/ansi` (now v0.11.9) for grapheme cell layout and
      `termenv v0.16.0` for explicit color profiles, not background probes.
      See [experience.md](experience.md#dependencies-and-boundary).
 
@@ -140,7 +148,69 @@ Gostalgia adopts a coordinated **Charm v2** baseline pinned in `go.mod`:
    - Viewport resizing is handled dynamically through `tea.WindowSizeMsg`, with graceful fallback down to 30×10.
 
 6. **Licensing and attribution**:
-   - Bubble Tea, Lip Gloss, and Bubbles are licensed under the MIT License, compatible with Gostalgia's license and dependency policy.
+   - Bubble Tea, Lip Gloss, Bubbles, and bloom are licensed under the MIT License, compatible with Gostalgia's license and dependency policy.
 
 7. **Separation from VirelaiOS**:
    - Early VirelaiOS bring-up (toolchain, guest runner, kernel integration) is separately owned by the repository owner and tracked outside this roadmap. The Charm shell does not assume POSIX or claim guest-OS support; it runs on standard Go host targets (macOS, Linux, Windows).
+
+### bloom layout and compositing (Issue #207)
+
+`bloomfx.dev/bloom` is approved as a direct dependency for `internal/experience/`
+only, pinned to exactly `v0.0.0-alpha.6`.
+
+- **Role.** bloom solves layout, composes layers (modal dialogs, anchored
+  toasts), draws viewports over append-only buffers, places the real cursor,
+  and routes mouse input. The theme and `ui` kit stay the visual vocabulary:
+  any `View() string` component, including a kit `Panel`, is a bloom leaf, and
+  the kit's `Panel`/`PanelContentBounds` remain the source of border, title,
+  and padding geometry. Bubble Tea stays the only terminal and event-loop
+  owner, and apps still supply presentation data, never views.
+- **Risk.** bloom is pre-1.0, has a single maintainer, and expects breaking
+  changes. Pin one exact version; never use `@latest`, vendor, or fork it.
+  Upgrade deliberately in a change of its own that reads the upstream
+  changes, updates `go.mod` and `TestApprovedCharmBaseline`, and reruns the
+  proofs below and the dependency fences.
+- **Version floors.** bloom's `go.mod` requires Go 1.27.3, Bubble Tea v2.1.1,
+  x/ansi v0.11.9, and a newer `charmbracelet/ultraviolet` pseudo-version.
+  Minimal version selection raised the module to those; Lip Gloss v2.0.6,
+  colorprofile v0.4.3, and `clipperhouse/uax29/v2 v2.7.0` already matched.
+- **No production wiring yet.** In #207 only the proof test
+  `internal/experience/ui/bloom_proof_test.go` imports bloom. The shell keeps
+  rendering kit strings directly until the layout tree lands (#208).
+
+Rules every later integration keeps, established by that proof against the
+exact pin:
+
+1. **Explicit colors, no probing.** Never call or return `Root.Init()`; it
+   asks the host terminal for its colors. Build roots with
+   `bloom.WithColors(...)` from the theme palette, and deliver the shell's own
+   profile with `tea.ColorProfileMsg`. Do not let host
+   `BackgroundColorMsg`/`ForegroundColorMsg` replies override the theme.
+2. **Kit panels are profile-safe.** A kit `Panel` drawn through
+   `bloom.Render` or `Root.Render` keeps the kit's own SGR: `ui.Plain` emits
+   zero escape sequences for every built-in theme (including
+   `theme.Monochrome()`), and `ui.ANSI256` emits indexed colors with no
+   truecolor (`38;2`/`48;2`, semicolon or colon form). No workaround is needed
+   for plain composition.
+3. **Blending needs a workaround.** Effects that mix colors, such as
+   `fx.Dim` backdrops, produce 24-bit colors even after the root receives an
+   ANSI256 `tea.ColorProfileMsg`. Plain and Monochrome attach no blending or
+   backdrop effects at all. Other profiles convert only the composed content
+   with `colorprofile.Writer{Profile: <the shell's chosen profile>}`, never
+   the whole terminal stream (cursor, alternate-screen, keyboard-enhancement
+   and restoration sequences pass through untouched).
+4. **Sanitize first.** External text passes through `ui.Sanitize` before it
+   reaches any bloom node; never mark it `Trusted()`.
+5. **Per-session motion.** Never use the process-global `anim.SetMotion`;
+   honor each session's ReducedMotion when attaching effects, and disable the
+   copy flash (`bloom.WithCopyFlash(false)`) under it.
+6. **No bloom clipboard at alpha.6.** `WithClipboard`/`CopySelection` always
+   emit OSC 52, even when the callback denies the copy. Copy goes through the
+   shell's `clipboard/write` IPC instead
+   ([#206 planning note](https://github.com/drawmeanelephant/gostalgia/issues/206#issuecomment-6990850564)).
+
+Run the proofs with:
+
+```sh
+go test ./internal/experience/ui -run 'Bloom|Truecolor' -count=1 -v
+```

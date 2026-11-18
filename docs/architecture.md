@@ -301,22 +301,51 @@ arrive, their host bits get adapters here.
 
 ### 4.1 Dependency policy
 
-**Core and SDK: standard library only. Experience: approved Charm family.**
-Bubble Tea v1.3.10, Lip Gloss v1.1.0, and Bubbles v1.0.0 are direct dependencies
-only in `internal/experience/` (Issues #21–#22). They provide terminal
-lifecycle/event handling, styling, and reusable TUI components; no alternate UI
-framework or unrelated direct dependency is added. Their required transitive
-dependencies (terminal, ANSI, Unicode width, color/input helpers, and
-`golang.org/x/*`) are pinned by go.mod/go.sum and are part of this explicit
-exception, not hand-added runtime dependencies. Issue #22 promotes the already
-pinned `github.com/charmbracelet/x/ansi v0.11.6` and
+**Core and SDK: standard library only. Experience: approved Charm family and
+bloom.** The coordinated Charm v2 baseline (`charm.land/bubbletea/v2 v2.1.1`,
+`charm.land/lipgloss/v2 v2.0.6`, and `charm.land/bubbles/v2 v2.2.1`) is a
+direct dependency only in `internal/experience/` (Issues #21–#22, migrated to
+v2 in #184). It provides terminal lifecycle/event handling, styling, and
+reusable TUI components. `charm.land/ssh v0.4.3` and `golang.org/x/crypto
+v0.54.0` serve only the opt-in SSH attach listener in `internal/experience/sshx`
+(#190). Their required transitive dependencies (terminal, ANSI, Unicode width,
+color/input helpers, and `golang.org/x/*`) are pinned by go.mod/go.sum and are
+part of this explicit exception, not hand-added runtime dependencies. Issue #22
+promotes `github.com/charmbracelet/x/ansi` (now v0.11.9) and
 `github.com/muesli/termenv v0.16.0` to direct experience helpers for cell-aware
-layout and explicit renderer profiles, without adding modules or changing
-versions. The kit never probes the host's dark/light background.
+layout and explicit renderer profiles; `github.com/charmbracelet/colorprofile
+v0.4.3` hands the kit's explicit profile to Bubble Tea. The kit never probes
+the host's dark/light background.
+
+**bloom (Issue #207).** `bloomfx.dev/bloom` (MIT) is approved as a direct
+dependency of the experience layer only, pinned to exactly
+`v0.0.0-alpha.6`. Its role is composition: layout solving
+(`Row`/`Column`/`Grid` with fill, fixed, percent, and collapsible slots),
+layers for modal dialogs and anchored toasts, viewports over append-only
+buffers, the real terminal cursor, and additive mouse routing. It does not
+replace the theme or the `ui` kit, which remain the visual vocabulary and the
+authority for panel border, title, and padding geometry; any component with a
+`View() string` method is a bloom leaf. Bubble Tea remains the only terminal
+and event-loop owner, and `ui.Sanitize` remains the gate for external text
+(bloom's own filter keeps SGR and OSC 8, which is looser than our policy).
+
+bloom is **pre-1.0, has a single maintainer, and expects breaking changes**
+between releases. It is therefore pinned to one exact version (no ranges, no
+`@latest`, no vendoring or fork), and every upgrade is a deliberate change of
+its own: read the upstream changes, update the pin in `go.mod` and
+`TestApprovedCharmBaseline`, and rerun the profile proofs and fences below.
+bloom's own `go.mod` sets the floors that minimal version selection applied
+here: Go 1.27.3, Bubble Tea v2.1.1, x/ansi v0.11.9, and a newer
+`charmbracelet/ultraviolet` pseudo-version (`clipperhouse/uax29/v2 v2.7.0` was
+already pinned). In #207 bloom is imported only by the proof test
+`internal/experience/ui/bloom_proof_test.go`; no production code is wired to it
+yet. The usage rules for later integration are in
+[shell.md](shell.md#bloom-layout-and-compositing-issue-207).
 
 `go list -deps gostalgia/internal/runtime gostalgia/sdk` contains only Gostalgia
 and standard-library packages. Automated tests in `test/e2e/dependencies_test.go`
-enforce that boundary, verify that Charm is confined to `internal/experience/`,
+enforce that boundary, verify that Charm and bloom (every `bloomfx.dev/`
+package, including from tests) are confined to `internal/experience/`,
 ensure no standalone executables (e.g. gum, glow, vhs) are used, and lock the
 approved direct baseline. `gctl` and the SDK/demo dependency closures likewise
 remain stdlib-only. The repository shares one module, so module downloads include
@@ -389,6 +418,7 @@ The canonical tracker for all 25 issues lives in [status.md](../status.md).
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Windowing toolkit choice | rework of desktop layer | design window service API first; toolkit behind adapter; spike Gio early |
+| Pre-1.0 bloom (single maintainer, breaking changes expected) | experience-layer rework on upgrade | exact pin, experience-only fence, deliberate upgrades that rerun the profile proofs (§4.1) |
 | Goroutine-vs-process confusion | wrong abstractions, false security | explicit `Kind` everywhere; docs state isolation level per kind |
 | Windows divergence (named pipes vs AF_UNIX, path quirks, case-insensitivity) | broken parity | platform/ adapters + CI matrix + behavior tests, not just compilation |
 | VFS symlink/TOCTOU escape | containment failure | confinement via `os.Root` now; per-app views in Milestone 4 (#37); honest docs |

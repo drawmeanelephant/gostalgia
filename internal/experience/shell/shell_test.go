@@ -874,6 +874,23 @@ func TestKeyReleaseIsInert(t *testing.T) {
 	}
 }
 
+// TestViewDeclaresTerminalModes pins the declarative terminal modes the shell
+// asks Bubble Tea for: the alternate screen and kitty event types, which key
+// release and repeat handling depend on.
+func TestViewDeclaresTerminalModes(t *testing.T) {
+	m := New(context.Background(), noopCaller{}, nil)
+	for _, size := range []tea.WindowSizeMsg{{Width: 80, Height: 24}, {Width: 30, Height: 10}, {Width: 20, Height: 6}} {
+		m.Update(size)
+		v := m.View()
+		if !v.AltScreen {
+			t.Errorf("%dx%d: view does not request the alternate screen", size.Width, size.Height)
+		}
+		if !v.KeyboardEnhancements.ReportEventTypes {
+			t.Errorf("%dx%d: view does not request kitty event types", size.Width, size.Height)
+		}
+	}
+}
+
 func TestTerminalRestoration(t *testing.T) {
 	var buf bytes.Buffer
 	Restore(&buf)

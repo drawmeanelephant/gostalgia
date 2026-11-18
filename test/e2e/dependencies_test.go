@@ -27,7 +27,8 @@ func TestCoreDependencyBoundary(t *testing.T) {
 }
 
 func TestCharmRestrictedToExperience(t *testing.T) {
-	cmd := exec.Command("go", "list", "-f", "{{.ImportPath}}|{{join .Imports \",\"}}", "gostalgia/...")
+	cmd := exec.Command("go", "list", "-f",
+		"{{.ImportPath}}|{{join .Imports \",\"}}|{{join .TestImports \",\"}}|{{join .XTestImports \",\"}}", "gostalgia/...")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("list imports: %v\n%s", err, out)
@@ -36,23 +37,55 @@ func TestCharmRestrictedToExperience(t *testing.T) {
 	scanner := bufio.NewScanner(strings.NewReader(string(out)))
 	for scanner.Scan() {
 		line := scanner.Text()
-		parts := strings.SplitN(line, "|", 2)
-		if len(parts) != 2 {
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 {
 			continue
 		}
 		pkgPath := parts[0]
+		inExperience := strings.HasPrefix(pkgPath, "gostalgia/internal/experience/")
 		imports := strings.Split(parts[1], ",")
 
 		for _, imp := range imports {
 			imp = strings.TrimSpace(imp)
 			if strings.Contains(imp, "charmbracelet") || strings.Contains(imp, "charm.land") {
-				if !strings.HasPrefix(pkgPath, "gostalgia/internal/experience/") {
+				if !inExperience {
 					t.Errorf("package %s imports Charm library %s (restricted to internal/experience/)", pkgPath, imp)
 				}
 			}
-			if imp == "github.com/muesli/termenv" && !strings.HasPrefix(pkgPath, "gostalgia/internal/experience/") {
+			if imp == "github.com/muesli/termenv" && !inExperience {
 				t.Errorf("package %s imports terminal styling helper %s outside experience", pkgPath, imp)
 			}
+		}
+
+		// bloom (any package of the bloomfx.dev module) is an experience-only
+		// layout/compositing dependency, including from tests.
+		for _, list := range parts[1:] {
+			for _, imp := range strings.Split(list, ",") {
+				if isBloomImport(strings.TrimSpace(imp)) && !inExperience {
+					t.Errorf("package %s imports bloom package %s (restricted to internal/experience/)", pkgPath, imp)
+				}
+			}
+		}
+	}
+}
+
+func isBloomImport(imp string) bool {
+	return strings.HasPrefix(imp, "bloomfx.dev/")
+}
+
+func TestBloomImportMatcher(t *testing.T) {
+	for imp, want := range map[string]bool{
+		"bloomfx.dev/bloom":        true,
+		"bloomfx.dev/bloom/fx":     true,
+		"bloomfx.dev/bloom/anim":   true,
+		"bloomfx.dev/bloom/on":     true,
+		"bloomfx.dev/other":        true,
+		"example.com/bloomfx.dev":  false,
+		"github.com/lrstanley/foo": false,
+		"gostalgia/internal/ui":    false,
+	} {
+		if got := isBloomImport(imp); got != want {
+			t.Errorf("isBloomImport(%q) = %v, want %v", imp, got, want)
 		}
 	}
 }
@@ -91,9 +124,9 @@ func TestApprovedCharmBaseline(t *testing.T) {
 	expectedDirect := map[string]string{
 		"gostalgia":                             "",
 		"charm.land/bubbles/v2":                 "v2.2.1",
-		"charm.land/bubbletea/v2":               "v2.0.10",
+		"charm.land/bubbletea/v2":               "v2.1.1",
 		"charm.land/lipgloss/v2":                "v2.0.6",
-		"github.com/charmbracelet/x/ansi":       "v0.11.8",
+		"github.com/charmbracelet/x/ansi":       "v0.11.9",
 		"github.com/charmbracelet/colorprofile": "v0.4.3",
 		"github.com/muesli/termenv":             "v0.16.0",
 		// SSH attach (internal/experience/sshx only): the inbound transport is
@@ -104,6 +137,12 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		// the core runtime by TestCoreDependencyBoundary.
 		"charm.land/ssh":      "v0.4.3",
 		"golang.org/x/crypto": "v0.54.0",
+		// bloom (layout, compositing and input for the experience layer only;
+		// docs/architecture.md §4.1). Pre-1.0 with a single maintainer and
+		// expected breaking changes, so it is pinned exactly and upgraded
+		// deliberately. Its go.mod sets the Bubble Tea v2.1.1, x/ansi v0.11.9
+		// and Go 1.27.3 floors above.
+		"bloomfx.dev/bloom": "v0.0.0-alpha.6",
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {
