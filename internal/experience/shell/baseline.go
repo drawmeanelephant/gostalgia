@@ -7,7 +7,7 @@ package shell
 // reasons documented at each site. Core runtime, SDK, apps, and CLI tools
 // must remain standard-library-only.
 const (
-	CharmBubbleTeaVersion = "v2.0.10"
+	CharmBubbleTeaVersion = "v2.1.1"
 	CharmLipGlossVersion  = "v2.0.6"
 	CharmBubblesVersion   = "v2.2.1"
 )

@@ -68,9 +68,10 @@ func proofPanel(k Kit) string {
 	return k.Panel(Panel{Title: "Proof", Body: Sanitize(external), Focused: true}, Bounds{Width: 30, Height: 6})
 }
 
-// proofRoot builds a bloom Root the way the shell must: explicit theme colors,
-// no copy flash, and the shell's chosen profile delivered directly. Root.Init
-// is never called, so the host terminal is never asked for its colors.
+// proofRoot builds a bloom Root the way the shell must: explicit theme colors
+// and no copy flash. Root.Init is never called, so the host terminal is never
+// asked for its colors. The profile message mirrors what Bubble Tea forwards;
+// alpha.6 records it without downsampling, so no assertion depends on it.
 func proofRoot(t *testing.T, th theme.Theme, profile colorprofile.Profile) *bloom.Root {
 	t.Helper()
 	root := bloom.New(bloom.WithColors(th.Palette.Text, th.Palette.Surface), bloom.WithCopyFlash(false))

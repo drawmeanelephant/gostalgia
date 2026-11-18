@@ -172,8 +172,10 @@ only, pinned to exactly `v0.0.0-alpha.6`.
   proofs below and the dependency fences.
 - **Version floors.** bloom's `go.mod` requires Go 1.27.3, Bubble Tea v2.1.1,
   x/ansi v0.11.9, and a newer `charmbracelet/ultraviolet` pseudo-version.
-  Minimal version selection raised the module to those; Lip Gloss v2.0.6,
-  colorprofile v0.4.3, and `clipperhouse/uax29/v2 v2.7.0` already matched.
+  Minimal version selection raised the module to those, and with them the
+  indirect go-runewidth v0.0.31, xo/terminfo v1.3.1, x/sync v0.24.0, and
+  x/sys v0.49.0. Lip Gloss v2.0.6, colorprofile v0.4.3, and
+  `clipperhouse/uax29/v2 v2.7.0` already matched.
 - **No production wiring yet.** In #207 only the proof test
   `internal/experience/ui/bloom_proof_test.go` imports bloom. The shell keeps
   rendering kit strings directly until the layout tree lands (#208).
@@ -183,9 +185,11 @@ exact pin:
 
 1. **Explicit colors, no probing.** Never call or return `Root.Init()`; it
    asks the host terminal for its colors. Build roots with
-   `bloom.WithColors(...)` from the theme palette, and deliver the shell's own
-   profile with `tea.ColorProfileMsg`. Do not let host
-   `BackgroundColorMsg`/`ForegroundColorMsg` replies override the theme.
+   `bloom.WithColors(...)` from the theme palette. Do not let host
+   `BackgroundColorMsg`/`ForegroundColorMsg` replies override the theme. At
+   alpha.6 a root records `tea.ColorProfileMsg` but does not downsample with
+   it, and Bubble Tea sends its own configured profile (TrueColor for local
+   shells) at startup, so profile safety never relies on that message.
 2. **Kit panels are profile-safe.** A kit `Panel` drawn through
    `bloom.Render` or `Root.Render` keeps the kit's own SGR: `ui.Plain` emits
    zero escape sequences for every built-in theme (including

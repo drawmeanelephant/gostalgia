@@ -50,8 +50,9 @@ go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
   builds on.
 
 The runtime core and app SDK are standard-library-only. The terminal experience
-uses the allowed Charm family and the exactly pinned bloom layout engine (and
-their transitive dependencies), without cgo.
+uses the allowed Charm family (and its transitive dependencies), without cgo.
+The exactly pinned bloom layout engine is approved for the experience layer;
+so far only a proof test imports it.
 See [docs/applications.md](docs/applications.md) for the complete app-writing
 spec, [docs/shell.md](docs/shell.md) for the terminal experience, and
 [docs/architecture.md](docs/architecture.md)

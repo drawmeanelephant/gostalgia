@@ -314,8 +314,9 @@ part of this explicit exception, not hand-added runtime dependencies. Issue #22
 promotes `github.com/charmbracelet/x/ansi` (now v0.11.9) and
 `github.com/muesli/termenv v0.16.0` to direct experience helpers for cell-aware
 layout and explicit renderer profiles; `github.com/charmbracelet/colorprofile
-v0.4.3` hands the kit's explicit profile to Bubble Tea. The kit never probes
-the host's dark/light background.
+v0.4.3` is passed to `tea.WithColorProfile` at program creation so the kit
+stays the only downsampler. The kit never probes the host's dark/light
+background.
 
 **bloom (Issue #207).** `bloomfx.dev/bloom` (MIT) is approved as a direct
 dependency of the experience layer only, pinned to exactly
@@ -337,7 +338,8 @@ its own: read the upstream changes, update the pin in `go.mod` and
 bloom's own `go.mod` sets the floors that minimal version selection applied
 here: Go 1.27.3, Bubble Tea v2.1.1, x/ansi v0.11.9, and a newer
 `charmbracelet/ultraviolet` pseudo-version (`clipperhouse/uax29/v2 v2.7.0` was
-already pinned). In #207 bloom is imported only by the proof test
+already pinned); the indirect `mattn/go-runewidth`, `xo/terminfo`,
+`golang.org/x/sync`, and `golang.org/x/sys` moved up with them. In #207 bloom is imported only by the proof test
 `internal/experience/ui/bloom_proof_test.go`; no production code is wired to it
 yet. The usage rules for later integration are in
 [shell.md](shell.md#bloom-layout-and-compositing-issue-207).

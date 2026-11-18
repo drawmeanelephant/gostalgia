@@ -298,8 +298,8 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 }
 
 func TestCharmBaselineVersions(t *testing.T) {
-	if CharmBubbleTeaVersion != "v2.0.10" {
-		t.Errorf("Bubble Tea version = %s, want v2.0.10", CharmBubbleTeaVersion)
+	if CharmBubbleTeaVersion != "v2.1.1" {
+		t.Errorf("Bubble Tea version = %s, want v2.1.1", CharmBubbleTeaVersion)
 	}
 	if CharmLipGlossVersion != "v2.0.6" {
 		t.Errorf("Lip Gloss version = %s, want v2.0.6", CharmLipGlossVersion)

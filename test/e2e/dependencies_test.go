@@ -145,6 +145,7 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		"bloomfx.dev/bloom": "v0.0.0-alpha.6",
 	}
 
+	seen := map[string]bool{}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -158,6 +159,7 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		}
 
 		expectedVer, allowed := expectedDirect[modPath]
+		seen[modPath] = true
 		if !allowed {
 			t.Errorf("unexpected direct dependency in go.mod: %s %s", modPath, version)
 			continue
@@ -165,6 +167,19 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		if expectedVer != "" && version != expectedVer {
 			t.Errorf("module %s pinned to %s, want %s", modPath, version, expectedVer)
 		}
+	}
+	for modPath, version := range expectedDirect {
+		if !seen[modPath] {
+			t.Errorf("approved module %s %s is not a direct dependency in go.mod", modPath, version)
+		}
+	}
+
+	goVersion, err := exec.Command("go", "list", "-m", "-f", "{{.GoVersion}}").CombinedOutput()
+	if err != nil {
+		t.Fatalf("read go directive: %v\n%s", err, goVersion)
+	}
+	if got := strings.TrimSpace(string(goVersion)); got != "1.27.3" {
+		t.Errorf("go directive = %s, want 1.27.3 (bloom's floor)", got)
 	}
 }
 
