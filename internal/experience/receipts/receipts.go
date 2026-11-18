@@ -174,6 +174,8 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
 	heading := fmt.Sprintf("CRASH RECEIPT: %s (PID %d)", r.Name, r.PID)
+	// A heading cut before the PID loses the receipt's identity, so a
+	// narrow receipt is compact however tall it is.
 	if contentBounds.Height < identityRows(r) || ui.GraphemeWidth(heading) > w {
 		return renderCompact(kit, r, bounds)
 	}
@@ -219,8 +221,7 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 
 // identityRows is how many rows the bordered receipt needs to show who
 // crashed and why: its heading, time line, restart count when nonzero and
-// reason when present. The receipt is also compact when its heading would
-// be cut before the PID.
+// reason when present.
 func identityRows(r CrashReceipt) int {
 	n := 2
 	if r.RestartCount > 0 {
