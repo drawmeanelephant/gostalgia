@@ -3,6 +3,8 @@ package taskmanager
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -297,5 +299,127 @@ func TestResourceFormatting(t *testing.T) {
 		if gotMem != tc.wantMem {
 			t.Errorf("formatMemory(%+v) = %q, want %q", tc.res, gotMem, tc.wantMem)
 		}
+	}
+}
+
+// Secondary columns collapse lowest priority first as the table narrows,
+// and come back in reverse as it widens; PID and NAME always stay.
+func TestColumnsCollapseInPriorityOrder(t *testing.T) {
+	var dropped []string
+	prev := VisibleColumns(200)
+	if strings.Join(prev, " ") != "PID NAME STATE RESTARTS CPU MEMORY" {
+		t.Fatalf("wide table shows %v", prev)
+	}
+	for w := 200; w >= 0; w-- {
+		cols := VisibleColumns(w)
+		if w >= 2+5+1+8 && (len(cols) < 2 || cols[0] != "PID" || cols[1] != "NAME") {
+			t.Fatalf("width %d dropped a primary column: %v", w, cols)
+		}
+		for _, c := range prev {
+			if !slices.Contains(cols, c) && c != "PID" && c != "NAME" {
+				dropped = append(dropped, c)
+			}
+		}
+		for _, c := range cols {
+			if !slices.Contains(prev, c) {
+				t.Fatalf("width %d restored %s while narrowing", w, c)
+			}
+		}
+		prev = cols
+	}
+	if strings.Join(dropped, " ") != "RESTARTS MEMORY CPU STATE" {
+		t.Fatalf("collapse order %v", dropped)
+	}
+	var restored []string
+	prev = VisibleColumns(0)
+	for w := 0; w <= 200; w++ {
+		cols := VisibleColumns(w)
+		for _, c := range cols {
+			if !slices.Contains(prev, c) && c != "PID" && c != "NAME" {
+				restored = append(restored, c)
+			}
+		}
+		prev = cols
+	}
+	if strings.Join(restored, " ") != "STATE CPU MEMORY RESTARTS" {
+		t.Fatalf("restore order %v", restored)
+	}
+}
+
+// The PID column widens for long IDs instead of cutting the identifying
+// column.
+func TestWidePIDsAreNotTruncated(t *testing.T) {
+	tm := New()
+	tm.SetProcesses([]ProcessRow{
+		{ID: 7, Name: "short", State: "running"},
+		{ID: 1234567, Name: "long-pid", State: "running"},
+	})
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	for _, b := range []ui.Bounds{{Width: 80, Height: 20}, {Width: 30, Height: 4}} {
+		if out := tm.Render(kit, b); !strings.Contains(out, "1234567") {
+			t.Fatalf("%+v: PID cut:\n%s", b, out)
+		}
+	}
+}
+
+// Below the bordered table's height the selected process stays on screen
+// under a header, without panel chrome.
+func TestCompactTableKeepsSelection(t *testing.T) {
+	tm := New()
+	var procs []ProcessRow
+	for i := range 6 {
+		procs = append(procs, ProcessRow{ID: int32(10 + i), Name: fmt.Sprintf("proc-%d", i), State: "running"})
+	}
+	tm.SetProcesses(procs)
+	for range 4 {
+		tm.SelectNext()
+	}
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	for _, b := range []ui.Bounds{{Width: 26, Height: 3}, {Width: 26, Height: 1}, {Width: 40, Height: 5}} {
+		out := tm.Render(kit, b)
+		lines := strings.Split(out, "\n")
+		if len(lines) != b.Height || lipgloss.Width(out) != b.Width {
+			t.Fatalf("%+v: rendered %dx%d", b, lipgloss.Width(out), len(lines))
+		}
+		if !strings.Contains(out, kit.Theme().Focus.Marker+" 14") || !strings.Contains(out, "proc-4") {
+			t.Fatalf("%+v: selected process missing:\n%s", b, out)
+		}
+		if b.Height > 1 && !strings.HasPrefix(lines[0], "PID") {
+			t.Fatalf("%+v: no header:\n%s", b, out)
+		}
+	}
+}
+
+// Below the bordered tail's height the log text stays on screen under a
+// one-line heading and scrolls by the same offset; from that height the
+// bordered tail returns.
+func TestCompactLogsShowAndScrollText(t *testing.T) {
+	tm := New()
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	tm.ShowLogs(7, "echo", "")
+	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "(no output captured") {
+		t.Fatalf("empty compact logs:\n%s", out)
+	}
+	tm.ShowLogs(7, "echo", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight")
+	for h := 1; h < compactLogsHeight; h++ {
+		out := tm.Render(kit, ui.Bounds{Width: 26, Height: h})
+		if lines := strings.Split(out, "\n"); len(lines) != h || lipgloss.Width(out) != 26 {
+			t.Fatalf("height %d: rendered %dx%d", h, lipgloss.Width(out), len(lines))
+		}
+		if !strings.Contains(out, "one") || strings.Contains(out, "CHILD LOG TAIL") {
+			t.Fatalf("height %d: log text not shown compactly:\n%s", h, out)
+		}
+		if h >= 2 && !strings.HasPrefix(out, "LOGS · PID 7 · echo") {
+			t.Fatalf("height %d: heading missing:\n%s", h, out)
+		}
+	}
+	tm.SelectNext()
+	tm.SelectNext()
+	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "three") || !strings.Contains(out, "four") || strings.Contains(out, "two") {
+		t.Fatalf("scrolled compact logs:\n%s", out)
+	}
+	out := tm.Render(kit, ui.Bounds{Width: 40, Height: compactLogsHeight})
+	if !strings.Contains(out, "LOGS · PID 7") || !strings.Contains(out, "CHILD LOG TAIL") || !strings.Contains(out, "three") {
+		t.Fatalf("bordered tail did not return at height %d:\n%s", compactLogsHeight, out)
 	}
 }

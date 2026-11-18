@@ -12,9 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/viewport"
+	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"gostalgia/internal/experience/notifications"
 	"gostalgia/internal/experience/receipts"
@@ -23,7 +22,6 @@ import (
 	"gostalgia/internal/experience/ui"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/themedef"
-	"gostalgia/sdk"
 )
 
 const maxTranscript = 400
@@ -133,6 +131,8 @@ type Model struct {
 	busy            bool
 	scroll          int
 	kit             ui.Kit
+	ui              *bloom.Root // this model's own root; see root()
+	uiKey           rootKey
 	presentation    *appView
 	viewEpoch       uint64
 	viewSub         *ipc.ClientSubscription
@@ -280,8 +280,8 @@ func NewWithNotifs(ctx context.Context, c Caller, closed <-chan struct{}, notifs
 // NewWithThemeAndNotifs makes appearance and color capability explicit and
 // shares the supplied notification manager with services.
 func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}, t theme.Theme, mode ui.ColorMode, notifs *notifications.Manager) *Model {
-	return &Model{
-		ctx: ctx, client: c, closed: closed, kit: ui.New(t, mode), width: 80, height: 24, cwd: "/users/guest",
+	m := &Model{
+		ctx: ctx, client: c, closed: closed, width: 80, height: 24, cwd: "/users/guest",
 		mode: modeHome,
 		transcript: []entry{
 			{"Welcome home. A familiar prompt. A whole new environment.", "accent"},
@@ -293,6 +293,8 @@ func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}
 		lastProcs: make(map[int32]procTracking),
 		user:      "guest",
 	}
+	m.kit = ui.New(t, mode)
+	return m
 }
 
 func tickCmd() tea.Cmd {
@@ -762,7 +764,18 @@ func (m *Model) append(e entry) {
 	}
 }
 
+// Update passes msg to the bloom root, except the terminal's own colors and
+// profile, then to the shell.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var rootCmd tea.Cmd
+	if forwardToRoot(msg) {
+		rootCmd = m.root().Update(msg)
+	}
+	model, cmd := m.update(msg)
+	return model, tea.Batch(rootCmd, cmd)
+}
+
+func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tickMsg:
 		m.initExperience()
@@ -1649,272 +1662,6 @@ func (m *Model) SetThemeByName(name string) bool {
 func safe(s string) string { return ui.Sanitize(s) }
 
 func dosPath(p string) string { return "C:" + strings.ReplaceAll(p, "/", `\`) }
-
-// View declares the shell frame plus the terminal modes it needs. Alternate
-// screen and other v1 program options are declarative View fields in v2, so
-// the shell owns its screen mode here instead of at NewProgram time.
-func (m *Model) View() tea.View {
-	v := tea.NewView(m.render())
-	v.AltScreen = true
-	// Ask for kitty event types (key releases and repeat flags) on top of
-	// the disambiguation v2 already requests. The request is progressive:
-	// a terminal that doesn't speak the protocol ignores it, and the
-	// negotiated answer arrives as KeyboardEnhancementsMsg.
-	v.KeyboardEnhancements.ReportEventTypes = true
-	return v
-}
-
-func (m *Model) render() string {
-	m.initExperience()
-	if m.width <= 0 || m.height <= 0 {
-		return ""
-	}
-	bounds := ui.Bounds{Width: m.width, Height: m.height}
-	if m.width < 30 || m.height < 10 {
-		return ui.Fit(m.kit.Text("GOSTALGIA\nResize to 30×10 or larger.\nCtrl-C exits."), bounds)
-	}
-	panelBounds := ui.Bounds{Width: m.width, Height: m.height - 1}
-	w := m.kit.PanelContentBounds(panelBounds).Width
-
-	active := 0
-	switch m.currentMode() {
-	case modeHome:
-		active = 0
-	case modeLauncher:
-		active = 1
-	case modePrompt:
-		active = 2
-	}
-	if m.taskView {
-		active = 3
-	} else if m.notifView {
-		active = 4
-	}
-
-	notifLabel := "Notifications"
-	if m.notifs != nil && m.notifs.UnseenCount() > 0 {
-		notifLabel = fmt.Sprintf("Notifications (%d)", m.notifs.UnseenCount())
-	}
-	tabItems := []ui.Tab{
-		{Label: "Home"},
-		{Label: "Apps"},
-		{Label: "Prompt"},
-		{Label: "Tasks"},
-		{Label: notifLabel},
-	}
-	if m.presentation != nil {
-		tabItems = append(tabItems, ui.Tab{Label: viewText(m.presentation.data.Title)})
-		active = len(tabItems) - 1
-	}
-	tabs := m.kit.Tabs(tabItems, active, w)
-	statusLabel := "ONLINE"
-	if m.attached {
-		statusLabel = "ATTACHED"
-	}
-	userName := viewText(m.user)
-	if userName == "" {
-		userName = "guest"
-	}
-	badge := m.kit.Badge(statusLabel, theme.Success, w) + m.kit.Muted(fmt.Sprintf("   %s · C: environment drive", userName))
-
-	toastView := ""
-	toastLines := 0
-	if m.notifs != nil && !m.notifView {
-		toastView = m.notifs.RenderToasts(m.kit, w)
-		if toastView != "" {
-			toastLines = strings.Count(toastView, "\n") + 1
-		}
-	}
-
-	bodyHeight := max(1, m.height-9-toastLines)
-	var lines []string
-
-	if m.paletteOpen {
-		lines = m.renderPalette(w, bodyHeight)
-	} else if m.taskView && m.tasks != nil {
-		panelStr := m.tasks.Render(m.kit, ui.Bounds{Width: w, Height: bodyHeight})
-		lines = strings.Split(panelStr, "\n")
-	} else if m.notifView && m.notifs != nil {
-		panelStr := m.notifs.RenderPanel(m.kit, ui.Bounds{Width: w, Height: bodyHeight})
-		lines = strings.Split(panelStr, "\n")
-	} else if m.presentation != nil {
-		lines = m.viewLines(bodyHeight)
-		for i, line := range lines {
-			lines[i] = ui.Truncate(line, w)
-		}
-	} else {
-		switch m.currentMode() {
-		case modeLauncher:
-			lines = m.renderLauncher(w, bodyHeight)
-		case modeHome:
-			lines = m.renderHome(w, bodyHeight)
-		default:
-			for _, e := range m.transcript {
-				line := ui.Wrap(e.text, w)
-				switch e.kind {
-				case "accent":
-					line = m.kit.Heading(line)
-				case "muted":
-					line = m.kit.Muted(line)
-				case "command":
-					line = m.kit.Heading(line)
-				case "error":
-					line = m.kit.StatusText(line, theme.Error)
-				default:
-					line = m.kit.Text(line)
-				}
-				lines = append(lines, strings.Split(line, "\n")...)
-			}
-		}
-	}
-
-	var body string
-	if m.paletteOpen || m.currentMode() == modeLauncher || m.currentMode() == modeHome || m.presentation != nil || m.taskView || m.notifView {
-		if len(lines) > bodyHeight {
-			lines = lines[:bodyHeight]
-		}
-		body = ui.Fit(strings.Join(lines, "\n"), ui.Bounds{Width: w, Height: bodyHeight})
-	} else {
-		// Transcript scrollback delegates its window to bubbles/viewport
-		// (issue #185). m.scroll stays the canonical "lines back from the
-		// tail" offset; the viewport offsets from the top, so callers keep
-		// the same scroll contract.
-		vp := viewport.New(viewport.WithWidth(w), viewport.WithHeight(bodyHeight))
-		vp.SetContentLines(lines)
-		vp.SetYOffset(len(lines) - bodyHeight - m.scroll)
-		body = vp.View()
-	}
-	if toastView != "" {
-		body = body + "\n" + toastView
-	}
-
-	promptPath := safe(dosPath(m.cwd))
-	if lipgloss.Width(promptPath) > w/2 {
-		promptPath = "C:…" + ui.Tail(promptPath, max(1, w/2-3))
-	}
-	prompt := m.kit.Heading(promptPath + "> ")
-	if m.paletteOpen {
-		prompt = m.kit.Heading("PALETTE> ") + m.kit.Muted("Type to filter · ↑↓ navigate · Enter execute · Esc close")
-	} else if m.presentation != nil {
-		prompt += m.kit.Muted("App view owns focus. Esc returns to prompt.")
-	} else if m.taskView {
-		prompt += m.kit.Muted("Task Manager owns focus. Esc returns to prompt.")
-	} else if m.notifView {
-		prompt += m.kit.Muted("Notification Center owns focus. Esc returns to prompt.")
-	} else if m.busy {
-		// A static busy badge, not bubbles/spinner (issue #185): the kit is
-		// deliberately stateless and never schedules a tick, so ReducedMotion
-		// themes lose nothing. Install/update/rollback are one-shot IPC calls
-		// with no progress stream to animate anyway.
-		prompt += m.kit.Badge("", theme.Busy, max(0, w-lipgloss.Width(prompt)))
-	} else if m.currentMode() == modeLauncher {
-		filtered := m.filteredApps()
-		if len(filtered) > 0 && m.selected < len(filtered) && filtered[m.selected].Running {
-			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter relaunch, F3 stop, F4 view.", viewText(filtered[m.selected].Manifest.Name), filtered[m.selected].PID), theme.Success)
-		} else if len(filtered) > 0 && m.selected < len(filtered) {
-			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop · F4 view · Esc prompt.", viewText(filtered[m.selected].Manifest.Name)))
-		} else {
-			prompt += m.kit.Muted("Esc returns to prompt.")
-		}
-	} else if m.currentMode() == modeHome {
-		prompt += m.kit.Muted("Home view owns focus. Esc returns to prompt · Ctrl-P palette.")
-	} else {
-		// Show a cursor-centered slice rather than allowing long pasted input to
-		// push the prompt off screen. Cell width, not bytes, controls the slice.
-		room := max(1, w-lipgloss.Width(prompt)-1)
-		before := ui.Tail(string(m.input[:m.cursor]), room/2)
-		after := ui.Fit(string(m.input[m.cursor:]), ui.Bounds{Width: room - lipgloss.Width(before), Height: 1})
-		prompt += m.kit.Text(before) + m.kit.Selection(" ") + m.kit.Text(after)
-	}
-
-	exitHelp := "EXIT"
-	if m.attached {
-		exitHelp = "DETACH"
-	}
-
-	var bindings []ui.Binding
-	if m.paletteOpen {
-		items := m.filteredPaletteItems()
-		bindings = []ui.Binding{
-			{Key: "Esc", Help: "CLOSE"},
-			{Key: "Enter", Help: "EXECUTE", Disabled: len(items) == 0},
-			{Key: "↑↓", Help: "NAVIGATE", Disabled: len(items) == 0},
-			{Key: "Ctrl-C", Help: exitHelp},
-		}
-	} else if m.taskView && m.tasks != nil {
-		if m.tasks.Mode() == taskmanager.ModeLogs {
-			bindings = []ui.Binding{
-				{Key: "Esc", Help: "BACK"}, {Key: "↑↓", Help: "SCROLL"}, {Key: "Ctrl-C", Help: exitHelp},
-			}
-		} else if m.tasks.Mode() == taskmanager.ModeReceipt {
-			bindings = []ui.Binding{
-				{Key: "Esc", Help: "BACK"}, {Key: "Ctrl-C", Help: exitHelp},
-			}
-		} else {
-			bindings = []ui.Binding{
-				{Key: "Esc", Help: "PROMPT"}, {Key: "Enter", Help: "VIEW"},
-				{Key: "l", Help: "LOGS"}, {Key: "c", Help: "RECEIPT"},
-				{Key: "x", Help: "STOP"}, {Key: "r", Help: "REAP"},
-				{Key: "↑↓", Help: "SELECT"}, {Key: "Ctrl-C", Help: exitHelp},
-			}
-		}
-	} else if m.notifView {
-		bindings = []ui.Binding{
-			{Key: "Esc", Help: "PROMPT"}, {Key: "Enter", Help: "VIEW"},
-			{Key: "d", Help: "DISMISS"}, {Key: "c", Help: "CLEAR"},
-			{Key: "n", Help: "DND"}, {Key: "↑↓", Help: "SELECT"},
-			{Key: "Ctrl-C", Help: exitHelp},
-		}
-	} else if m.presentation != nil {
-		v := m.presentation
-		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
-		action := max(0, v.focus-len(v.data.Fields))
-		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
-		bindings = []ui.Binding{
-			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-C", Help: exitHelp},
-			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
-			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F2", Help: "APPS"},
-		}
-	} else if m.currentMode() == modeLauncher {
-		filtered := m.filteredApps()
-		bindings = []ui.Binding{
-			{Key: "Esc", Help: "PROMPT"},
-			{Key: "Enter", Help: "RUN", Disabled: m.busy || len(filtered) == 0},
-			{Key: "F3", Help: "STOP", Disabled: m.busy || len(filtered) == 0},
-			{Key: "F4", Help: "VIEW", Disabled: m.busy || len(filtered) == 0},
-			{Key: "F5", Help: "TASKS"},
-			{Key: "↑↓", Help: "SELECT", Disabled: m.busy || len(filtered) == 0},
-			{Key: "Ctrl-P", Help: "PALETTE"},
-		}
-	} else if m.currentMode() == modeHome {
-		items := m.homeItems()
-		bindings = []ui.Binding{
-			{Key: "F1", Help: "PROMPT"},
-			{Key: "F2", Help: "APPS"},
-			{Key: "F5", Help: "TASKS"},
-			{Key: "F6", Help: "ALERTS"},
-			{Key: "Ctrl-P", Help: "PALETTE"},
-			{Key: "↑↓", Help: "SELECT", Disabled: len(items) == 0},
-			{Key: "Enter", Help: "OPEN", Disabled: len(items) == 0},
-			{Key: "Ctrl-C", Help: exitHelp},
-		}
-	} else {
-		bindings = []ui.Binding{
-			{Key: "Ctrl-C", Help: exitHelp},
-			{Key: "F1", Help: "HOME"},
-			{Key: "F2", Help: "APPS"},
-			{Key: "F5", Help: "TASKS"},
-			{Key: "F6", Help: "ALERTS"},
-			{Key: "Tab", Help: "COMPLETE", Disabled: m.busy},
-			{Key: "↑↓", Help: "HISTORY", Disabled: m.busy},
-			{Key: "Ctrl-P", Help: "PALETTE"},
-		}
-	}
-
-	content := strings.Join([]string{tabs, ui.Truncate(badge, w), "", body, "", ui.Truncate(prompt, w)}, "\n")
-	return m.kit.Panel(ui.Panel{Title: "G O S T A L G I A  /  PERSONAL COMPUTING", Body: content},
-		panelBounds) + "\n" + m.kit.HelpBar(bindings, m.width)
-}
 
 // RestoreTerminal writes explicit control sequences to stdout to restore standard
 // terminal state (show cursor, exit alternate screen, reset styles, disable mouse

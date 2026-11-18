@@ -339,10 +339,13 @@ bloom's own `go.mod` sets the floors that minimal version selection applied
 here: Go 1.27.3, Bubble Tea v2.1.1, x/ansi v0.11.9, and a newer
 `charmbracelet/ultraviolet` pseudo-version (`clipperhouse/uax29/v2 v2.7.0` was
 already pinned); the indirect `mattn/go-runewidth`, `xo/terminfo`,
-`golang.org/x/sync`, and `golang.org/x/sys` moved up with them. In #207 bloom
-is imported only by the proof test `internal/experience/ui/bloom_proof_test.go`;
-no production code is wired to it yet. The usage rules for later integration are in
-[shell.md](shell.md#bloom-layout-and-compositing-issue-207).
+`golang.org/x/sync`, and `golang.org/x/sys` moved up with them. Since #208
+the shell frame is a bloom layout tree: each shell model owns a root built
+with explicit theme colors, and kit output enters the tree through the
+`internal/experience/ui` adapters (`Leaf`, `PanelNode`), so the kit still owns
+panel geometry. The usage rules are in
+[shell.md](shell.md#bloom-layout-and-compositing-issue-207) and the frame in
+[shell.md](shell.md#shell-frame-layout-issue-208).
 
 `go list -deps gostalgia/internal/runtime gostalgia/sdk` contains only Gostalgia
 and standard-library packages. Automated tests in `test/e2e/dependencies_test.go`

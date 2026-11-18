@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"bloomfx.dev/bloom"
 	"charm.land/bubbles/v2/viewport"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/theme"
@@ -336,6 +337,9 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 }
 
 func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
+	if bounds.Height < compactLogsHeight {
+		return m.renderCompactLogs(kit, bounds)
+	}
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
 	h := contentBounds.Height
@@ -345,19 +349,9 @@ func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
 	lines = append(lines, kit.Muted("Esc or Enter returns to process table · ↑↓ scroll"))
 	lines = append(lines, "")
 
-	rawLines := strings.Split(m.logsContent, "\n")
-	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
+	if visible, ok := m.visibleLogLines(max(1, h-len(lines))); !ok {
 		lines = append(lines, kit.Muted("(no output captured yet)"))
 	} else {
-		availableRows := max(1, h-len(lines))
-		// The log tail delegates its clamp to bubbles/viewport (issue #185);
-		// logsScroll stays the canonical offset so SelectPrev/SelectNext
-		// and tests keep the same contract.
-		vp := viewport.New(viewport.WithHeight(availableRows))
-		vp.SetContentLines(rawLines)
-		vp.SetYOffset(m.logsScroll)
-		scroll := vp.YOffset()
-		visible := rawLines[scroll:min(len(rawLines), scroll+availableRows)]
 		for _, l := range visible {
 			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
 		}
@@ -370,7 +364,52 @@ func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
 	}, bounds)
 }
 
+// compactLogsHeight is the smallest height at which the bordered log tail
+// shows a log line under its heading and help. Below it the tail drops its
+// chrome so the log text itself stays on screen.
+const compactLogsHeight = 7
+
+// renderCompactLogs keeps the log tail usable in a body too short for its
+// panel: the process it belongs to when there is room, then as many log
+// lines as fit, scrolled by the same offset as the bordered tail.
+func (m *Model) renderCompactLogs(kit ui.Kit, bounds ui.Bounds) string {
+	w, rows := bounds.Width, bounds.Height
+	var lines []string
+	if rows >= 2 {
+		lines = append(lines, kit.Heading(ui.Truncate(fmt.Sprintf("LOGS · PID %d · %s", m.logsPID, m.logsName), w)))
+		rows--
+	}
+	if visible, ok := m.visibleLogLines(rows); !ok {
+		lines = append(lines, kit.Muted(ui.Truncate("(no output captured yet)", w)))
+	} else {
+		for _, l := range visible {
+			lines = append(lines, kit.Text(ui.Truncate(l, w)))
+		}
+	}
+	return ui.Fit(strings.Join(lines, "\n"), bounds)
+}
+
+// visibleLogLines is the window of log lines rows tall at the current
+// scroll offset; ok is false when no output has been captured.
+func (m *Model) visibleLogLines(rows int) (visible []string, ok bool) {
+	rawLines := strings.Split(m.logsContent, "\n")
+	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
+		return nil, false
+	}
+	// The log tail delegates its clamp to bubbles/viewport (issue #185);
+	// logsScroll stays the canonical offset so SelectPrev/SelectNext and
+	// tests keep the same contract.
+	vp := viewport.New(viewport.WithHeight(rows))
+	vp.SetContentLines(rawLines)
+	vp.SetYOffset(m.logsScroll)
+	scroll := vp.YOffset()
+	return rawLines[scroll:min(len(rawLines), scroll+rows)], true
+}
+
 func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
+	if bounds.Height < compactTableHeight {
+		return m.renderCompactTable(kit, bounds)
+	}
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
 	h := contentBounds.Height
@@ -393,41 +432,18 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 	// monochrome modes where the contract requires the theme's text focus
 	// marker, and its self-sizing columns fight the fixed DOS column
 	// budget below.
-	// Columns:
-	// PID (5) | NAME (20) | STATE (14) | RESTARTS (8) | CPU (8) | MEMORY (10)
-	headerRow := fmt.Sprintf("%-5s %-20s %-14s %-8s %-8s %-10s",
-		"PID", "NAME", "STATE", "RESTARTS", "CPU", "MEMORY")
+	cols := solveColumns(w-markerWidth, m.pidWidth())
+	headerRow := columnLine(cols, func(c column) string { return c.title })
 
 	var rows []string
 	rows = append(rows, kit.Heading(ui.Truncate(headerRow, w)))
-	rows = append(rows, kit.Muted(strings.Repeat("─", min(w, len(headerRow)))))
+	rows = append(rows, kit.Muted(strings.Repeat("─", min(w, ui.GraphemeWidth(headerRow)))))
 
 	headerCount := len(rows)
 	footerReserve := 2 // status and help lines
 	availableRows := max(1, h-headerCount-footerReserve)
 
-	start := max(0, min(m.selected-availableRows+1, max(0, len(m.procs)-availableRows)))
-	end := min(len(m.procs), start+availableRows)
-
-	for i := start; i < end; i++ {
-		p := m.procs[i]
-		focused := i == m.selected
-
-		stateStr := formatState(p)
-		cpuStr := formatCPU(p.Resources)
-		memStr := formatMemory(p.Resources)
-		nameStr := ui.Truncate(ui.Sanitize(p.Name), 20)
-
-		line := fmt.Sprintf("%-5d %-20s %-14s %-8d %-8s %-10s",
-			p.ID, nameStr, stateStr, p.RestartCount, cpuStr, memStr)
-
-		if focused {
-			line = kit.Selection(ui.Truncate(kit.Theme().Focus.Marker+" "+line, w))
-		} else {
-			line = kit.Text(ui.Truncate("  "+line, w))
-		}
-		rows = append(rows, line)
-	}
+	rows = append(rows, m.processLines(kit, cols, w, availableRows)...)
 
 	// Pad empty space if needed
 	for len(rows) < h-footerReserve {
@@ -462,6 +478,144 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 		Body:    strings.Join(rows, "\n"),
 		Focused: true,
 	}, bounds)
+}
+
+// compactTableHeight is the smallest height at which the bordered table
+// still shows a process row. Below it the table drops its panel chrome and
+// footer so the selected process stays identifiable.
+const compactTableHeight = 6
+
+// markerWidth is the focus marker and space that prefix every process row.
+const markerWidth = 2
+
+// Collapse priorities of the secondary columns; the lowest is dropped first
+// when a narrow terminal cannot fit every column's minimum. PID and NAME are
+// primary and never collapse: they identify the process the keys act on.
+const (
+	prioRestarts = 1
+	prioMemory   = 2
+	prioCPU      = 3
+	prioState    = 4
+)
+
+// ColumnID identifies a table column in a solved bloom frame.
+type ColumnID string
+
+type column struct {
+	id       ColumnID
+	title    string
+	width    int // natural width; the solved width once laid out
+	min      int // nonzero: shrinks down to min instead of collapsing
+	collapse int // nonzero: Collapsible priority
+	cell     func(ProcessRow) string
+}
+
+var tableColumns = []column{
+	{id: "pid", title: "PID", width: 5, cell: func(p ProcessRow) string { return fmt.Sprint(p.ID) }},
+	{id: "name", title: "NAME", width: 20, min: 8, cell: func(p ProcessRow) string { return ui.Sanitize(p.Name) }},
+	{id: "state", title: "STATE", width: 14, collapse: prioState, cell: formatState},
+	{id: "restarts", title: "RESTARTS", width: 8, collapse: prioRestarts, cell: func(p ProcessRow) string { return fmt.Sprint(p.RestartCount) }},
+	{id: "cpu", title: "CPU", width: 8, collapse: prioCPU, cell: func(p ProcessRow) string { return formatCPU(p.Resources) }},
+	{id: "memory", title: "MEMORY", width: 10, collapse: prioMemory, cell: func(p ProcessRow) string { return formatMemory(p.Resources) }},
+}
+
+// columnsRow is the table's column layout as a bloom row of Collapsible
+// slots one cell apart. The PID column widens to pidWidth so no PID is cut.
+func columnsRow(pidWidth int) bloom.FlexNode {
+	slots := make([]bloom.Child, len(tableColumns))
+	for i, c := range tableColumns {
+		if c.id == "pid" {
+			c.width = max(c.width, pidWidth)
+		}
+		slot := bloom.Fixed(c.width, nil)
+		if c.min > 0 {
+			slot = bloom.Fill(nil).Min(c.min).Max(c.width)
+		}
+		if c.collapse > 0 {
+			slot = slot.Collapsible(c.collapse)
+		}
+		slots[i] = slot.ID(c.id)
+	}
+	return bloom.Row(slots...).Gap(1)
+}
+
+// solveColumns lays the columns out in width cells and returns the visible
+// ones at their solved widths.
+func solveColumns(width, pidWidth int) []column {
+	frame := bloom.Solve(max(0, width), 1, columnsRow(pidWidth))
+	var cols []column
+	for _, c := range tableColumns {
+		if r, ok := frame.Rect(c.id); ok && r.Dx() > 0 {
+			c.width = r.Dx()
+			cols = append(cols, c)
+		}
+	}
+	return cols
+}
+
+// VisibleColumns reports the titles of the columns a table content width
+// shows, in order, for PIDs of up to five digits; wider PIDs widen the PID
+// column and can drop secondary columns sooner.
+func VisibleColumns(width int) []string {
+	var titles []string
+	for _, c := range solveColumns(width-markerWidth, 0) {
+		titles = append(titles, c.title)
+	}
+	return titles
+}
+
+func columnLine(cols []column, text func(column) string) string {
+	cells := make([]string, len(cols))
+	for i, c := range cols {
+		s := ui.Truncate(text(c), c.width)
+		cells[i] = s + strings.Repeat(" ", max(0, c.width-ui.GraphemeWidth(s)))
+	}
+	return strings.Join(cells, " ")
+}
+
+// pidWidth is the widest PID in the table, in cells.
+func (m *Model) pidWidth() int {
+	w := 0
+	for _, p := range m.procs {
+		w = max(w, len(fmt.Sprint(p.ID)))
+	}
+	return w
+}
+
+// processLines renders up to n process rows, windowed so the selected row
+// stays visible.
+func (m *Model) processLines(kit ui.Kit, cols []column, w, n int) []string {
+	start := max(0, min(m.selected-n+1, max(0, len(m.procs)-n)))
+	end := min(len(m.procs), start+n)
+	var lines []string
+	for i := start; i < end; i++ {
+		p := m.procs[i]
+		line := columnLine(cols, func(c column) string { return c.cell(p) })
+		if i == m.selected {
+			lines = append(lines, kit.Selection(ui.Truncate(kit.Theme().Focus.Marker+" "+line, w)))
+		} else {
+			lines = append(lines, kit.Text(ui.Truncate("  "+line, w)))
+		}
+	}
+	return lines
+}
+
+// renderCompactTable keeps the table usable in a body too short for its
+// panel: a header when there is room, then the rows around the selection.
+func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
+	w := bounds.Width
+	if len(m.procs) == 0 {
+		return ui.Fit(kit.Muted("No Processes Found"), bounds)
+	}
+	cols := solveColumns(w-markerWidth, m.pidWidth())
+	var lines []string
+	n := bounds.Height
+	if n >= 2 {
+		lines = append(lines, kit.Heading(ui.Truncate(columnLine(cols, func(c column) string { return c.title }), w)))
+		n--
+	}
+	lines = append(lines, m.processLines(kit, cols, w, n)...)
+	return ui.Fit(strings.Join(lines, "\n"), bounds)
 }
 
 func formatState(p ProcessRow) string {

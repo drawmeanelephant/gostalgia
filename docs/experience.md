@@ -189,6 +189,8 @@ autodetection or host environment heuristics:
 | `Progress` | Static clamped fraction/percentage, or indeterminate text without a fabricated percentage. No tick or animation command. |
 | `Notice` | Friendly default or caller-supplied empty, busy, disabled, success, and error messages. |
 | `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. |
+| `Leaf`, `TabsLeaf`, `HelpBarLeaf` | bloom adapters: a `bloom.Layouter` that renders kit output into exactly the rectangle its slot gets. `Kit.Leaf` paints panel-body lines on the surface; `Sized` places output as rendered; `Natural` sets the size an `Auto` slot asks for. Render functions must not change state. |
+| `PanelNode` | `Panel` as a bloom node: draws the same border, title and padding as `Panel` and lays its child out in `PanelContentRect`, the body's offset and `PanelContentBounds` size. |
 
 Named states are `Normal`, `Disabled`, `Busy`, `Success`, `Error`, and `Empty`.
 Focus is independent of status; disabled panels/tabs do not appear focused.
@@ -444,8 +446,9 @@ Prompt line navigation and editing in `internal/experience/shell` operate at gra
 - Rectangular components occupy exactly their supplied positive outer bounds.
 - Nonpositive bounds produce an empty string; tiny panels fall back to compact text rather than drawing an overflowing frame.
 - 80×24 is the recommended standard shell viewport. Components and shell views are tested from tiny bounds through 240×80.
-- When viewport dimensions fall between 80×24 and 30×10, views remain fully usable with compact layouts and bounded text truncation.
+- When viewport dimensions fall between 80×24 and 30×10, views stay keyboard-usable with compact layouts and bounded text truncation. At the 30×10 minimum the Notification Center, task log tail and crash receipt switch to compact forms that keep the selected notification, the log text, and the receipt's identity and reason on screen; see [shell.md](shell.md#shell-frame-layout-issue-208).
 - Below 30×10, the shell gracefully degrades to a clean, bounded notice (`GOSTALGIA / Resize to 30×10 or larger. / Ctrl-C exits.`) without crashing, clipping errors, or outer border overflow.
+- The shell frame is a bloom layout tree whose optional rows and secondary Home sections and Task Manager columns collapse by priority; see [shell.md](shell.md#shell-frame-layout-issue-208).
 
 ## Terminal control injection defense and restoration
 
@@ -493,8 +496,9 @@ also direct experience imports:
 
 `bloomfx.dev/bloom v0.0.0-alpha.6` is approved for layout and compositing,
 pinned exactly because it is pre-1.0 (see
-[shell.md](shell.md#bloom-layout-and-compositing-issue-207)). In #207 only a
-proof test imports it; the kit remains the visual vocabulary.
+[shell.md](shell.md#bloom-layout-and-compositing-issue-207)). Since #208 it
+lays out and draws the shell frame through the adapters above; the kit
+remains the visual vocabulary.
 
 All stay inside experience. The dependency tests allow Charm and bloom under
 `internal/experience/` and still verify stdlib-only runtime/SDK/apps/`gctl`

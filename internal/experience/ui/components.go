@@ -54,7 +54,7 @@ func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 	}
 	stroke := func(s string) string { return k.paint(s, color, palette.Surface, false) }
 	inner := bounds.Width - 2
-	padding := min(max(0, k.theme.Spacing.PanelX), inner/2)
+	padding := k.panelPadding(bounds.Width)
 	line := func(text string) string {
 		return stroke(border.Left) + k.Text(strings.Repeat(" ", padding)+
 			Fit(text, Bounds{inner - 2*padding, 1})+strings.Repeat(" ", padding)) + stroke(border.Right)

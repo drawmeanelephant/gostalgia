@@ -232,9 +232,7 @@ func (m *Model) closePalette() {
 func (m *Model) renderPalette(w, bodyHeight int) []string {
 	var lines []string
 	filtered := m.filteredPaletteItems()
-	if m.paletteSelected >= len(filtered) {
-		m.paletteSelected = max(0, len(filtered)-1)
-	}
+	selected := min(m.paletteSelected, max(0, len(filtered)-1))
 
 	paletteW := min(w-2, 66)
 	paletteH := min(bodyHeight, 14)
@@ -248,18 +246,18 @@ func (m *Model) renderPalette(w, bodyHeight int) []string {
 	} else {
 		availRows := max(1, paletteH-5)
 		visible := availRows
-		start := max(0, m.paletteSelected-visible+1)
+		start := max(0, selected-visible+1)
 		end := min(len(filtered), start+visible)
 
 		for i := start; i < end; i++ {
 			it := filtered[i]
 			cursor := "  "
-			if i == m.paletteSelected {
+			if i == selected {
 				cursor = m.kit.Theme().Focus.Marker + " "
 			}
 			tagBadge := "[" + it.Tag + "] "
 			detailText := "  " + it.Detail
-			if i == m.paletteSelected {
+			if i == selected {
 				inner = append(inner, m.kit.Selection(ui.Truncate(cursor+tagBadge+it.Title, paletteW-4))+" "+m.kit.Muted(ui.Truncate(detailText, paletteW/2)))
 			} else {
 				inner = append(inner, m.kit.Heading(cursor+tagBadge)+m.kit.Text(it.Title)+m.kit.Muted(ui.Truncate(detailText, paletteW/2)))
@@ -289,6 +287,7 @@ func (m *Model) renderPalette(w, bodyHeight int) []string {
 
 func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredPaletteItems()
+	m.paletteSelected = min(m.paletteSelected, max(0, len(filtered)-1))
 	if msg.Code == tea.KeyBackspace {
 		// Backspace deletes regardless of modifiers, matching app-view
 		// fields (Ctrl+Backspace included).

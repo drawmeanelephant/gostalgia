@@ -237,3 +237,46 @@ func TestRenderPanel(t *testing.T) {
 		t.Fatalf("panel %dx%d exceeds %dx%d", lipgloss.Width(popView), lipgloss.Height(popView), bounds.Width, bounds.Height)
 	}
 }
+
+// Below the panel's height the selected entry keeps its title and message
+// on screen without panel chrome; from that height the bordered panel
+// returns.
+func TestRenderPanelCompactKeepsSelectedEntry(t *testing.T) {
+	mgr := NewManager(10, 3, 5)
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	if out := mgr.RenderPanel(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "No notifications") {
+		t.Fatalf("empty compact panel:\n%s", out)
+	}
+	for i := range 4 {
+		mgr.Record(Notification{ID: fmt.Sprintf("n%d", i), Title: fmt.Sprintf("Event %d", i), Message: fmt.Sprintf("detail %d", i), Level: LevelError, Timestamp: time.Now()})
+	}
+	mgr.SelectNext()
+	mgr.SelectNext()
+	sel := mgr.Selected()
+	marker := kit.Theme().Focus.Marker
+	for h := 1; h < compactPanelHeight; h++ {
+		out := mgr.RenderPanel(kit, ui.Bounds{Width: 26, Height: h})
+		if lines := strings.Split(out, "\n"); len(lines) != h || lipgloss.Width(out) != 26 {
+			t.Fatalf("height %d: rendered %dx%d", h, lipgloss.Width(out), len(lines))
+		}
+		if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, marker+" * "+sel.Title) {
+			t.Fatalf("height %d: selected entry not shown compactly:\n%s", h, out)
+		}
+		if h >= 2 && !strings.Contains(out, sel.Message) {
+			t.Fatalf("height %d: selected message missing:\n%s", h, out)
+		}
+		if h >= 3 && !strings.Contains(out, "3/4 · 4 unread") {
+			t.Fatalf("height %d: summary missing:\n%s", h, out)
+		}
+	}
+	// A tall but narrow panel has no room for a title beside the badge and
+	// timestamp, so it stays compact and shows more entries.
+	out := mgr.RenderPanel(kit, ui.Bounds{Width: 26, Height: 20})
+	if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, "Event 0") || !strings.Contains(out, marker+" * "+sel.Title) {
+		t.Fatalf("narrow panel not compact:\n%s", out)
+	}
+	out = mgr.RenderPanel(kit, ui.Bounds{Width: 60, Height: compactPanelHeight})
+	if !strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, sel.Title) {
+		t.Fatalf("bordered panel did not return at height %d:\n%s", compactPanelHeight, out)
+	}
+}

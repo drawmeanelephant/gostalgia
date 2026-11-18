@@ -13,8 +13,7 @@ import (
 	"gostalgia/internal/experience/theme"
 )
 
-// These proofs pin how the exact bloom release composes kit output. bloom is
-// not wired into production yet; the shell keeps rendering kit strings itself.
+// These proofs pin how the exact bloom release composes kit output.
 
 var sgrPattern = regexp.MustCompile("\x1b\\[[0-9;:]*m")
 

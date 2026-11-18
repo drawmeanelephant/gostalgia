@@ -28,9 +28,7 @@ func (m *Model) filteredApps() []appStatus {
 func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	var lines []string
 	filtered := m.filteredApps()
-	if m.selected >= len(filtered) {
-		m.selected = max(0, len(filtered)-1)
-	}
+	selected := min(m.selected, max(0, len(filtered)-1))
 
 	searchBar := m.kit.Heading("SEARCH: ")
 	if m.launcherQuery == "" {
@@ -62,7 +60,7 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 		cardHeight = 2
 	}
 	visible := max(1, (availHeight-2)/cardHeight)
-	start := max(0, m.selected-visible+1)
+	start := max(0, selected-visible+1)
 	end := min(len(filtered), start+visible)
 
 	for i := start; i < end; i++ {
@@ -73,13 +71,13 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 		}
 		card := m.kit.AppCard(ui.AppCard{
 			Name: a.Manifest.Name, ID: a.Manifest.ID, Version: a.Manifest.Version,
-			Status: status, State: state, Focused: i == m.selected,
+			Status: status, State: state, Focused: i == selected,
 		}, ui.Bounds{Width: w, Height: cardHeight})
 		lines = append(lines, strings.Split(card, "\n")...)
 	}
 
-	if len(filtered) > 0 && m.selected < len(filtered) {
-		a := filtered[m.selected]
+	if len(filtered) > 0 {
+		a := filtered[selected]
 		lines = append(lines, m.kit.Muted(ui.Truncate(safe(a.Manifest.Description), w)),
 			m.kit.Muted(ui.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, " · ")), w)))
 	}
@@ -89,6 +87,7 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 
 func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	filtered := m.filteredApps()
+	m.selected = min(m.selected, max(0, len(filtered)-1))
 	if msg.Code == tea.KeyBackspace {
 		// Backspace deletes regardless of modifiers, matching app-view
 		// fields (Ctrl+Backspace included).
