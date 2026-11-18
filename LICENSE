@@ -27,6 +27,7 @@ Third-Party Notices
 Gostalgia's terminal experience is built on the Charm ecosystem. The
 following dependencies are used under their respective licenses:
 
+  bloomfx.dev/bloom                         MIT   (c) 2026 Liam Stanley
   github.com/charmbracelet/bubbletea        MIT   (c) 2020-2025 Charmbracelet, Inc
   github.com/charmbracelet/bubbles          MIT   (c) 2020-2025 Charmbracelet, Inc
   github.com/charmbracelet/lipgloss         MIT   (c) 2021-2023 Charmbracelet, Inc
