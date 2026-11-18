@@ -250,12 +250,26 @@ event-type request on the returned `tea.View`.
   `PID` and `NAME` never collapse, and the `PID` column widens so no ID is
   cut. Below six body rows the table drops its border and footer and shows
   a header plus the rows around the selected process.
-- **Known small-frame limit.** The Notification Center, the task log tail
-  and the crash receipt are bordered panels without a compact form. In the
-  three-row body of a 30×10 frame they show only their border and title;
-  their first entries appear at 15 to 18 rows, depending on the panel and
-  on how many toasts are showing. Their keys still act on the selected
-  notification or log.
+- **Compact diagnostic views.** The Notification Center, the task log tail
+  and the crash receipt are bordered panels when there is room. In a body
+  too short for that panel to show its content (the 30×10 frame leaves
+  three rows), each drops its border and shows its essential content:
+  - The Notification Center shows a position and unread summary, then the
+    entries around the selection, each as its title and message. It also
+    switches when the panel is too narrow to show an entry's title beside
+    its badge and timestamp. Below seven body rows it is always compact.
+  - The log tail shows a `LOGS · PID n · name` heading and then as many log
+    lines as fit. Up and Down scroll them from the same offset as the
+    bordered tail. Below seven body rows it is always compact.
+  - The crash receipt shows the process and PID, then the reason, the exit
+    code and state, the receipt ID and time, and the end of the log
+    excerpt. It switches when the bordered receipt could not reach its
+    reason line.
+
+  The keys do not change. Up, Down, Enter and `d` act on the entry on
+  screen, `c` and `n` work as before, and Esc goes back. Growing the
+  terminal restores the bordered panel with the same selection and log
+  offset.
 - **Below the minimum.** Under 30 columns or 10 rows the shell keeps its own
   notice, `GOSTALGIA / Resize to 30×10 or larger. / Ctrl-C exits.`, clipped
   to the terminal, instead of a squeezed frame. Exactly 30×10 draws the

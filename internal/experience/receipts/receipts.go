@@ -172,6 +172,9 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 		return ""
 	}
 	contentBounds := kit.PanelContentBounds(bounds)
+	if contentBounds.Height < identityRows(r) {
+		return renderCompact(kit, r, bounds)
+	}
 	w := contentBounds.Width
 
 	timeStr := r.Timestamp.Format("2006-01-02 15:04:05")
@@ -211,6 +214,45 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 		State:   theme.Error,
 		Focused: true,
 	}, bounds)
+}
+
+// identityRows is how many rows the bordered receipt needs to show who
+// crashed and why: its heading, time line, restart count when nonzero and
+// reason when present.
+func identityRows(r CrashReceipt) int {
+	n := 2
+	if r.RestartCount > 0 {
+		n++
+	}
+	if r.Reason != "" {
+		n++
+	}
+	return n
+}
+
+// renderCompact is the receipt for a body too short for its panel: the
+// process and PID, then the reason, then the exit status, receipt ID and
+// the end of the log excerpt as far as room allows.
+func renderCompact(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
+	w := bounds.Width
+	status := fmt.Sprintf("Exit code: %d · State: %s", r.ExitCode, r.State)
+	if r.RestartCount > 0 {
+		status += fmt.Sprintf(" · Restarts: %d", r.RestartCount)
+	}
+	lines := []string{kit.Heading(ui.Truncate(fmt.Sprintf("%s (PID %d) · CRASH RECEIPT", r.Name, r.PID), w))}
+	if r.Reason != "" {
+		lines = append(lines, kit.StatusText(ui.Truncate("Reason: "+r.Reason, w), theme.Error))
+	}
+	lines = append(lines,
+		kit.Muted(ui.Truncate(status, w)),
+		kit.Muted(ui.Truncate(fmt.Sprintf("#%s · %s", r.ID, r.Timestamp.Format("2006-01-02 15:04:05")), w)))
+	if room := bounds.Height - len(lines); room > 0 {
+		excerpt := strings.Split(r.LogExcerpt, "\n")
+		for _, l := range excerpt[max(0, len(excerpt)-room):] {
+			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
+		}
+	}
+	return ui.Fit(strings.Join(lines, "\n"), bounds)
 }
 
 // FormatText formats a crash receipt as human-readable plain text lines.

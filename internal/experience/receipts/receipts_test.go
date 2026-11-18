@@ -128,3 +128,38 @@ func TestRenderReceipt(t *testing.T) {
 		t.Fatal("missing log excerpt in rendered receipt")
 	}
 }
+
+// When the bordered receipt cannot reach its reason line, the compact form
+// shows who crashed and why first; once it can, the bordered receipt
+// returns.
+func TestRenderReceiptCompactShowsIdentityAndReason(t *testing.T) {
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	r := New(7, "demo-service", "failed", 1, "panic in main", 2, "line 1\nline 2\npanic: nil pointer dereference\n")
+	r.ID = "CR-7-test"
+	need := 3 + identityRows(r) // border, title and bottom border
+	for h := 1; h < need; h++ {
+		out := Render(kit, r, ui.Bounds{Width: 26, Height: h})
+		if lines := strings.Split(out, "\n"); len(lines) != h || lipgloss.Width(out) != 26 {
+			t.Fatalf("height %d: rendered %dx%d", h, lipgloss.Width(out), len(lines))
+		}
+		if !strings.HasPrefix(out, "demo-service (PID 7)") {
+			t.Fatalf("height %d: identity not first:\n%s", h, out)
+		}
+		if h >= 2 && !strings.Contains(out, "Reason: panic in main") {
+			t.Fatalf("height %d: reason missing:\n%s", h, out)
+		}
+	}
+	if out := Render(kit, r, ui.Bounds{Width: 60, Height: 6}); !strings.Contains(out, "#CR-7-test") || !strings.Contains(out, "Restarts: 2") || !strings.Contains(out, "panic: nil pointer") {
+		t.Fatalf("compact receipt with room lost its details:\n%s", out)
+	}
+	out := Render(kit, r, ui.Bounds{Width: 40, Height: need})
+	if !strings.Contains(out, "CRASH RECEIPT #CR-7-test") || !strings.Contains(out, "Reason: panic in main") {
+		t.Fatalf("bordered receipt did not return at height %d:\n%s", need, out)
+	}
+
+	// Without a reason or restarts the bordered receipt needs less room.
+	plain := New(8, "quiet", "stopped", 0, "", 0, "")
+	if out := Render(kit, plain, ui.Bounds{Width: 60, Height: 5}); !strings.Contains(out, "CRASH RECEIPT #") || !strings.Contains(out, "Exit code: 0") {
+		t.Fatalf("bordered receipt without reason:\n%s", out)
+	}
+}

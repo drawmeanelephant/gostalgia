@@ -337,6 +337,9 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 }
 
 func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
+	if bounds.Height < compactLogsHeight {
+		return m.renderCompactLogs(kit, bounds)
+	}
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
 	h := contentBounds.Height
@@ -346,19 +349,9 @@ func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
 	lines = append(lines, kit.Muted("Esc or Enter returns to process table · ↑↓ scroll"))
 	lines = append(lines, "")
 
-	rawLines := strings.Split(m.logsContent, "\n")
-	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
+	if visible, ok := m.visibleLogLines(max(1, h-len(lines))); !ok {
 		lines = append(lines, kit.Muted("(no output captured yet)"))
 	} else {
-		availableRows := max(1, h-len(lines))
-		// The log tail delegates its clamp to bubbles/viewport (issue #185);
-		// logsScroll stays the canonical offset so SelectPrev/SelectNext
-		// and tests keep the same contract.
-		vp := viewport.New(viewport.WithHeight(availableRows))
-		vp.SetContentLines(rawLines)
-		vp.SetYOffset(m.logsScroll)
-		scroll := vp.YOffset()
-		visible := rawLines[scroll:min(len(rawLines), scroll+availableRows)]
 		for _, l := range visible {
 			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
 		}
@@ -369,6 +362,48 @@ func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
 		Body:    strings.Join(lines, "\n"),
 		Focused: true,
 	}, bounds)
+}
+
+// compactLogsHeight is the smallest height at which the bordered log tail
+// shows a log line under its heading and help. Below it the tail drops its
+// chrome so the log text itself stays on screen.
+const compactLogsHeight = 7
+
+// renderCompactLogs keeps the log tail usable in a body too short for its
+// panel: the process it belongs to when there is room, then as many log
+// lines as fit, scrolled by the same offset as the bordered tail.
+func (m *Model) renderCompactLogs(kit ui.Kit, bounds ui.Bounds) string {
+	w, rows := bounds.Width, bounds.Height
+	var lines []string
+	if rows >= 2 {
+		lines = append(lines, kit.Heading(ui.Truncate(fmt.Sprintf("LOGS · PID %d · %s", m.logsPID, m.logsName), w)))
+		rows--
+	}
+	if visible, ok := m.visibleLogLines(rows); !ok {
+		lines = append(lines, kit.Muted(ui.Truncate("(no output captured yet)", w)))
+	} else {
+		for _, l := range visible {
+			lines = append(lines, kit.Text(ui.Truncate(l, w)))
+		}
+	}
+	return ui.Fit(strings.Join(lines, "\n"), bounds)
+}
+
+// visibleLogLines is the window of log lines rows tall at the current
+// scroll offset; ok is false when no output has been captured.
+func (m *Model) visibleLogLines(rows int) (visible []string, ok bool) {
+	rawLines := strings.Split(m.logsContent, "\n")
+	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
+		return nil, false
+	}
+	// The log tail delegates its clamp to bubbles/viewport (issue #185);
+	// logsScroll stays the canonical offset so SelectPrev/SelectNext and
+	// tests keep the same contract.
+	vp := viewport.New(viewport.WithHeight(rows))
+	vp.SetContentLines(rawLines)
+	vp.SetYOffset(m.logsScroll)
+	scroll := vp.YOffset()
+	return rawLines[scroll:min(len(rawLines), scroll+rows)], true
 }
 
 func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {

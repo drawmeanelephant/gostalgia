@@ -366,6 +366,10 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		return ""
 	}
 
+	if compactPanel(kit, bounds) {
+		return m.renderCompactPanel(kit, bounds)
+	}
+
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
 	bodyHeight := contentBounds.Height
@@ -416,27 +420,13 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		}
 
 		timeStr := n.Timestamp.Format("15:04:05")
-		seenMarker := "  "
-		if !n.Seen {
-			sym := "● "
-			if kit.Theme().Name == "monochrome" || kit.Mode() == ui.Plain {
-				sym = "* "
-			}
-			seenMarker = kit.StatusText(sym, theme.Success)
-		}
-
 		badge := kit.Badge(badgeLabel, badgeState, w)
 		titleText := n.Title
 		if n.Receipt != nil {
 			titleText += " [RECEIPT AVAILABLE]"
 		}
 
-		prefix := "  "
-		if focused {
-			prefix = kit.Theme().Focus.Marker + " "
-		}
-
-		headerLine := fmt.Sprintf("%s%s%s [%s] %s", prefix, seenMarker, badge, timeStr, titleText)
+		headerLine := fmt.Sprintf("%s%s%s [%s] %s", entryPrefix(kit, focused), seenMarker(kit, n), badge, timeStr, titleText)
 		detailLine := fmt.Sprintf("    %s", n.Message)
 
 		if focused {
@@ -455,6 +445,84 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		Body:    strings.Join(lines, "\n"),
 		Focused: true,
 	}, bounds)
+}
+
+// compactPanelHeight is the smallest height at which the bordered panel
+// shows its summary and one whole entry.
+const compactPanelHeight = 7
+
+// minTitleCells is how much of an entry's title the bordered panel's
+// header row must leave room for after its markers, badge and timestamp.
+const minTitleCells = 12
+
+// compactPanel reports whether bounds are too short for one whole entry or
+// too narrow for its title in the bordered panel. The panel then drops its
+// chrome, badge and timestamp so the selected entry stays readable.
+func compactPanel(kit ui.Kit, bounds ui.Bounds) bool {
+	if bounds.Height < compactPanelHeight {
+		return true
+	}
+	w := kit.PanelContentBounds(bounds).Width
+	header := len("› * ") + ui.GraphemeWidth(kit.Badge("BACKOFF", theme.Busy, w)) + len(" [15:04:05] ")
+	return w-header < minTitleCells
+}
+
+// renderCompactPanel is the Notification Center for a body too short for
+// its panel: a one-line summary when there is room, then the entries
+// around the selection, each as its title and message.
+func (m *Manager) renderCompactPanel(kit ui.Kit, bounds ui.Bounds) string {
+	w, rows := bounds.Width, bounds.Height
+	dndStatus := "DND OFF"
+	if m.dnd {
+		dndStatus = "DND ON"
+	}
+	if len(m.history) == 0 {
+		return ui.Fit(kit.Muted(ui.Truncate("No notifications · "+dndStatus, w)), bounds)
+	}
+	var lines []string
+	if rows >= 3 {
+		summary := fmt.Sprintf("%d/%d · %d unread · %s", m.selected+1, len(m.history), m.unseenCountLocked(), dndStatus)
+		lines = append(lines, kit.Muted(ui.Truncate(summary, w)))
+		rows--
+	}
+	visibleItems := max(1, rows/2)
+	start := max(0, min(m.selected-visibleItems+1, max(0, len(m.history)-visibleItems)))
+	end := min(len(m.history), start+visibleItems)
+	for i := start; i < end; i++ {
+		n := m.history[i]
+		titleText := n.Title
+		if n.Receipt != nil {
+			titleText += " [RECEIPT]"
+		}
+		headerLine := ui.Truncate(entryPrefix(kit, i == m.selected)+seenMarker(kit, n)+titleText, w)
+		detailLine := ui.Truncate("    "+n.Message, w)
+		if i == m.selected {
+			lines = append(lines, kit.Selection(headerLine), kit.Text(detailLine))
+		} else {
+			lines = append(lines, kit.Heading(headerLine), kit.Muted(detailLine))
+		}
+	}
+	return ui.Fit(strings.Join(lines, "\n"), bounds)
+}
+
+// entryPrefix is the focus marker column of a notification entry.
+func entryPrefix(kit ui.Kit, focused bool) string {
+	if focused {
+		return kit.Theme().Focus.Marker + " "
+	}
+	return "  "
+}
+
+// seenMarker marks an unread notification; read ones keep the column blank.
+func seenMarker(kit ui.Kit, n Notification) string {
+	if n.Seen {
+		return "  "
+	}
+	sym := "● "
+	if kit.Theme().Name == "monochrome" || kit.Mode() == ui.Plain {
+		sym = "* "
+	}
+	return kit.StatusText(sym, theme.Success)
 }
 
 func (m *Manager) unseenCountLocked() int {

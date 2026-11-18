@@ -389,3 +389,37 @@ func TestCompactTableKeepsSelection(t *testing.T) {
 		}
 	}
 }
+
+// Below the bordered tail's height the log text stays on screen under a
+// one-line heading and scrolls by the same offset; from that height the
+// bordered tail returns.
+func TestCompactLogsShowAndScrollText(t *testing.T) {
+	tm := New()
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	tm.ShowLogs(7, "echo", "")
+	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "(no output captured") {
+		t.Fatalf("empty compact logs:\n%s", out)
+	}
+	tm.ShowLogs(7, "echo", "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight")
+	for h := 1; h < compactLogsHeight; h++ {
+		out := tm.Render(kit, ui.Bounds{Width: 26, Height: h})
+		if lines := strings.Split(out, "\n"); len(lines) != h || lipgloss.Width(out) != 26 {
+			t.Fatalf("height %d: rendered %dx%d", h, lipgloss.Width(out), len(lines))
+		}
+		if !strings.Contains(out, "one") || strings.Contains(out, "CHILD LOG TAIL") {
+			t.Fatalf("height %d: log text not shown compactly:\n%s", h, out)
+		}
+		if h >= 2 && !strings.HasPrefix(out, "LOGS · PID 7 · echo") {
+			t.Fatalf("height %d: heading missing:\n%s", h, out)
+		}
+	}
+	tm.SelectNext()
+	tm.SelectNext()
+	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "three") || !strings.Contains(out, "four") || strings.Contains(out, "two") {
+		t.Fatalf("scrolled compact logs:\n%s", out)
+	}
+	out := tm.Render(kit, ui.Bounds{Width: 40, Height: compactLogsHeight})
+	if !strings.Contains(out, "LOGS · PID 7") || !strings.Contains(out, "CHILD LOG TAIL") || !strings.Contains(out, "three") {
+		t.Fatalf("bordered tail did not return at height %d:\n%s", compactLogsHeight, out)
+	}
+}

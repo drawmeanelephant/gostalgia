@@ -29,25 +29,17 @@ func builtinThemes() []theme.Theme {
 var geometrySizes = [][2]int{{30, 10}, {80, 24}, {200, 60}}
 
 // activation is text each screen must keep on screen at every approved
-// size: the thing the keyboard currently acts on.
-var activation = map[string]string{
-	"home":          "Echo",
-	"prompt":        "PROMPT_DRAFT",
-	"launcher":      "Clock",
-	"app":           "[NE]",
-	"tasks-table":   "com.gos",
-	"tasks-logs":    "listening on ipc",
-	"tasks-receipt": "Reason: exit status 2",
-	"notifications": "clock Crashed",
-}
-
-// compactTitle is what the bordered sub-panels keep at the smallest frame.
-// Their three-row body there holds only border and title; they have no
-// compact form yet.
-var compactTitle = map[string]string{
-	"tasks-logs":    "LOGS · PID 7",
-	"tasks-receipt": "CRASH RECEIPT",
-	"notifications": "NOTIFICATION CENTER",
+// size: the thing the keyboard currently acts on and, for the diagnostic
+// views, what identifies it. The fixture selects the newest notification.
+var activation = map[string][]string{
+	"home":          {"Echo"},
+	"prompt":        {"llo"},
+	"launcher":      {"Clock"},
+	"app":           {"[NE]"},
+	"tasks-table":   {"com.gos"},
+	"tasks-logs":    {"LOGS · PID 7", "listening on ipc"},
+	"tasks-receipt": {"clock (PID 31)", "Reason: exit status 2"},
+	"notifications": {"indexer Backoff", "PID 12 backoff"},
 }
 
 func sized(m *Model, w, h int) *Model {
@@ -145,15 +137,9 @@ func TestFrameGeometryEveryScreenThemeAndSize(t *testing.T) {
 					v := m.View()
 					lines := checkRendered(t, v, size[0], size[1])
 					screen := strings.Join(lines, "\n")
-					want := activation[strings.TrimPrefix(s.name, "palette-from-")]
+					want := activation[s.name]
 					if strings.HasPrefix(s.name, "palette-from-") {
-						want = "PALETTE>"
-					}
-					if want == "PROMPT_DRAFT" {
-						want = "llo"
-					}
-					if title, ok := compactTitle[s.name]; ok && size[1] == minFrameHeight {
-						want = title
+						want = []string{"PALETTE>"}
 					}
 					if s.name == "home" {
 						f := m.solve()
@@ -163,8 +149,16 @@ func TestFrameGeometryEveryScreenThemeAndSize(t *testing.T) {
 							}
 						}
 					}
-					if !strings.Contains(screen, want) {
-						t.Fatalf("%q not on screen:\n%s", want, screen)
+					// The prompt draft and the palette's prompt live on the
+					// prompt row; everything else must be in the body itself.
+					where := strings.Join(lines[rects[slotBody].Min.Y:rects[slotBody].Max.Y], "\n")
+					if s.name == "prompt" || strings.HasPrefix(s.name, "palette-from-") {
+						where = screen
+					}
+					for _, want := range want {
+						if !strings.Contains(where, want) {
+							t.Fatalf("%q not on screen where expected:\n%s", want, screen)
+						}
 					}
 					prompt := lines[rects[slotPrompt].Min.Y]
 					if s.name == "prompt" != (v.Cursor != nil) {
@@ -486,6 +480,159 @@ func TestTasksTableCollapsesColumnsAndKeepsSelection(t *testing.T) {
 		if msg, ok := cmd().(procLogsMsg); !ok || msg.pid != 7 {
 			t.Fatalf("%dx%d: l fetched %+v, want PID 7", size[0], size[1], msg)
 		}
+	}
+}
+
+// bodyText is the frame's body slot as rendered text, checked against the
+// solved frame first.
+func bodyText(t *testing.T, m *Model) string {
+	t.Helper()
+	rects := checkFrame(t, m)
+	lines := checkRendered(t, m.View(), m.width, m.height)
+	return strings.Join(lines[rects[slotBody].Min.Y:rects[slotBody].Max.Y], "\n")
+}
+
+// lineWith is the body line that contains s, or "".
+func lineWith(body, s string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, s) {
+			return line
+		}
+	}
+	return ""
+}
+
+func press(m *Model, keys ...tea.KeyPressMsg) {
+	for _, k := range keys {
+		m.Update(k)
+	}
+}
+
+var (
+	keyDown  = tea.KeyPressMsg{Code: tea.KeyDown}
+	keyUp    = tea.KeyPressMsg{Code: tea.KeyUp}
+	keyEnter = tea.KeyPressMsg{Code: tea.KeyEnter}
+	keyEsc   = tea.KeyPressMsg{Code: tea.KeyEscape}
+)
+
+// At the 30×10 minimum the Notification Center shows the selected entry's
+// title and message, and its keys act on that visible entry. Growing
+// restores the bordered panel with the same selection.
+func TestMinimumNotificationsShowSelectedEntry(t *testing.T) {
+	for _, th := range builtinThemes() {
+		t.Run(th.Name, func(t *testing.T) {
+			m := sized(fixtureModel(th, ui.TrueColor), minFrameWidth, minFrameHeight)
+			m.notifView = true
+			marker := m.kit.Theme().Focus.Marker
+			body := bodyText(t, m)
+			if !strings.Contains(lineWith(body, "indexer Backoff"), marker+" ") {
+				t.Fatalf("selected entry not marked on screen:\n%s", body)
+			}
+			if !strings.Contains(body, "PID 12 backoff") || !strings.Contains(body, "1/2") {
+				t.Fatalf("selected entry's message or position missing:\n%s", body)
+			}
+
+			press(m, keyDown)
+			if sel := m.notifs.Selected(); sel == nil || sel.ID != "n1" {
+				t.Fatalf("Down selected %+v, want n1", sel)
+			}
+			body = bodyText(t, m)
+			if !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") || !strings.Contains(body, "PID 31 exit 2") || !strings.Contains(body, "2/2") {
+				t.Fatalf("Down did not bring the newly selected entry on screen:\n%s", body)
+			}
+
+			// Growing restores the bordered panel around the same entry.
+			sized(m, 80, 24)
+			body = bodyText(t, m)
+			if !strings.Contains(body, "NOTIFICATION CENTER") || !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") {
+				t.Fatalf("80x24 lost the panel or the selection:\n%s", body)
+			}
+
+			// Enter on the visible crash opens its receipt, readable at 30×10.
+			sized(m, minFrameWidth, minFrameHeight)
+			press(m, keyEnter)
+			if !m.taskView || m.tasks.Mode() != taskmanager.ModeReceipt || m.tasks.Receipt().ID != "CR-31-fixture" {
+				t.Fatalf("Enter did not open the visible entry's receipt: task=%v mode=%v", m.taskView, m.tasks.Mode())
+			}
+			body = bodyText(t, m)
+			for _, want := range []string{"clock (PID 31)", "Reason: exit status 2"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("receipt %q not readable at 30x10:\n%s", want, body)
+				}
+			}
+			sized(m, 80, 24)
+			body = bodyText(t, m)
+			for _, want := range []string{"CRASH RECEIPT #CR-31-fixture", "CRASH RECEIPT: clock (PID 31)", "Reason: exit status 2", "panic: wound too tight"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("80x24 receipt lost %q:\n%s", want, body)
+				}
+			}
+			sized(m, minFrameWidth, minFrameHeight)
+			press(m, keyEsc)
+			if !m.taskView || m.tasks.Mode() != taskmanager.ModeTable {
+				t.Fatal("Esc did not return from the receipt to the process table")
+			}
+
+			// d dismisses the entry on screen, not another one.
+			m = sized(fixtureModel(th, ui.TrueColor), minFrameWidth, minFrameHeight)
+			m.notifView = true
+			press(m, keyDown, tea.KeyPressMsg{Code: 'd', Text: "d"})
+			if h := m.notifs.History(); len(h) != 1 || h[0].ID != "n2" {
+				t.Fatalf("d dismissed the wrong entry: %+v", h)
+			}
+			if body := bodyText(t, m); !strings.Contains(body, "indexer Backoff") || !strings.Contains(body, "1/1") {
+				t.Fatalf("remaining entry not shown after dismiss:\n%s", body)
+			}
+		})
+	}
+}
+
+// At the 30×10 minimum the log tail shows actual log text, Up and Down
+// scroll it inside the frame, and growing restores the bordered tail at
+// the same offset.
+func TestMinimumLogsShowAndScrollText(t *testing.T) {
+	var log []string
+	for i := range 20 {
+		log = append(log, fmt.Sprintf("log line %02d", i+1))
+	}
+	for _, th := range builtinThemes() {
+		t.Run(th.Name, func(t *testing.T) {
+			m := sized(fixtureModel(th, ui.TrueColor), minFrameWidth, minFrameHeight)
+			m.taskView = true
+			m.tasks.ShowLogs(7, "com.gostalgia.echo", strings.Join(log, "\n"))
+			body := bodyText(t, m)
+			for _, want := range []string{"LOGS · PID 7", "log line 01", "log line 02"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("%q not on screen at 30x10:\n%s", want, body)
+				}
+			}
+			press(m, keyDown, keyDown, keyDown, keyDown, keyDown)
+			body = bodyText(t, m)
+			if !strings.Contains(body, "log line 06") || strings.Contains(body, "log line 01") {
+				t.Fatalf("Down did not scroll the log text:\n%s", body)
+			}
+			press(m, keyUp)
+			if body = bodyText(t, m); !strings.Contains(body, "log line 05") || strings.Contains(body, "log line 07") {
+				t.Fatalf("Up did not scroll back:\n%s", body)
+			}
+
+			sized(m, 80, 24)
+			body = bodyText(t, m)
+			for _, want := range []string{"LOGS · PID 7", "CHILD LOG TAIL: com.gostalgia.echo (PID 7)", "log line 05", "log line 11"} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("80x24 log tail lost %q:\n%s", want, body)
+				}
+			}
+			if strings.Contains(body, "log line 04") {
+				t.Fatalf("80x24 log tail did not keep the scroll offset:\n%s", body)
+			}
+
+			sized(m, minFrameWidth, minFrameHeight)
+			press(m, keyEsc)
+			if !m.taskView || m.tasks.Mode() != taskmanager.ModeTable {
+				t.Fatal("Esc did not return from the logs to the process table")
+			}
+		})
 	}
 }
 
