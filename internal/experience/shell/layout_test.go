@@ -36,9 +36,18 @@ var activation = map[string]string{
 	"launcher":      "Clock",
 	"app":           "[NE]",
 	"tasks-table":   "com.gos",
-	"tasks-logs":    "LOGS",
-	"tasks-receipt": "CR-31",
+	"tasks-logs":    "listening on ipc",
+	"tasks-receipt": "Reason: exit status 2",
 	"notifications": "clock Crashed",
+}
+
+// compactTitle is what the bordered sub-panels keep at the smallest frame.
+// Their three-row body there holds only border and title; they have no
+// compact form yet.
+var compactTitle = map[string]string{
+	"tasks-logs":    "LOGS · PID 7",
+	"tasks-receipt": "CRASH RECEIPT",
+	"notifications": "NOTIFICATION CENTER",
 }
 
 func sized(m *Model, w, h int) *Model {
@@ -143,10 +152,16 @@ func TestFrameGeometryEveryScreenThemeAndSize(t *testing.T) {
 					if want == "PROMPT_DRAFT" {
 						want = "llo"
 					}
-					if s.name == "notifications" && size[1] == minFrameHeight {
-						// The Notification Center panel has no compact form:
-						// at the smallest frame only its title fits.
-						want = "NOTIFICATION CENTER"
+					if title, ok := compactTitle[s.name]; ok && size[1] == minFrameHeight {
+						want = title
+					}
+					if s.name == "home" {
+						f := m.solve()
+						for _, id := range []homeSection{homeSystemID, homeAppsID, homeDocsID} {
+							if r, ok := f.Rect(id); ok && !r.In(rects[slotBody]) {
+								t.Fatalf("home section %d at %v outside the body %v", id, r, rects[slotBody])
+							}
+						}
 					}
 					if !strings.Contains(screen, want) {
 						t.Fatalf("%q not on screen:\n%s", want, screen)
@@ -276,7 +291,7 @@ func TestHomeCollapsesSecondarySectionsInPriorityOrder(t *testing.T) {
 		}
 		seen[[2]bool{system, docs}] = true
 		screen := strings.Join(screenText(m.View()), "\n")
-		if strings.Contains(screen, "SYSTEM ACTIVITY") != system || strings.Contains(screen, "todo.txt") != docs {
+		if strings.Contains(screen, "SYSTEM ACTIVITY") != system || strings.Contains(screen, "DOCUMENT SHORTCUTS") != docs {
 			t.Fatalf("%dx%d: rendered sections disagree with the solved frame:\n%s", size[0], size[1], screen)
 		}
 		if !strings.Contains(screen, "Echo") {
@@ -350,6 +365,79 @@ func TestHomeSelectionActsOnVisibleItems(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !m.busy || m.presentation != nil {
 		t.Fatal("Enter on a visible document did not run its open command")
+	}
+}
+
+// A document list longer than the body shrinks to a window that follows the
+// selection instead of hiding every document and system activity.
+func TestHomeLongDocumentListStaysReachable(t *testing.T) {
+	m := fixtureModel(theme.Nostalgia(), ui.TrueColor)
+	m.homeData.Documents = nil
+	for i := range 12 {
+		name := fmt.Sprintf("doc-%02d.txt", i)
+		m.homeData.Documents = append(m.homeData.Documents, docShortcut{Name: name, Path: "/users/guest/documents/" + name, Size: 10})
+	}
+	m.setMode(modeHome)
+	for _, size := range [][2]int{{80, 24}, {200, 60}} {
+		sized(m, size[0], size[1])
+		screen := strings.Join(screenText(m.View()), "\n")
+		for _, want := range []string{"SYSTEM ACTIVITY", "DOCUMENT SHORTCUTS", "doc-00.txt"} {
+			if !strings.Contains(screen, want) {
+				t.Fatalf("%dx%d: %q not on screen:\n%s", size[0], size[1], want, screen)
+			}
+		}
+		if hv := m.homeView(); hv.visible != 14 {
+			t.Fatalf("%dx%d: %d of 14 items reachable", size[0], size[1], hv.visible)
+		}
+	}
+
+	sized(m, 80, 24)
+	marker := m.kit.Theme().Focus.Marker
+	for i := range 13 {
+		m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+		hv := m.homeView()
+		if hv.selected != i+1 {
+			t.Fatalf("Down %d: selection %d", i+1, hv.selected)
+		}
+		item := hv.items[hv.selected]
+		name := item.app.Manifest.Name
+		if item.kind != homeItemApp {
+			name = item.doc.Name
+		}
+		if screen := strings.Join(screenText(m.View()), "\n"); !strings.Contains(screen, marker+" "+name) {
+			t.Fatalf("selected %s is not on screen:\n%s", name, screen)
+		}
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.busy {
+		t.Fatal("Enter on the last document did not run its open command")
+	}
+}
+
+// The view shortcut opens the app the launcher highlights, even after a
+// refresh shrinks the filtered list below the stored selection.
+func TestLauncherViewOpensHighlightedAppAfterListShrinks(t *testing.T) {
+	m := sized(fixtureModel(theme.Nostalgia(), ui.TrueColor), 80, 24)
+	m.apps = []appStatus{
+		fixtureApp("a.echo", "zzEcho", true, 7),
+		fixtureApp("a.notes", "zzNotes", false, 0),
+		fixtureApp("a.clock", "zzClock", true, 31),
+		fixtureApp("a.calc", "Calc", true, 40),
+	}
+	m.setMode(modeLauncher)
+	for _, r := range "zz" {
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.apps = append(m.apps[:1:1], m.apps[2:]...)
+	screen := strings.Join(screenText(m.View()), "\n")
+	if !strings.Contains(screen, "zzClock") {
+		t.Fatalf("highlighted app not on screen:\n%s", screen)
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	if m.presentation == nil || m.presentation.id != "a.clock" {
+		t.Fatalf("F4 opened %+v, want the highlighted zzClock", m.presentation)
 	}
 }
 
@@ -713,9 +801,9 @@ func TestRootFollowsThemeAndProfileChanges(t *testing.T) {
 }
 
 func TestColorProfilesAndMonochromeChrome(t *testing.T) {
-	mono := sized(fixtureModel(theme.Nostalgia(), ui.TrueColor), 80, 24)
-	mono.SetThemeByName("monochrome")
 	for _, s := range geometryScreens() {
+		mono := sized(fixtureModel(theme.Nostalgia(), ui.TrueColor), 80, 24)
+		mono.SetThemeByName("monochrome")
 		s.setup(mono)
 		if strings.Contains(mono.View().Content, "\x1b") {
 			t.Fatalf("%s: the monochrome theme emits escapes", s.name)

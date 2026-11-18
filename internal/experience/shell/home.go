@@ -112,8 +112,9 @@ func (m *Model) homeView() homeView {
 
 // homeNode lays Home out as sections one blank row apart. Running
 // applications are primary: they keep their full list whenever the body can
-// hold it, so when it cannot hold every section, system activity collapses
-// first, then the document shortcuts, before the list itself is windowed.
+// hold it. A long document list first shrinks to a window around the
+// selection; when even that does not fit, system activity collapses first,
+// then the document shortcuts, before the app list itself is windowed.
 func (m *Model) homeNode(hv homeView) bloom.Child {
 	running := 0
 	for _, a := range m.apps {
@@ -133,12 +134,13 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	})
 	appsRows := 1 + max(1, running)
 	apps := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeApps(b, hv) }).Natural(0, appsRows)
-	docs := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) })
+	docsRows := 1 + max(1, len(m.homeData.Documents))
+	docs := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows)
 	return sizedNode(func(ctx bloom.Context) bloom.Child {
 		return bloom.Column(
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
 			bloom.Auto(apps).Min(min(appsRows, ctx.Height)).ID(homeAppsID),
-			bloom.Fixed(1+max(1, len(m.homeData.Documents)), docs).Collapsible(prioHomeDocuments).ID(homeDocsID),
+			bloom.Auto(docs).Min(min(2, docsRows)).Collapsible(prioHomeDocuments).ID(homeDocsID),
 		).Gap(1)
 	})
 }
@@ -184,14 +186,19 @@ func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 	return heading + "\n" + strings.Join(rows, "\n")
 }
 
+// renderHomeDocs lists the document shortcuts, windowed so a selected
+// document stays visible.
 func (m *Model) renderHomeDocs(b ui.Bounds, hv homeView, base int) string {
 	lines := []string{m.kit.Heading("DOCUMENT SHORTCUTS") + " " + m.kit.Muted("(C:\\users\\guest\\documents)")}
-	if len(m.homeData.Documents) == 0 {
+	docs := m.homeData.Documents
+	if len(docs) == 0 {
 		lines = append(lines, m.kit.Muted(ui.Truncate("  ◇ No documents found in C:\\users\\guest\\documents", b.Width)))
 	}
-	for i, d := range m.homeData.Documents {
-		lines = append(lines, ui.Truncate(m.homeRow(base+i == hv.selected, viewText(d.Name),
-			"  "+m.kit.Muted(fmt.Sprintf("%d B", d.Size))), b.Width))
+	n := max(1, b.Height-1)
+	start := max(0, min(hv.selected-base-n+1, len(docs)-n))
+	for i := start; i < min(len(docs), start+n); i++ {
+		lines = append(lines, ui.Truncate(m.homeRow(base+i == hv.selected, viewText(docs[i].Name),
+			"  "+m.kit.Muted(fmt.Sprintf("%d B", docs[i].Size))), b.Width))
 	}
 	return strings.Join(lines, "\n")
 }

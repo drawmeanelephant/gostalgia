@@ -397,7 +397,7 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 	// monochrome modes where the contract requires the theme's text focus
 	// marker, and its self-sizing columns fight the fixed DOS column
 	// budget below.
-	cols := solveColumns(w - markerWidth)
+	cols := solveColumns(w-markerWidth, m.pidWidth())
 	headerRow := columnLine(cols, func(c column) string { return c.title })
 
 	var rows []string
@@ -485,10 +485,13 @@ var tableColumns = []column{
 }
 
 // columnsRow is the table's column layout as a bloom row of Collapsible
-// slots one cell apart.
-func columnsRow() bloom.FlexNode {
+// slots one cell apart. The PID column widens to pidWidth so no PID is cut.
+func columnsRow(pidWidth int) bloom.FlexNode {
 	slots := make([]bloom.Child, len(tableColumns))
 	for i, c := range tableColumns {
+		if c.id == "pid" {
+			c.width = max(c.width, pidWidth)
+		}
 		slot := bloom.Fixed(c.width, nil)
 		if c.min > 0 {
 			slot = bloom.Fill(nil).Min(c.min).Max(c.width)
@@ -503,8 +506,8 @@ func columnsRow() bloom.FlexNode {
 
 // solveColumns lays the columns out in width cells and returns the visible
 // ones at their solved widths.
-func solveColumns(width int) []column {
-	frame := bloom.Solve(max(0, width), 1, columnsRow())
+func solveColumns(width, pidWidth int) []column {
+	frame := bloom.Solve(max(0, width), 1, columnsRow(pidWidth))
 	var cols []column
 	for _, c := range tableColumns {
 		if r, ok := frame.Rect(c.id); ok && r.Dx() > 0 {
@@ -519,7 +522,7 @@ func solveColumns(width int) []column {
 // shows, in order.
 func VisibleColumns(width int) []string {
 	var titles []string
-	for _, c := range solveColumns(width - markerWidth) {
+	for _, c := range solveColumns(width-markerWidth, 0) {
 		titles = append(titles, c.title)
 	}
 	return titles
@@ -532,6 +535,15 @@ func columnLine(cols []column, text func(column) string) string {
 		cells[i] = s + strings.Repeat(" ", max(0, c.width-ui.GraphemeWidth(s)))
 	}
 	return strings.Join(cells, " ")
+}
+
+// pidWidth is the widest PID in the table, in cells.
+func (m *Model) pidWidth() int {
+	w := 0
+	for _, p := range m.procs {
+		w = max(w, len(fmt.Sprint(p.ID)))
+	}
+	return w
 }
 
 // processLines renders up to n process rows, windowed so the selected row
@@ -559,7 +571,7 @@ func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
 	if len(m.procs) == 0 {
 		return ui.Fit(kit.Muted("No Processes Found"), bounds)
 	}
-	cols := solveColumns(w - markerWidth)
+	cols := solveColumns(w-markerWidth, m.pidWidth())
 	var lines []string
 	n := bounds.Height
 	if n >= 2 {

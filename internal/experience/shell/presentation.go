@@ -951,8 +951,8 @@ func (m *Model) selectedView() tea.Cmd {
 	}
 	if m.currentMode() == modeLauncher {
 		filtered := m.filteredApps()
-		if len(filtered) > 0 && m.selected < len(filtered) && filtered[m.selected].Running {
-			return m.openView(filtered[m.selected])
+		if sel := min(m.selected, len(filtered)-1); sel >= 0 && filtered[sel].Running {
+			return m.openView(filtered[sel])
 		}
 	}
 	if m.currentMode() == modeHome {

@@ -346,6 +346,22 @@ func TestColumnsCollapseInPriorityOrder(t *testing.T) {
 	}
 }
 
+// The PID column widens for long IDs instead of cutting the identifying
+// column.
+func TestWidePIDsAreNotTruncated(t *testing.T) {
+	tm := New()
+	tm.SetProcesses([]ProcessRow{
+		{ID: 7, Name: "short", State: "running"},
+		{ID: 1234567, Name: "long-pid", State: "running"},
+	})
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	for _, b := range []ui.Bounds{{Width: 80, Height: 20}, {Width: 30, Height: 4}} {
+		if out := tm.Render(kit, b); !strings.Contains(out, "1234567") {
+			t.Fatalf("%+v: PID cut:\n%s", b, out)
+		}
+	}
+}
+
 // Below the bordered table's height the selected process stays on screen
 // under a header, without panel chrome.
 func TestCompactTableKeepsSelection(t *testing.T) {

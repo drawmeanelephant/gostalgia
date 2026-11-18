@@ -238,14 +238,24 @@ event-type request on the returned `tea.View`.
 - **Responsive priorities.** When the frame is short, the optional rows give
   way in this order: the blank spacer rows, then toasts. Tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the
-  smallest frame, 30×10, leaves. On Home, *system activity* collapses first,
-  then *document shortcuts*; *running applications* never collapse and
-  window around the selected app. Home keys act only on the items on screen:
-  with documents collapsed, Up/Down stop at the last running app and Enter
-  opens it. In the Task Manager table, `RESTARTS` collapses first, then
-  `MEMORY`, `CPU` and `STATE`; `PID` and `NAME` never collapse. Below six
-  body rows the table drops its border and footer and shows a header plus
-  the rows around the selected process.
+  smallest frame, 30×10, leaves. On Home, a document list longer than the
+  space first shrinks to a window that follows the selection. When even its
+  heading and one document do not fit beside the other sections, *system
+  activity* collapses first, then *document shortcuts*; once a section has
+  collapsed for a given size it stays collapsed at that size. *Running
+  applications* never collapse and window around the selected app. Home
+  keys act only on the items on screen: with documents collapsed, Up/Down
+  stop at the last running app and Enter opens it. In the Task Manager
+  table, `RESTARTS` collapses first, then `MEMORY`, `CPU` and `STATE`;
+  `PID` and `NAME` never collapse, and the `PID` column widens so no ID is
+  cut. Below six body rows the table drops its border and footer and shows
+  a header plus the rows around the selected process.
+- **Known small-frame limit.** The Notification Center, the task log tail
+  and the crash receipt are bordered panels without a compact form. In the
+  three-row body of a 30×10 frame they show only their border and title;
+  their first entries appear at 15 to 18 rows, depending on the panel and
+  on how many toasts are showing. Their keys still act on the selected
+  notification or log.
 - **Below the minimum.** Under 30 columns or 10 rows the shell keeps its own
   notice, `GOSTALGIA / Resize to 30×10 or larger. / Ctrl-C exits.`, clipped
   to the terminal, instead of a squeezed frame. Exactly 30×10 draws the
