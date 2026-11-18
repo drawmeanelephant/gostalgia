@@ -738,7 +738,8 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 
 func viewText(s string) string { return strings.ReplaceAll(safe(s), "\n", " ") }
 
-func (m *Model) viewLines(height int) []string {
+// viewHeader is the presentation's title, key hints and state lines.
+func (m *Model) viewHeader() []string {
 	v := m.presentation
 	hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
 	switch {
@@ -767,6 +768,43 @@ func (m *Model) viewLines(height int) []string {
 	if v.data.Error != "" {
 		lines = append(lines, m.kit.StatusText(viewText(v.data.Error), theme.Error))
 	}
+	return lines
+}
+
+// regionWindow reports the scroll region's window height and top line for a
+// body of height rows. The region delegates its clamp to bubbles/viewport
+// (issue #185); regionPinned means "stay at the tail", so GotoBottom is the
+// pin.
+func (m *Model) regionWindow(height int) (window, top int) {
+	v := m.presentation
+	visible := max(1, height-len(m.viewHeader())-1)
+	window = min(20, max(4, visible/2))
+	vp := viewport.New(viewport.WithHeight(window))
+	vp.SetContentLines(textLines(v.region().Text))
+	if v.regionPinned {
+		vp.GotoBottom()
+	} else {
+		vp.SetYOffset(v.regionTop)
+	}
+	return window, vp.YOffset()
+}
+
+// syncPresentationWindow stores the region window the body is about to show.
+// The regionTop field stays canonical: scrollRegion moves it between renders
+// by the window drawn last, and tests observe it directly.
+func (m *Model) syncPresentationWindow() {
+	v := m.presentation
+	if v == nil || v.region() == nil || m.paletteOpen || m.taskView || m.notifView {
+		return
+	}
+	if r, ok := m.solve().Rect(slotBody); ok {
+		v.regionWindow, v.regionTop = m.regionWindow(r.Dy())
+	}
+}
+
+func (m *Model) viewLines(height int) []string {
+	v := m.presentation
+	lines := m.viewHeader()
 	var rows []string
 	for _, block := range v.data.Blocks {
 		if block.Label != "" {
@@ -877,22 +915,10 @@ func (m *Model) viewLines(height int) []string {
 	regionBase := -1
 	if r := v.region(); r != nil {
 		all := textLines(r.Text)
-		v.regionWindow = min(20, max(4, visible/2))
-		// The region delegates its clamp to bubbles/viewport (issue #185);
-		// regionPinned means "stay at the tail", so GotoBottom is the pin.
-		// The regionTop field stays canonical: scrollRegion moves it between
-		// renders and the tests observe it directly.
-		vp := viewport.New(viewport.WithHeight(v.regionWindow))
-		vp.SetContentLines(all)
-		if v.regionPinned {
-			vp.GotoBottom()
-		} else {
-			vp.SetYOffset(v.regionTop)
-		}
-		v.regionTop = vp.YOffset()
+		window, top := m.regionWindow(height)
 		label := viewText(r.Label)
-		if len(all) > v.regionWindow {
-			label += " " + m.kit.Muted(fmt.Sprintf("– %d/%d", v.regionTop+1, len(all)))
+		if len(all) > window {
+			label += " " + m.kit.Muted(fmt.Sprintf("– %d/%d", top+1, len(all)))
 		}
 		if v.regionFocused() {
 			rows = append(rows, m.kit.FocusText(label))
@@ -900,7 +926,7 @@ func (m *Model) viewLines(height int) []string {
 			rows = append(rows, m.kit.Muted(label))
 		}
 		regionBase = len(rows)
-		for _, line := range all[v.regionTop:min(len(all), v.regionTop+v.regionWindow)] {
+		for _, line := range all[top:min(len(all), top+window)] {
 			rows = append(rows, m.kit.Text(line))
 		}
 	}
@@ -930,9 +956,8 @@ func (m *Model) selectedView() tea.Cmd {
 		}
 	}
 	if m.currentMode() == modeHome {
-		items := m.homeItems()
-		if len(items) > 0 && m.homeSelected < len(items) && items[m.homeSelected].kind == homeItemApp {
-			return m.openView(items[m.homeSelected].app)
+		if hv := m.homeView(); hv.selected >= 0 && hv.items[hv.selected].kind == homeItemApp {
+			return m.openView(hv.items[hv.selected].app)
 		}
 	}
 	if len(m.apps) > 0 && m.selected < len(m.apps) && m.apps[m.selected].Running {

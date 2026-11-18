@@ -3,6 +3,8 @@ package taskmanager
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -296,6 +298,78 @@ func TestResourceFormatting(t *testing.T) {
 		}
 		if gotMem != tc.wantMem {
 			t.Errorf("formatMemory(%+v) = %q, want %q", tc.res, gotMem, tc.wantMem)
+		}
+	}
+}
+
+// Secondary columns collapse lowest priority first as the table narrows,
+// and come back in reverse as it widens; PID and NAME always stay.
+func TestColumnsCollapseInPriorityOrder(t *testing.T) {
+	var dropped []string
+	prev := VisibleColumns(200)
+	if strings.Join(prev, " ") != "PID NAME STATE RESTARTS CPU MEMORY" {
+		t.Fatalf("wide table shows %v", prev)
+	}
+	for w := 200; w >= 0; w-- {
+		cols := VisibleColumns(w)
+		if w >= 2+5+1+8 && (len(cols) < 2 || cols[0] != "PID" || cols[1] != "NAME") {
+			t.Fatalf("width %d dropped a primary column: %v", w, cols)
+		}
+		for _, c := range prev {
+			if !slices.Contains(cols, c) && c != "PID" && c != "NAME" {
+				dropped = append(dropped, c)
+			}
+		}
+		for _, c := range cols {
+			if !slices.Contains(prev, c) {
+				t.Fatalf("width %d restored %s while narrowing", w, c)
+			}
+		}
+		prev = cols
+	}
+	if strings.Join(dropped, " ") != "RESTARTS MEMORY CPU STATE" {
+		t.Fatalf("collapse order %v", dropped)
+	}
+	var restored []string
+	prev = VisibleColumns(0)
+	for w := 0; w <= 200; w++ {
+		cols := VisibleColumns(w)
+		for _, c := range cols {
+			if !slices.Contains(prev, c) && c != "PID" && c != "NAME" {
+				restored = append(restored, c)
+			}
+		}
+		prev = cols
+	}
+	if strings.Join(restored, " ") != "STATE CPU MEMORY RESTARTS" {
+		t.Fatalf("restore order %v", restored)
+	}
+}
+
+// Below the bordered table's height the selected process stays on screen
+// under a header, without panel chrome.
+func TestCompactTableKeepsSelection(t *testing.T) {
+	tm := New()
+	var procs []ProcessRow
+	for i := range 6 {
+		procs = append(procs, ProcessRow{ID: int32(10 + i), Name: fmt.Sprintf("proc-%d", i), State: "running"})
+	}
+	tm.SetProcesses(procs)
+	for range 4 {
+		tm.SelectNext()
+	}
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	for _, b := range []ui.Bounds{{Width: 26, Height: 3}, {Width: 26, Height: 1}, {Width: 40, Height: 5}} {
+		out := tm.Render(kit, b)
+		lines := strings.Split(out, "\n")
+		if len(lines) != b.Height || lipgloss.Width(out) != b.Width {
+			t.Fatalf("%+v: rendered %dx%d", b, lipgloss.Width(out), len(lines))
+		}
+		if !strings.Contains(out, kit.Theme().Focus.Marker+" 14") || !strings.Contains(out, "proc-4") {
+			t.Fatalf("%+v: selected process missing:\n%s", b, out)
+		}
+		if b.Height > 1 && !strings.HasPrefix(lines[0], "PID") {
+			t.Fatalf("%+v: no header:\n%s", b, out)
 		}
 	}
 }

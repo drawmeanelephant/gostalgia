@@ -176,9 +176,9 @@ only, pinned to exactly `v0.0.0-alpha.6`.
   indirect go-runewidth v0.0.31, xo/terminfo v1.3.1, x/sync v0.24.0, and
   x/sys v0.49.0. Lip Gloss v2.0.6, colorprofile v0.4.3, and
   `clipperhouse/uax29/v2 v2.7.0` already matched.
-- **No production wiring yet.** In #207 only the proof test
-  `internal/experience/ui/bloom_proof_test.go` imports bloom. The shell keeps
-  rendering kit strings directly until the layout tree lands (#208).
+- **Production wiring.** Since #208 the shell frame is a bloom layout tree;
+  see [Shell frame layout](#shell-frame-layout-issue-208). The proofs in
+  `internal/experience/ui/bloom_proof_test.go` still pin the pin's behavior.
 
 Rules every later integration keeps, established by that proof against the
 exact pin:
@@ -218,3 +218,53 @@ Run the proofs with:
 ```sh
 go test ./internal/experience/ui -run 'Bloom|Truecolor' -count=1 -v
 ```
+
+### Shell frame layout (Issue #208)
+
+The shell renders every frame through bloom. `Model.layout()` returns the
+frame as a bloom tree, and `View()` draws it with the model's own root,
+`root.View(width, height, layout())`, keeping `AltScreen` and the kitty
+event-type request on the returned `tea.View`.
+
+- **Frame.** A kit `Panel` titled `G O S T A L G I A / PERSONAL COMPUTING`
+  holds a column of tabs, the status badge, the body (`Fill`), toasts and
+  the prompt; the help bar is the last terminal row, below the panel. The
+  panel is a `ui.PanelNode`, so its border, title row and padding come from
+  `Kit.PanelContentRect` (the same insets `PanelContentBounds` reports); the
+  shell never subtracts them itself. Size-dependent kit output (`Tabs`,
+  `HelpBar`, the Task Manager, Notification Center, palette, launcher and
+  app views) enters the tree as `ui.Leaf` adapters that render into exactly
+  the rectangle the layout gives them.
+- **Responsive priorities.** When the frame is short, the optional rows give
+  way in this order: the blank spacer rows, then toasts. Tabs, badge, prompt
+  and at least three body rows always stay, which is exactly what the
+  smallest frame, 30×10, leaves. On Home, *system activity* collapses first,
+  then *document shortcuts*; *running applications* never collapse and
+  window around the selected app. Home keys act only on the items on screen:
+  with documents collapsed, Up/Down stop at the last running app and Enter
+  opens it. In the Task Manager table, `RESTARTS` collapses first, then
+  `MEMORY`, `CPU` and `STATE`; `PID` and `NAME` never collapse. Below six
+  body rows the table drops its border and footer and shows a header plus
+  the rows around the selected process.
+- **Below the minimum.** Under 30 columns or 10 rows the shell keeps its own
+  notice, `GOSTALGIA / Resize to 30×10 or larger. / Ctrl-C exits.`, clipped
+  to the terminal, instead of a squeezed frame. Exactly 30×10 draws the
+  normal frame. A zero or negative dimension draws nothing. Resizing below
+  the minimum and back changes no state: the mode, selection and prompt
+  draft return as they were, and Ctrl-C still exits (or detaches an SSH
+  attach) while the notice shows.
+- **Real cursor.** In editable prompt mode the prompt row places the
+  terminal's own cursor (`bloom.Text(...).Cursor(...)`) at the insertion
+  point, measured in cells, so it lands correctly after combining marks,
+  wide CJK characters and ZWJ emoji. Long input is sliced around the cursor
+  by whole graphemes, keeping one cell free for the cursor at the end of the
+  input. A busy prompt, any other mode, and the size notice show no cursor.
+- **Root lifecycle.** Each shell model owns one root, built with
+  `bloom.WithColors` from its kit's text and surface colors and
+  `bloom.WithCopyFlash(false)`. The root is rebuilt lazily, on the next
+  render after the effective theme, color mode or reduced-motion setting
+  changes, so a config poll that re-applies the same settings keeps it.
+  `Root.Init` is never called, and the terminal's `ForegroundColorMsg`,
+  `BackgroundColorMsg` and `ColorProfileMsg` replies never reach the root.
+  Separate models, such as concurrent SSH attaches in one process, never
+  share a root.
