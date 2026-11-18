@@ -519,7 +519,8 @@ func solveColumns(width, pidWidth int) []column {
 }
 
 // VisibleColumns reports the titles of the columns a table content width
-// shows, in order.
+// shows, in order, for PIDs of up to five digits; wider PIDs widen the PID
+// column and can drop secondary columns sooner.
 func VisibleColumns(width int) []string {
 	var titles []string
 	for _, c := range solveColumns(width-markerWidth, 0) {

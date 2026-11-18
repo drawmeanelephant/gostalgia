@@ -241,8 +241,8 @@ event-type request on the returned `tea.View`.
   smallest frame, 30×10, leaves. On Home, a document list longer than the
   space first shrinks to a window that follows the selection. When even its
   heading and one document do not fit beside the other sections, *system
-  activity* collapses first, then *document shortcuts*; once a section has
-  collapsed for a given size it stays collapsed at that size. *Running
+  activity* collapses first, then *document shortcuts*, so system activity
+  never shows without the documents. *Running
   applications* never collapse and window around the selected app. Home
   keys act only on the items on screen: with documents collapsed, Up/Down
   stop at the last running app and Enter opens it. In the Task Manager
