@@ -157,6 +157,12 @@ func TestRenderReceiptCompactShowsIdentityAndReason(t *testing.T) {
 		t.Fatalf("bordered receipt did not return at height %d:\n%s", need, out)
 	}
 
+	// A tall receipt too narrow for its heading stays compact rather than
+	// cutting the PID.
+	if out := Render(kit, r, ui.Bounds{Width: 26, Height: 20}); !strings.HasPrefix(out, "demo-service (PID 7)") || strings.Contains(out, "CRASH RECEIPT #") {
+		t.Fatalf("narrow receipt not compact:\n%s", out)
+	}
+
 	// Without a reason or restarts the bordered receipt needs less room.
 	plain := New(8, "quiet", "stopped", 0, "", 0, "")
 	if out := Render(kit, plain, ui.Bounds{Width: 60, Height: 5}); !strings.Contains(out, "CRASH RECEIPT #") || !strings.Contains(out, "Exit code: 0") {

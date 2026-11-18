@@ -520,70 +520,89 @@ var (
 // restores the bordered panel with the same selection.
 func TestMinimumNotificationsShowSelectedEntry(t *testing.T) {
 	for _, th := range builtinThemes() {
-		t.Run(th.Name, func(t *testing.T) {
-			m := sized(fixtureModel(th, ui.TrueColor), minFrameWidth, minFrameHeight)
-			m.notifView = true
-			marker := m.kit.Theme().Focus.Marker
-			body := bodyText(t, m)
-			if !strings.Contains(lineWith(body, "indexer Backoff"), marker+" ") {
-				t.Fatalf("selected entry not marked on screen:\n%s", body)
-			}
-			if !strings.Contains(body, "PID 12 backoff") || !strings.Contains(body, "1/2") {
-				t.Fatalf("selected entry's message or position missing:\n%s", body)
-			}
+		for _, mode := range []ui.ColorMode{ui.TrueColor, ui.Plain} {
+			t.Run(fmt.Sprintf("%s/%d", th.Name, mode), func(t *testing.T) { checkMinimumNotifications(t, th, mode) })
+		}
+	}
+}
 
-			press(m, keyDown)
-			if sel := m.notifs.Selected(); sel == nil || sel.ID != "n1" {
-				t.Fatalf("Down selected %+v, want n1", sel)
-			}
-			body = bodyText(t, m)
-			if !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") || !strings.Contains(body, "PID 31 exit 2") || !strings.Contains(body, "2/2") {
-				t.Fatalf("Down did not bring the newly selected entry on screen:\n%s", body)
-			}
+func checkMinimumNotifications(t *testing.T, th theme.Theme, mode ui.ColorMode) {
+	t.Helper()
+	m := sized(fixtureModel(th, mode), minFrameWidth, minFrameHeight)
+	m.notifView = true
+	marker := m.kit.Theme().Focus.Marker
+	body := bodyText(t, m)
+	if !strings.Contains(lineWith(body, "indexer Backoff"), marker+" ") {
+		t.Fatalf("selected entry not marked on screen:\n%s", body)
+	}
+	if !strings.Contains(body, "PID 12 backoff") || !strings.Contains(body, "1/2") {
+		t.Fatalf("selected entry's message or position missing:\n%s", body)
+	}
 
-			// Growing restores the bordered panel around the same entry.
-			sized(m, 80, 24)
-			body = bodyText(t, m)
-			if !strings.Contains(body, "NOTIFICATION CENTER") || !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") {
-				t.Fatalf("80x24 lost the panel or the selection:\n%s", body)
-			}
+	press(m, keyDown)
+	if sel := m.notifs.Selected(); sel == nil || sel.ID != "n1" {
+		t.Fatalf("Down selected %+v, want n1", sel)
+	}
+	body = bodyText(t, m)
+	if !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") || !strings.Contains(body, "PID 31 exit 2") || !strings.Contains(body, "2/2") {
+		t.Fatalf("Down did not bring the newly selected entry on screen:\n%s", body)
+	}
+	press(m, keyUp)
+	if body = bodyText(t, m); !strings.Contains(lineWith(body, "indexer Backoff"), marker+" ") || strings.Contains(body, "clock Crashed") {
+		t.Fatalf("Up did not return to the first entry:\n%s", body)
+	}
+	press(m, keyDown)
 
-			// Enter on the visible crash opens its receipt, readable at 30×10.
-			sized(m, minFrameWidth, minFrameHeight)
-			press(m, keyEnter)
-			if !m.taskView || m.tasks.Mode() != taskmanager.ModeReceipt || m.tasks.Receipt().ID != "CR-31-fixture" {
-				t.Fatalf("Enter did not open the visible entry's receipt: task=%v mode=%v", m.taskView, m.tasks.Mode())
-			}
-			body = bodyText(t, m)
-			for _, want := range []string{"clock (PID 31)", "Reason: exit status 2"} {
-				if !strings.Contains(body, want) {
-					t.Fatalf("receipt %q not readable at 30x10:\n%s", want, body)
-				}
-			}
-			sized(m, 80, 24)
-			body = bodyText(t, m)
-			for _, want := range []string{"CRASH RECEIPT #CR-31-fixture", "CRASH RECEIPT: clock (PID 31)", "Reason: exit status 2", "panic: wound too tight"} {
-				if !strings.Contains(body, want) {
-					t.Fatalf("80x24 receipt lost %q:\n%s", want, body)
-				}
-			}
-			sized(m, minFrameWidth, minFrameHeight)
-			press(m, keyEsc)
-			if !m.taskView || m.tasks.Mode() != taskmanager.ModeTable {
-				t.Fatal("Esc did not return from the receipt to the process table")
-			}
+	// a and n keep working and their effect is visible in the summary.
+	press(m, tea.KeyPressMsg{Code: 'a', Text: "a"}, tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if body = bodyText(t, m); !strings.Contains(body, "2/2 · 0 unread · DND ON") || !m.notifs.DND() {
+		t.Fatalf("a/n not reflected at 30x10:\n%s", body)
+	}
 
-			// d dismisses the entry on screen, not another one.
-			m = sized(fixtureModel(th, ui.TrueColor), minFrameWidth, minFrameHeight)
-			m.notifView = true
-			press(m, keyDown, tea.KeyPressMsg{Code: 'd', Text: "d"})
-			if h := m.notifs.History(); len(h) != 1 || h[0].ID != "n2" {
-				t.Fatalf("d dismissed the wrong entry: %+v", h)
-			}
-			if body := bodyText(t, m); !strings.Contains(body, "indexer Backoff") || !strings.Contains(body, "1/1") {
-				t.Fatalf("remaining entry not shown after dismiss:\n%s", body)
-			}
-		})
+	// Growing restores the bordered panel around the same entry.
+	sized(m, 80, 24)
+	body = bodyText(t, m)
+	if !strings.Contains(body, "NOTIFICATION CENTER") || !strings.Contains(lineWith(body, "clock Crashed"), marker+" ") {
+		t.Fatalf("80x24 lost the panel or the selection:\n%s", body)
+	}
+
+	// Enter on the visible crash opens its receipt, readable at 30×10.
+	sized(m, minFrameWidth, minFrameHeight)
+	press(m, keyEnter)
+	if !m.taskView || m.tasks.Mode() != taskmanager.ModeReceipt || m.tasks.Receipt().ID != "CR-31-fixture" {
+		t.Fatalf("Enter did not open the visible entry's receipt: task=%v mode=%v", m.taskView, m.tasks.Mode())
+	}
+	body = bodyText(t, m)
+	for _, want := range []string{"clock (PID 31)", "Reason: exit status 2"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("receipt %q not readable at 30x10:\n%s", want, body)
+		}
+	}
+	sized(m, 80, 24)
+	body = bodyText(t, m)
+	for _, want := range []string{"CRASH RECEIPT #CR-31-fixture", "CRASH RECEIPT: clock (PID 31)", "Reason: exit status 2", "panic: wound too tight"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("80x24 receipt lost %q:\n%s", want, body)
+		}
+	}
+	sized(m, minFrameWidth, minFrameHeight)
+	press(m, keyEsc)
+	if !m.taskView || m.tasks.Mode() != taskmanager.ModeTable {
+		t.Fatal("Esc did not return from the receipt to the process table")
+	}
+
+	// d dismisses the entry on screen, not another one.
+	m = sized(fixtureModel(th, mode), minFrameWidth, minFrameHeight)
+	m.notifView = true
+	press(m, keyDown, tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if h := m.notifs.History(); len(h) != 1 || h[0].ID != "n2" {
+		t.Fatalf("d dismissed the wrong entry: %+v", h)
+	}
+	if body := bodyText(t, m); !strings.Contains(body, "indexer Backoff") || !strings.Contains(body, "1/1") {
+		t.Fatalf("remaining entry not shown after dismiss:\n%s", body)
+	}
+	if mode == ui.Plain && strings.Contains(m.View().Content, "\x1b") {
+		t.Fatal("Plain compact view emitted an escape sequence")
 	}
 }
 

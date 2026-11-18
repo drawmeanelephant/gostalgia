@@ -463,7 +463,7 @@ func compactPanel(kit ui.Kit, bounds ui.Bounds) bool {
 		return true
 	}
 	w := kit.PanelContentBounds(bounds).Width
-	header := len("› * ") + ui.GraphemeWidth(kit.Badge("BACKOFF", theme.Busy, w)) + len(" [15:04:05] ")
+	header := ui.GraphemeWidth(entryPrefix(kit, true)) + len("* ") + ui.GraphemeWidth(kit.Badge("BACKOFF", theme.Busy, w)) + len(" [15:04:05] ")
 	return w-header < minTitleCells
 }
 

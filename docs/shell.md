@@ -264,10 +264,10 @@ event-type request on the returned `tea.View`.
   - The crash receipt shows the process and PID, then the reason, the exit
     code and state, the receipt ID and time, and the end of the log
     excerpt. It switches when the bordered receipt could not reach its
-    reason line.
+    reason line or would cut its heading before the PID.
 
   The keys do not change. Up, Down, Enter and `d` act on the entry on
-  screen, `c` and `n` work as before, and Esc goes back. Growing the
+  screen, `a`, `c` and `n` work as before, and Esc goes back. Growing the
   terminal restores the bordered panel with the same selection and log
   offset.
 - **Below the minimum.** Under 30 columns or 10 rows the shell keeps its own
