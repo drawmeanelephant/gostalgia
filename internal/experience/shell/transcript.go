@@ -161,8 +161,10 @@ func (m *Model) transcriptNode() bloom.Child {
 	return bloom.Viewport(m.transcriptBuf).At(m.transcriptPos).Follow().
 		Wrap(bloom.WrapChars).Style(m.kit.TextStyle()).ID(viewTranscript).Selectable().
 		OnScroll(func(pos bloom.ViewportPos) tea.Cmd {
-			m.transcriptPos = pos
-			return nil
+			return m.baseAct(func() tea.Cmd {
+				m.transcriptPos = pos
+				return nil
+			})
 		})
 }
 

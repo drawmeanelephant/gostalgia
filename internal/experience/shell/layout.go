@@ -338,7 +338,7 @@ func (m *Model) toastLines() int {
 func (m *Model) body(home homeView) bloom.Child {
 	switch {
 	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
-		return m.tasks.LogsNode(m.kit)
+		return m.tasks.LogsNode(m.kit, m.baseMouseAllowed)
 	case m.taskView && m.tasks != nil:
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) }), m.taskHits, m.taskScroll)
 	case m.notifView && m.notifs != nil:

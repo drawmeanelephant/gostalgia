@@ -1399,15 +1399,17 @@ func TestMouseOffDropsAGestureInProgress(t *testing.T) {
 
 // onFrame delivers msgs as Bubble Tea does to the frame v drew, whatever
 // the model has done since: to v's OnMouse, then to Update.
-func onFrame(t *testing.T, m *Model, v tea.View, msgs ...tea.Msg) {
+func onFrame(t *testing.T, m *Model, v tea.View, msgs ...tea.Msg) []string {
 	t.Helper()
+	var sent []string
 	for _, msg := range msgs {
 		if v.OnMouse != nil {
-			drive(t, m, v.OnMouse(msg.(tea.MouseMsg)))
+			sent = append(sent, drive(t, m, v.OnMouse(msg.(tea.MouseMsg)))...)
 		}
 		_, cmd := m.Update(msg)
-		drive(t, m, cmd)
+		sent = append(sent, drive(t, m, cmd)...)
 	}
+	return sent
 }
 
 func click(p image.Point) []tea.Msg {
@@ -1696,6 +1698,232 @@ func TestMouseCopyDenialStaysReadableInASmallTerminal(t *testing.T) {
 				if !strings.Contains(said, want) {
 					t.Fatalf("mouse says %q, without %q", said, want)
 				}
+			}
+		})
+	}
+}
+
+// A modal opened after a frame was drawn owns input before that frame's
+// mouse callbacks run. Neither a transcript nor a log tail may scroll from
+// the stale frame; after the modal closes and a new frame is drawn, the same
+// wheel works again.
+func TestMouseModalStopsStaleFrameWheel(t *testing.T) {
+	for _, surface := range []string{"transcript", "logs"} {
+		for _, modal := range []string{"palette", "confirmation"} {
+			t.Run(surface+"/"+modal, func(t *testing.T) {
+				m, rec := mouseModel(t, 80, 24)
+				m.setMode(modePrompt)
+				center := rectOf(t, m, slotBody).Min.Add(image.Pt(4, 2))
+				wheel := tea.MouseWheelMsg{X: center.X, Y: center.Y, Button: tea.MouseWheelUp}
+				if surface == "logs" {
+					m.taskView = true
+					m.tasks.ShowLogs(7, "com.gostalgia.echo", numberedLog("log", 1, 90))
+					center = rectOf(t, m, slotBody).Min.Add(image.Pt(6, 5))
+					wheel.X, wheel.Y = center.X, center.Y
+					wheel.Button = tea.MouseWheelDown
+				} else {
+					for i := range 100 {
+						m.append(entry{fmt.Sprintf("line %03d", i), "output"})
+					}
+				}
+				v := m.View()
+				beforeTranscript := m.transcriptPos
+				beforeLogs, beforeFollow := m.tasks.LogsPos(), m.tasks.Following()
+				if modal == "palette" {
+					m.openPalette()
+				} else {
+					m.openConfirm(confirmation{kind: confirmReap})
+				}
+				onFrame(t, m, v, wheel)
+				if m.transcriptPos != beforeTranscript || m.tasks.LogsPos() != beforeLogs || m.tasks.Following() != beforeFollow {
+					t.Fatalf("stale wheel scrolled under %s: transcript %+v -> %+v, logs %+v -> %+v, follow %v -> %v",
+						modal, beforeTranscript, m.transcriptPos, beforeLogs, m.tasks.LogsPos(), beforeFollow, m.tasks.Following())
+				}
+				if len(rec.all()) != 0 {
+					t.Fatalf("stale wheel sent requests: %v", rec.all())
+				}
+
+				act(t, m, escKey)
+				v = m.View()
+				if surface == "logs" {
+					// A running command does not disable the log tail's wheel.
+					m.busy = true
+				}
+				onFrame(t, m, v, wheel)
+				if surface == "logs" {
+					if m.tasks.LogsPos() == beforeLogs || m.tasks.Following() {
+						t.Fatalf("wheel after closing %s did not scroll the busy log tail: %+v, follow %v", modal, m.tasks.LogsPos(), m.tasks.Following())
+					}
+				} else if m.transcriptPos == beforeTranscript || m.transcriptPos.AtEnd() {
+					t.Fatalf("wheel after closing %s did not scroll the transcript: %+v", modal, m.transcriptPos)
+				}
+			})
+		}
+	}
+}
+
+// Selection completion is mouse input too. A drag release, or the delayed
+// completion of a double click, cannot start a copy after a modal opens on
+// the pre-modal frame. A new nonmodal frame still copies the same text.
+func TestMouseModalStopsSelectionCompletion(t *testing.T) {
+	for _, completion := range []string{"drag release", "double click"} {
+		for _, modal := range []string{"palette", "confirmation"} {
+			t.Run(completion+"/"+modal, func(t *testing.T) {
+				m, rec := mouseModel(t, 80, 24)
+				m.setMode(modePrompt)
+				p := mustFind(t, m, rectOf(t, m, slotBody), "Echo, Notes")
+				q := p.Add(image.Pt(len("Echo,")-1, 0))
+				openModal := func() {
+					if modal == "palette" {
+						m.openPalette()
+					} else {
+						m.openConfirm(confirmation{kind: confirmReap})
+					}
+				}
+				beforeHistory := len(m.notifs.History())
+				beforeToasts := toastText(m)
+				var sent []string
+				if completion == "drag release" {
+					v := m.View()
+					onFrame(t, m, v,
+						tea.MouseClickMsg{X: p.X, Y: p.Y, Button: tea.MouseLeft},
+						tea.MouseMotionMsg{X: q.X, Y: q.Y, Button: tea.MouseLeft})
+					// Settle the dragged range in one last nonmodal frame,
+					// then open the modal without drawing its layer.
+					v = m.View()
+					openModal()
+					sent = onFrame(t, m, v, tea.MouseReleaseMsg{X: q.X, Y: q.Y, Button: tea.MouseLeft})
+				} else {
+					v := m.View()
+					onFrame(t, m, v, click(p)...)
+					v = m.View()
+					onFrame(t, m, v, tea.MouseClickMsg{X: p.X, Y: p.Y, Button: tea.MouseLeft})
+					v = m.View()
+					release := tea.MouseReleaseMsg{X: p.X, Y: p.Y, Button: tea.MouseLeft}
+					var routeCmd tea.Cmd
+					if v.OnMouse != nil {
+						routeCmd = v.OnMouse(release)
+					}
+					_, updateCmd := m.Update(release)
+					delayed := tea.Batch(routeCmd, updateCmd)
+					openModal()
+					sent = drive(t, m, delayed)
+				}
+				if !slices.Contains(sent, "bloom.SelectionMsg") {
+					t.Fatalf("%s did not complete a selection: %v", completion, sent)
+				}
+				if got := copied(t, rec); len(got) != 0 {
+					t.Fatalf("%s under %s copied %q", completion, modal, got)
+				}
+				if slices.Contains(sent, "shell.copyMsg") || toastText(m) != beforeToasts || len(m.notifs.History()) != beforeHistory {
+					t.Fatalf("%s under %s produced copy feedback: messages %v, toast %q", completion, modal, sent, toastText(m))
+				}
+
+				act(t, m, escKey)
+				m.View()
+				want := "Echo,"
+				if completion == "drag release" {
+					selectText(t, m, p, len("Echo,"))
+				} else {
+					clickAt(t, m, p)
+					clickAt(t, m, p)
+					want = "Echo"
+				}
+				if got := copied(t, rec); len(got) != 1 || got[0] != want {
+					t.Fatalf("after closing %s, %s copied %q, want %q", modal, completion, got, want)
+				}
+			})
+		}
+	}
+}
+
+// A copy that legitimately started before a modal opened still completes
+// and reports its own result. Only selection completion is gated.
+func TestMouseCopyStartedBeforeModalStillReports(t *testing.T) {
+	m, rec := mouseModel(t, 80, 24)
+	m.setMode(modePrompt)
+	cmd := updateCmd(m, bloom.SelectionMsg{Text: "Echo,"})
+	if cmd == nil {
+		t.Fatal("nonmodal selection returned no copy command")
+	}
+	m.openPalette()
+	drive(t, m, cmd)
+	if got := copied(t, rec); len(got) != 1 || got[0] != "Echo," {
+		t.Fatalf("pre-modal copy wrote %q", got)
+	}
+	if !strings.Contains(toastText(m), "Copied") {
+		t.Fatalf("pre-modal copy result was suppressed: %q", toastText(m))
+	}
+}
+
+// dragBetween drags from one solved text cell to another, including over
+// soft-wrap and logical-line boundaries.
+func dragBetween(t *testing.T, m *Model, from, to image.Point) {
+	t.Helper()
+	mouse(t, m, tea.MouseClickMsg{X: from.X, Y: from.Y, Button: tea.MouseLeft})
+	mouse(t, m, tea.MouseMotionMsg{X: to.X, Y: to.Y, Button: tea.MouseLeft})
+	mouse(t, m, tea.MouseReleaseMsg{X: to.X, Y: to.Y, Button: tea.MouseLeft})
+}
+
+// Mouse selection reads the buffer's original text, not its displayed wrap
+// rows or UTF-8 fragments. Coordinates come from the solved viewport's own
+// byte-position-to-cell mapping; the authenticated write must match exactly.
+func TestMouseSelectionCopiesExactBufferText(t *testing.T) {
+	wrapped := "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	for _, tc := range []struct {
+		name       string
+		size       [2]int
+		text, want string
+		from, to   bloom.Pos
+		fromRight  bool
+		toRight    bool
+		logs       bool
+	}{
+		{name: "soft wrapped rows", size: [2]int{30, 10}, text: wrapped, want: wrapped[20:41], from: bloom.Pos{Col: 20}, to: bloom.Pos{Col: 40}},
+		{name: "multiple logical lines", size: [2]int{40, 12}, text: "first logical\nsecond logical\nthird logical", want: "logical\nsecond", from: bloom.Pos{Col: 6}, to: bloom.Pos{Line: 1, Col: 5}},
+		{name: "multiple logical log lines", size: [2]int{40, 12}, text: "first logical\nsecond logical\nthird logical", want: "logical\nsecond", from: bloom.Pos{Col: 6}, to: bloom.Pos{Line: 1, Col: 5}, logs: true},
+		{name: "combining character", size: [2]int{40, 12}, text: "cafe\u0301 au lait", want: "cafe\u0301 au", from: bloom.Pos{}, to: bloom.Pos{Col: 8}},
+		{name: "CJK right halves", size: [2]int{40, 12}, text: "界界", want: "界界", from: bloom.Pos{}, to: bloom.Pos{Col: 3}, fromRight: true, toRight: true},
+		{name: "ZWJ emoji", size: [2]int{40, 12}, text: "👩\u200d💻 code", want: "👩\u200d💻 code", from: bloom.Pos{}, to: bloom.Pos{Col: 15}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, rec := mouseModel(t, tc.size[0], tc.size[1])
+			m.setMode(modePrompt)
+			var id any = viewTranscript
+			if tc.logs {
+				m.taskView = true
+				m.tasks.ShowLogs(7, "com.gostalgia.echo", tc.text)
+				id = taskmanager.LogsViewport
+			} else {
+				m.clearTranscript()
+				m.append(entry{tc.text, "output"})
+			}
+			frame := m.solve()
+			v, ok := frame.Viewport(id)
+			if !ok {
+				t.Fatal("selection viewport is not on screen")
+			}
+			r, ok := frame.Rect(id)
+			if !ok {
+				t.Fatal("selection viewport has no rectangle")
+			}
+			fromCell, ok := v.CellOf(tc.from)
+			if !ok {
+				t.Fatalf("start %+v is not visible at %v", tc.from, r)
+			}
+			toCell, ok := v.CellOf(tc.to)
+			if !ok {
+				t.Fatalf("end %+v is not visible at %v", tc.to, r)
+			}
+			if tc.fromRight {
+				fromCell.X++
+			}
+			if tc.toRight {
+				toCell.X++
+			}
+			dragBetween(t, m, r.Min.Add(fromCell), r.Min.Add(toCell))
+			if got := copied(t, rec); len(got) != 1 || got[0] != tc.want {
+				t.Fatalf("clipboard write = %q (%d calls), want byte-for-byte %q", got, len(got), tc.want)
 			}
 		})
 	}

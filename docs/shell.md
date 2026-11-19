@@ -404,7 +404,11 @@ equivalent, and the shell stays complete without a mouse.
 Each click runs the same function as its key, which checks the state when
 the click arrives, not when the frame was drawn: a busy shell, an action in
 flight, a disabled action or cell, a loading or unnegotiated app view, and an
-open palette or confirmation stop a click as they stop the key. A click only
+open palette or confirmation stop a click as they stop the key. Viewport wheel
+callbacks and selection completion recheck mouse/modal ownership when they run,
+so an event delivered through a frame drawn before a modal opened cannot scroll
+the covered surface or start a copy; log-tail wheels still work while a command
+runs. A copy that already started keeps its completion feedback. A click only
 selects or opens; stopping, reaping and shutdown stay behind their keys and
 confirmations. Borders, headings, blank cells and the active tab do nothing.
 

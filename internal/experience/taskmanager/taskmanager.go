@@ -313,7 +313,7 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 
 	switch m.mode {
 	case ModeLogs:
-		return bloom.Render(bounds.Width, bounds.Height, m.logsNode(kit, bounds))
+		return bloom.Render(bounds.Width, bounds.Height, m.logsNode(kit, bounds, func() bool { return true }))
 	case ModeReceipt:
 		if m.receipt != nil {
 			return receipts.Render(kit, *m.receipt, bounds)

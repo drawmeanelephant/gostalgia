@@ -63,12 +63,16 @@ const copyPolicy = "Copies (a mouse selection, or Ctrl-Y) go to the clipboard of
 	"only while its operator policy allows it: an operator sets clipboard.enabled and clipboard.allow_host_write " +
 	"with sys/policy/update. The shell never writes the terminal's clipboard."
 
+// baseMouseAllowed reports whether the screen beneath the modal layers may
+// take mouse input now. A stale frame may outlive the state it was drawn in.
+func (m *Model) baseMouseAllowed() bool { return !m.mouseOff && !m.modalOpen() }
+
 // baseAct runs act for a click or wheel step on the screen beneath the
 // modal layers. The mouse may have been turned off, or a palette or
 // confirmation opened, since the frame the event landed on was drawn; bloom
 // keeps a modal layer's events from what it covers only once it is drawn.
 func (m *Model) baseAct(act func() tea.Cmd) tea.Cmd {
-	if m.mouseOff || m.modalOpen() {
+	if !m.baseMouseAllowed() {
 		return nil
 	}
 	return act()

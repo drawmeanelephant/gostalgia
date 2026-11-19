@@ -898,7 +898,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.openView(msg.app)
 	case bloom.SelectionMsg:
 		// Text selected with the mouse is copied as the selection ends.
-		if m.mouseOff {
+		// The release or delayed double-click completion may belong to a
+		// frame drawn before a modal opened.
+		if !m.baseMouseAllowed() {
 			return m, nil
 		}
 		return m, m.copyCmd(msg.Text)
