@@ -41,6 +41,30 @@ func TestHomeWordmarkFallbackThresholds(t *testing.T) {
 	}
 }
 
+func TestHomeWordmarkShortHeightFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		width int
+		font  string
+	}{{"big", 1000, "big"}, {"mini", selectHomeWordmark(1000).width - 1, "mini"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			mark := selectHomeWordmark(tc.width)
+			if mark.font != tc.font {
+				t.Fatalf("width selected %q, want %q", mark.font, tc.font)
+			}
+			if got := selectHomeWordmarkForBounds(tc.width, mark.height+2); got.font != tc.font {
+				t.Fatalf("sufficient height selected %q, want %q", got.font, tc.font)
+			}
+			if got := selectHomeWordmarkForBounds(tc.width, mark.height+1); got.font != "spaced-title" {
+				t.Fatalf("short height selected %q, want spaced-title", got.font)
+			}
+			if got := selectHomeWordmarkForBounds(tc.width, 0); got.font != tc.font {
+				t.Fatalf("unbounded height selected %q, want %q", got.font, tc.font)
+			}
+		})
+	}
+}
+
 func TestHomeWordmarkFontsAreASCII(t *testing.T) {
 	for _, width := range []int{0, 30, 80, 200} {
 		mark := selectHomeWordmark(width)

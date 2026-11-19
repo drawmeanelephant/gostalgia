@@ -1,6 +1,8 @@
 package shell
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -85,6 +87,79 @@ func TestMonochromePresentationASCIIClippingPreservesAppUnicode(t *testing.T) {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("presentation lacks %q:\n%s", want, screen)
 		}
+	}
+}
+
+func TestMonochromePromptCommandChrome(t *testing.T) {
+	caller := callerFunc(func(_ context.Context, method string, _, out any) error {
+		var value any
+		switch method {
+		case "session/get":
+			value = map[string]any{
+				"id": "session-1", "active": true, "started_at": "2026-01-02T03:04:05Z",
+				"user": map[string]any{"id": "u-1", "name": "用户 · →"},
+			}
+		case "app/list":
+			value = []any{map[string]any{
+				"manifest": map[string]any{"id": "com.test.unicode", "name": "界面 · →", "version": "1", "permissions": []string{"ipc"}},
+				"running":  true, "pid": 7,
+			}}
+		case "proc/logs":
+			value = map[string]any{
+				"id": 7, "name": "进程 · →", "kind": "external", "state": "running",
+				"stdout": map[string]any{"content": "输出 · → …\n", "total_bytes": 20},
+				"stderr": map[string]any{},
+			}
+		default:
+			return nil
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, out)
+	})
+	for _, tc := range []struct {
+		line      string
+		want      []string
+		asciiOnly bool
+	}{
+		{line: "help", want: []string{"recents | favorites", "Up/Down history", "F1 home | F2 apps"}, asciiOnly: true},
+		{line: "session", want: []string{"SESSION session-1 | User: 用户 · → (u-1)", "Started: 2026-01-02 03:04:05 | Active: true"}},
+		{line: "apps", want: []string{"com.test.unicode  界面 · → v1", "LIVE | PID 7 | caps: ipc"}},
+		{line: "logs 7", want: []string{"PROCESS 7 (进程 · →) | external | running", "stdout: 20B (dropped 0B) | stderr: 0B", "输出 · → …"}},
+	} {
+		t.Run(tc.line, func(t *testing.T) {
+			m := NewWithTheme(t.Context(), caller, nil, theme.Monochrome(), ui.Plain)
+			result, ok := m.submit(tc.line)().(resultMsg)
+			if !ok || result.err != nil {
+				t.Fatalf("command result = %#v, error %v", result, result.err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(result.text, want) {
+					t.Errorf("command output lacks %q:\n%s", want, result.text)
+				}
+			}
+			if tc.asciiOnly {
+				requireMonochromeChromeASCII(t, result.text)
+			}
+			m.Update(result)
+			lineCount := strings.Count(result.text, "\n") + 1
+			appended := m.transcript[len(m.transcript)-lineCount:]
+			lines := make([]string, 0, lineCount)
+			for _, entry := range appended {
+				lines = append(lines, entry.text)
+			}
+			if got := strings.Join(lines, "\n"); got != result.text {
+				t.Fatalf("transcript changed command output:\n%q\nwant:\n%q", got, result.text)
+			}
+		})
+	}
+
+	m := NewWithTheme(t.Context(), caller, nil, theme.Nostalgia(), ui.Plain)
+	result := m.submit("session")().(resultMsg)
+	if !strings.Contains(result.text, "SESSION session-1 · User: 用户 · →") {
+		t.Fatalf("non-Monochrome command lost Unicode chrome or content:\n%s", result.text)
 	}
 }
 

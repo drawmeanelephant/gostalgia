@@ -884,10 +884,11 @@ func (m *Model) submit(line string) tea.Cmd {
 	m.historyPos = len(m.history)
 	m.input, m.cursor, m.draft = nil, 0, ""
 	cwd := m.cwd
+	hint := m.kit.Hint
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
-		return execute(ctx, m.client, cwd, line)
+		return execute(ctx, m.client, cwd, line, hint)
 	}
 }
 

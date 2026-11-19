@@ -412,8 +412,9 @@ All rights reserved.
 Monochrome also applies bounded ASCII fallbacks to shell-owned help and hint
 arrows, middle-dot separators, header rules, truncation suffixes, and empty
 markers. The conversion happens at those owned literals and suffixes, including
-`ui.HelpBar`, presentation hints, and task-log headings; it is not a global
-Unicode filter. External and application text, including CJK, combining
+`ui.HelpBar`, `help`/`session`/`apps`/`logs` command summaries, presentation
+hints, and task-log headings; it is not a global Unicode filter. External and
+application text, including CJK, combining
 characters, and emoji, remains unchanged after `ui.Sanitize`. Non-Monochrome
 Plain keeps its existing chrome Unicode; its wordmark is ASCII because the
 bundled fonts and spaced title already are.
