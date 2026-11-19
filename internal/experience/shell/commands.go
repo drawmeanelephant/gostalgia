@@ -44,10 +44,30 @@ type sysStatusData struct {
 // Apps listing and that leaves the shell on the Apps shelf.
 const openAppsPrefix = "__OPEN_APPS__"
 
+// resultOrigin says where a submitted line came from. A shelf launch reports
+// a rejection in the shelf; a command-line result belongs to the prompt. The
+// zero value marks a result no submission produced, such as an internal
+// caller's or a test's, and keeps the command-line behavior for it.
+type resultOrigin int
+
+const (
+	originUnsubmitted resultOrigin = iota
+	originCommandLine
+	originShelfLaunch
+)
+
 type resultMsg struct {
-	text             string
-	err              error
-	failedLaunch     bool
+	text         string
+	err          error
+	failedLaunch bool
+	// origin is where the submitted line came from, originMode the screen
+	// showing then. originSeq and originApp identify a shelf launch, and
+	// originEpoch is the shelfEpoch it was launched in.
+	origin           resultOrigin
+	originMode       viewMode
+	originSeq        uint64
+	originApp        string
+	originEpoch      uint64
 	cwd              string
 	status           sysStatusData
 	documents        []docShortcut

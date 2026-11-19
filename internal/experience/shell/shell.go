@@ -158,7 +158,15 @@ type Model struct {
 	apps           []appStatus
 	// appsSent numbers app/list refreshes as they are sent; only the answer
 	// to the newest request is applied. See appListMsg.
-	appsSent           uint64
+	appsSent uint64
+	// launchSent numbers shelf launches so an older rejection cannot cover a
+	// newer result. launchNotice is the rejection the shelf keeps in view;
+	// shelfEpoch counts the times the user left the shelf, so a launch that
+	// answers after they moved on shows nothing. See launcher.go.
+	launchSent         uint64
+	launchNotice       string
+	launchNoticeApp    string
+	shelfEpoch         uint64
 	selected           int
 	launcherTop        int // the first card a click left in view; see launcherCards
 	shelf              bool
@@ -282,8 +290,20 @@ func (m *Model) currentMode() viewMode {
 }
 
 func (m *Model) setMode(mode viewMode) {
+	if mode != modeLauncher {
+		m.leaveShelf()
+	}
 	m.mode = mode
 	m.shelf = (mode == modeLauncher)
+}
+
+// leaveShelf records that the user has left the app shelf, so a launch that
+// answers afterwards neither reappears there nor moves them back.
+func (m *Model) leaveShelf() {
+	if m.shelf {
+		m.shelfEpoch++
+		m.launchNotice, m.launchNoticeApp = "", ""
+	}
 }
 
 func (m *Model) Focus() FocusState {
@@ -633,6 +653,7 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 	m.closePalette()
 	m.taskView = false
 	m.notifView = false
+	m.leaveShelf()
 	m.shelf = false
 	for _, a := range m.apps {
 		if a.Manifest.ID == id {
@@ -887,6 +908,14 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) submit(line string) tea.Cmd {
+	return m.submitFrom(line, originCommandLine, 0, "", 0)
+}
+
+// submitFrom runs line as the prompt would and records where it came from,
+// so its asynchronous result can respect where the user is when it answers.
+// Shelf launches add their sequence, app identity and shelf epoch; a result
+// that arrives after the user left never reports back into the shelf.
+func (m *Model) submitFrom(line string, origin resultOrigin, seq uint64, appID string, epoch uint64) tea.Cmd {
 	m.busy = true
 	m.resetScroll()
 	m.append(entry{dosPath(m.cwd) + "> " + line, "command"})
@@ -897,11 +926,39 @@ func (m *Model) submit(line string) tea.Cmd {
 	m.historyPos = len(m.history)
 	m.input, m.cursor, m.draft = nil, 0, ""
 	cwd := m.cwd
+	mode := m.currentMode()
 	hint := m.kit.Hint
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
-		return execute(ctx, m.client, cwd, line, hint)
+		msg := execute(ctx, m.client, cwd, line, hint)
+		msg.origin, msg.originMode = origin, mode
+		msg.originSeq, msg.originApp, msg.originEpoch = seq, appID, epoch
+		return msg
+	}
+}
+
+// reportResultError puts a failed command in front of the user when they are
+// still where they ran it. A shelf launch reports into the shelf and keeps
+// its filter, selection and instance; a command-line result brings the
+// prompt up only if the user has not navigated elsewhere since submitting.
+// It reports whether the failure is shown now.
+func (m *Model) reportResultError(msg resultMsg) bool {
+	switch msg.origin {
+	case originShelfLaunch:
+		return m.showShelfLaunchFailure(msg)
+	case originCommandLine:
+		if m.presentation != nil || m.currentMode() != msg.originMode {
+			return false
+		}
+		m.setMode(modePrompt)
+		return true
+	default:
+		if m.presentation != nil {
+			return false
+		}
+		m.setMode(modePrompt)
+		return true
 	}
 }
 
@@ -936,6 +993,19 @@ func (m *Model) applyAppList(apps []appStatus) {
 	m.apps = apps
 	if id == "" || !m.selectApp(id) {
 		m.selected = min(m.selected, max(0, len(m.filteredApps())-1))
+	}
+	if m.launchNoticeApp != "" {
+		found := false
+		for _, a := range apps {
+			if a.Manifest.ID == m.launchNoticeApp {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// The rejected app is no longer listed, so its feedback is stale.
+			m.launchNotice, m.launchNoticeApp = "", ""
+		}
 	}
 }
 
@@ -1150,10 +1220,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.switchView == "tasks" {
 			m.taskView = true
+			m.leaveShelf()
 			m.shelf = false
 			m.notifView = false
 		} else if msg.switchView == "notifications" {
 			m.notifView = true
+			m.leaveShelf()
 			m.shelf = false
 			m.taskView = false
 		} else if msg.switchView == "shelf" || msg.switchView == "launcher" {
@@ -1192,6 +1264,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			r, ok := m.receipts.GetByPID(msg.receiptPID)
 			if ok {
 				m.taskView = true
+				m.leaveShelf()
 				m.shelf = false
 				m.notifView = false
 				m.tasks.ShowReceipt(&r)
@@ -1277,8 +1350,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.append(entry{msg.text, "output"})
 		}
 		if msg.err != nil {
+			// The transcript always keeps the failure; where the user sees
+			// it now depends on where the command came from.
 			m.append(entry{msg.err.Error(), "error"})
-			if failedLaunchResult(msg) {
+			if m.reportResultError(msg) && failedLaunchResult(msg) {
 				cmd = tea.Batch(cmd, m.startFailedLaunch())
 			}
 		}

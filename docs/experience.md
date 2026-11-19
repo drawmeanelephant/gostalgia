@@ -431,10 +431,16 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 
 Applications follow the platform single-instance contract. When launching an
 app that is already running or rejected by the runtime, the shell handles the
-rejection gracefully: the error is recorded in the transcript, focus safely
-transitions to the prompt to display the diagnostic message, and the terminal
-state remains intact. Stopping an application via `F3`, the palette, or
-`stop <app-id>` issues a graceful IPC stop request once it is confirmed.
+rejection gracefully and reports it where the launch came from. A launch from
+the Apps shelf keeps the shelf focused, with its filter, selected card and the
+existing live instance unchanged, and shows the rejection as a `LAUNCH FAILED`
+line there; only the newest launch from the current visit to the shelf may show
+one, so a late answer never pulls the user back after they navigate away. A
+typed `launch <app-id>` still records the error in the transcript and reports
+it on the command line, which comes to the front only while the user is still
+on the screen they submitted from. The terminal state remains intact in both
+cases. Stopping an application via `F3`, the palette, or `stop <app-id>` issues
+a graceful IPC stop request once it is confirmed.
 
 ## Task Manager, Notifications, and Crash Receipts
 

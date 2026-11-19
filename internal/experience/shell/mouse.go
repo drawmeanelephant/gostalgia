@@ -221,6 +221,9 @@ var tabScreens = []screen{screenHome, screenApps, screenPrompt, screenTasks, scr
 // clicked, as it is the active one.
 func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 	cancel := m.dismissView()
+	if to != screenApps {
+		m.leaveShelf()
+	}
 	var refresh tea.Cmd
 	switch to {
 	case screenHome, screenApps:
@@ -314,7 +317,11 @@ func (m *Model) launcherNode() bloom.Child {
 		selected := min(m.selected, len(filtered)-1)
 		rows := []bloom.Child{bloom.Fixed(1, m.kit.Leaf(func(b ui.Bounds) string { return m.kit.Truncate(m.launcherSearch(), b.Width) }))}
 		used := 1
-		start, end, cardHeight := launcherCards(selected, len(filtered), h, m.launcherTop)
+		if m.launchNotice != "" && used < h {
+			rows = append(rows, bloom.Fixed(1, m.kit.Leaf(func(b ui.Bounds) string { return m.launcherNoticeLine(b.Width) })))
+			used++
+		}
+		start, end, cardHeight := launcherCards(selected, len(filtered), h-(used-1), m.launcherTop)
 		for i := start; i < end && used < h; i++ {
 			a, focused := filtered[i], i == selected
 			card := m.kit.Leaf(func(b ui.Bounds) string { return m.launcherCard(a, focused, b.Width, cardHeight) })

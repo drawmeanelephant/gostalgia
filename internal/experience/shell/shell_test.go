@@ -410,6 +410,9 @@ func TestGraphemeClusterEditing(t *testing.T) {
 func TestThemeAndMotionCommands(t *testing.T) {
 	ctx := context.Background()
 	m := New(ctx, noopCaller{}, nil)
+	// Typed commands and Tab completion happen at the prompt. An error no
+	// longer moves the shell here from another screen on its own.
+	m.setMode(modePrompt)
 
 	// Test theme command with no args shows active theme
 	res := execute(ctx, m.client, m.cwd, "theme")
