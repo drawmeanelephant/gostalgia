@@ -229,6 +229,13 @@ func TestConcurrentSSHMotionPolicies(t *testing.T) {
 	assertFailureMotion("A independently reduced", a, false)
 	assertFailureMotion("B changed to enabled", b, true)
 
+	// Cross the real five-second config refresh. This wait covers functional
+	// polling, not animation timing: opposite session overrides must survive
+	// an unchanged effective config rather than only the initial attachment.
+	time.Sleep(5500 * time.Millisecond)
+	assertFailureMotion("A reduced after config refresh", a, false)
+	assertFailureMotion("B enabled after config refresh", b, true)
+
 	for name, c := range map[string]*motionSSHClient{"a": a, "b": b} {
 		offset := c.send(t, "\x03")
 		c.waitRawSince(t, offset, "\x1b[?1049l")

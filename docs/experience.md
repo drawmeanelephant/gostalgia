@@ -196,7 +196,12 @@ Each shell model owns its motion value and clock. The same injected clock goes t
 `time.Now`, while tests advance both deterministic time sources explicitly. No code calls
 the process-global `anim.SetMotion`, so concurrent local or SSH-attached shells can retain
 opposite policies and change them independently. `motion on` means ReducedMotion is enabled;
-`motion off` enables finite transitions for that shell only.
+`motion off` enables finite transitions for that shell only. These commands set
+a session-local override that later config polls and theme changes preserve.
+Without that override, an explicit non-default `accessibility.reduced_motion`
+setting applies; when no non-default layer sets it, the active theme's default
+applies. The built-in `false` config default therefore cannot re-enable motion
+in Monochrome, HighContrast, or HighContrastLight.
 
 An idle shell starts no decorative goroutine, clock, spinner, permanent animation loop, or
 new frame command. The existing 500 ms process/configuration/log refresh and notification

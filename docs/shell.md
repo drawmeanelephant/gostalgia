@@ -374,8 +374,11 @@ event-type request on the returned `tea.View`.
   `anim.SetMotion`, palette/dialog/toast/layout transition, or idle animation
   is attached. ReducedMotion removes the value and transition, returns no
   animation-frame command even when enabled during an active shake, keeps
-  `WithCopyFlash(false)`, and preserves the pre-#213 static goldens. Existing
-  process/config/log polling and notification expiry remain functional work.
+  `WithCopyFlash(false)`, and preserves the pre-#213 static goldens. Session
+  `motion` overrides survive later polls and theme changes. Without one,
+  explicit non-default config wins; otherwise the theme default wins, so the
+  built-in `false` default cannot enable motion in a default-reduced theme.
+  Existing process/config/log polling and notification expiry remain functional work.
 
 ### Mouse and clipboard (Issue #211)
 
