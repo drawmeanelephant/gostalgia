@@ -907,7 +907,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			// Routine success needs no history entry; a failure stays
 			// there for whoever was away, or under Do-Not-Disturb.
-			m.notifs.Flash(copyNotice(msg))
+			m.flash(copyNotice(msg))
 		} else {
 			m.notifs.Record(copyNotice(msg))
 		}
@@ -1287,7 +1287,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd, ok := m.copyInView()
 			if !ok {
 				m.initExperience()
-				m.notifs.Flash(nothingToCopy)
+				m.flash(nothingToCopy)
 			}
 			return m, cmd
 		}

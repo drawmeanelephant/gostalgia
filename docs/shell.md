@@ -432,9 +432,10 @@ copy" elsewhere. A `shortcuts.*` key set to Ctrl-Y wins over copying. A copy
 is an asynchronous command calling the runtime's authenticated
 `clipboard/write` with `{"text": …, "target": "host"}`; its answer comes
 back as a toast badged COPY, and a slow answer never holds up keys, resize
-or exit. "Copied" and "Nothing to copy" are toasts only; a blocked or failed
-copy is also kept in the Notification Center, where it is the only trace
-under Do-Not-Disturb.
+or exit. "Copied" and "Nothing to copy" are toasts only, except on the
+Notification Center, which draws no toasts and lists them instead; a blocked
+or failed copy is always kept in the Notification Center, where it is the
+only trace under Do-Not-Disturb.
 
 - **Policy.** The runtime's clipboard service decides. The host clipboard is
   off by default: a copy then fails with `policy_denied` and changes no

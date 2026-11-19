@@ -574,8 +574,8 @@ func (m *Model) copyCmd(text string) tea.Cmd {
 // which operator policy settings would allow it: the shell cannot grant
 // them. IPC errors reach the shell as text only, so the kinds of denial are
 // told apart by the runtime's wording, which
-// TestMouseSelectionCopiesToTheHostClipboardThroughPolicy pins against the
-// real clipboard service.
+// TestMouseSelectionCopiesThroughTheRuntimesPolicy pins against the real
+// clipboard service.
 func copyNotice(msg copyMsg) notifications.Notification {
 	n := notifications.Notification{Level: notifications.LevelInfo, Source: "clipboard", Badge: "COPY", Wrap: true}
 	switch err := msg.err; {
@@ -600,6 +600,16 @@ func copyNotice(msg copyMsg) notifications.Notification {
 		n.Message = safe(err.Error())
 	}
 	return n
+}
+
+// flash shows n as a toast only, except on the Notification Center, which
+// draws no toasts: there n goes to its history, where it shows at once.
+func (m *Model) flash(n notifications.Notification) {
+	if m.notifView {
+		m.notifs.Record(n)
+		return
+	}
+	m.notifs.Flash(n)
 }
 
 // nothingToCopy is the notification for Ctrl-Y where there is nothing to

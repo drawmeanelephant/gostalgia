@@ -1622,6 +1622,27 @@ func TestMouseTooltipsFollowResizeFilterAndScroll(t *testing.T) {
 	hover("200x60", "")
 }
 
+// The Notification Center draws no toasts, so a copy's notice there goes
+// straight into its list.
+func TestCopyNoticesShowOnTheNotificationCenter(t *testing.T) {
+	m, rec := mouseModel(t, 80, 24)
+	m.notifView = true
+	n := len(m.notifs.History())
+	act(t, m, tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	if len(copied(t, rec)) != 0 || len(m.notifs.History()) != n+1 || !strings.Contains(bodyText(t, m), "Nothing to copy") {
+		t.Fatalf("Ctrl-Y on the Notification Center shows:\n%s", bodyText(t, m))
+	}
+	m.Update(copyMsg{chars: 3})
+	if !strings.Contains(bodyText(t, m), "Copied") {
+		t.Fatalf("a copy answered on the Notification Center shows:\n%s", bodyText(t, m))
+	}
+	m.notifView = false
+	m.Update(copyMsg{chars: 3})
+	if len(m.notifs.History()) != n+2 {
+		t.Fatal("a copy answered elsewhere went to the history")
+	}
+}
+
 func TestCtrlYGivesWayToAShortcutOnIt(t *testing.T) {
 	byKey, _ := mouseModel(t, 80, 24)
 	m, rec := mouseModel(t, 80, 24)
