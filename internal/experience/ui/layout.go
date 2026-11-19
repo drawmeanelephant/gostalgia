@@ -14,18 +14,32 @@ type Bounds struct {
 	Width, Height int
 }
 
+// FirstCluster returns the first user-perceived Unicode grapheme cluster of s,
+// or "" when s is empty. Unlike GraphemeClusters it never segments the rest, so
+// a viewport can reserve a cluster's cells without walking the whole string.
+func FirstCluster(s string) string {
+	if s == "" {
+		return ""
+	}
+	cluster, _ := ansi.FirstGraphemeCluster(s, ansi.WcWidth)
+	if len(cluster) == 0 {
+		_, size := utf8.DecodeRuneInString(s)
+		if size <= 0 {
+			return ""
+		}
+		cluster = s[:size]
+	}
+	return cluster
+}
+
 // GraphemeClusters decomposes s into its user-perceived Unicode grapheme clusters.
 // It keeps combining characters, zero-width joiners, flags, and multi-column runes intact.
 func GraphemeClusters(s string) []string {
 	var clusters []string
-	for len(s) > 0 {
-		cluster, _ := ansi.FirstGraphemeCluster(s, ansi.WcWidth)
-		if len(cluster) == 0 {
-			_, size := utf8.DecodeRuneInString(s)
-			if size <= 0 {
-				break
-			}
-			cluster = s[:size]
+	for s != "" {
+		cluster := FirstCluster(s)
+		if cluster == "" {
+			break
 		}
 		clusters = append(clusters, cluster)
 		s = s[len(cluster):]
@@ -79,13 +93,25 @@ func Truncate(s string, width int) string {
 	return ansi.Truncate(s, width, "…")
 }
 
-// Tail keeps the rightmost cells without splitting a grapheme.
+// Tail keeps at most width of the rightmost cells without splitting a
+// grapheme. A wide cluster that straddles the left edge is dropped whole, so
+// callers can budget the returned cells exactly.
 func Tail(s string, width int) string {
 	if width <= 0 {
 		return ""
 	}
 	s, _, _ = strings.Cut(s, "\n")
-	return ansi.TruncateLeft(s, max(0, ansi.StringWidth(s)-width), "")
+	total := ansi.StringWidth(s)
+	cut := max(0, total-width)
+	for {
+		out := ansi.TruncateLeft(s, cut, "")
+		if cut >= total || ansi.StringWidth(out) <= width {
+			return out
+		}
+		// The cut landed inside a wide cluster and TruncateLeft kept it
+		// whole. Move past it rather than exceeding the cell budget.
+		cut++
+	}
 }
 
 // Wrap hard-wraps trusted text without splitting ANSI sequences or graphemes.

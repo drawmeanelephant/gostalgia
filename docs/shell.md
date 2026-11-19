@@ -94,8 +94,9 @@ JSON is preserved, not passed through path/quote parsing.
   At the end the transcript follows new output; paged back, it stays put
   while output arrives, and paging down to the end follows again. Running a
   command or switching views returns it to the end, and `cls` and `clear`
-  empty it and return it there. Long input stays
-  cursor-centered.
+  empty it and return it there. A prompt draft that fits with its cursor is
+  shown whole; longer input scrolls in a grapheme-safe viewport around the
+  cursor.
 - **Task Manager log tail** (`l` on a process): **↑/↓** (or **k/j**) scroll a
   line, **PgUp/PgDown** a page, **Home/End** (or **g/G**) jump to the first or
   last line. **f** toggles following new output; a tail opens at its first
@@ -385,10 +386,13 @@ event-type request on the returned `tea.View`.
 - **Real cursor.** In editable prompt mode the prompt row places the
   terminal's own cursor (`bloom.Text(...).Cursor(...)`) at the insertion
   point, measured in cells, so it lands correctly after combining marks,
-  wide CJK characters and ZWJ emoji. Long input is sliced around the cursor
-  by whole graphemes, keeping one cell free for the cursor at the end of the
-  input. A busy prompt, any other mode, an open palette or confirmation, and the
-  size notice show no cursor; closing the layer restores it.
+  wide CJK characters and ZWJ emoji. A draft that fits, including its cursor
+  cell, is shown whole. Longer input uses a grapheme-safe viewport with one
+  cell kept free for the cursor at the end and half the row for each side
+  where possible, so editing at the start, middle or end keeps the insertion
+  point visible and never splits a cluster. A busy prompt, any other mode, an
+  open palette or confirmation, and the size notice show no cursor; closing
+  the layer restores it.
 - **Root lifecycle.** Each shell model owns one root, built with
   `bloom.WithColors` from its kit's text and surface colors, that model's
   `bloom.WithClock`, `bloom.WithCopyFlash(false)`, the kit's selection style
