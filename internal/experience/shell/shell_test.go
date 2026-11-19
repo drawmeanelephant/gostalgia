@@ -51,9 +51,20 @@ func TestEditingHistoryCompletionAndBounds(t *testing.T) {
 	if string(m.input) != "launch" {
 		t.Fatal("completion failed")
 	}
-	m.append(entry{strings.Repeat("line\n", 1000) + "\x1b]52;c;unsafe\a", "output"})
-	if len(m.transcript) != maxTranscript {
-		t.Fatalf("scrollback = %d", len(m.transcript))
+	// Twelve bounded results of 1,000 numbered lines each overflow the
+	// 10,000-line transcript, which keeps the newest lines in order.
+	for r := range 12 {
+		var b strings.Builder
+		for i := range 1000 {
+			fmt.Fprintf(&b, "line %05d\n", r*1000+i)
+		}
+		m.append(entry{b.String() + "\x1b]52;c;unsafe\a", "output"})
+	}
+	if len(m.transcript) != maxTranscript || m.transcriptBuf.Len() != maxTranscript {
+		t.Fatalf("scrollback = %d entries, %d buffer lines", len(m.transcript), m.transcriptBuf.Len())
+	}
+	if first, last := m.transcriptBuf.Text(0), m.transcriptBuf.Text(maxTranscript-2); first != "line 02010" || last != "line 11999" {
+		t.Fatalf("kept %q … %q, want the newest lines in order", first, last)
 	}
 	m.cwd = "/users/guest/" + strings.Repeat("long-directory/", 20)
 	m.input = []rune(strings.Repeat("界", 100))

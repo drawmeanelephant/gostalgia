@@ -97,11 +97,20 @@ func (k Kit) resolve(c color.Color) color.Color {
 	}
 }
 
+// style is the style paint applies: colors in the kit's profile, and none
+// at all in Plain.
+func (k Kit) style(fg, bg color.Color, bold bool) lipgloss.Style {
+	if k.mode == Plain {
+		return lipgloss.NewStyle()
+	}
+	return lipgloss.NewStyle().Foreground(k.resolve(fg)).Background(k.resolve(bg)).Bold(bold)
+}
+
 func (k Kit) paint(text string, fg, bg color.Color, bold bool) string {
 	if text == "" || k.mode == Plain {
 		return text
 	}
-	style := lipgloss.NewStyle().Foreground(k.resolve(fg)).Background(k.resolve(bg)).Bold(bold)
+	style := k.style(fg, bg, bold)
 	// Lip Gloss doesn't restore an outer style after a nested full SGR reset.
 	// Reapply it so composed badges/tabs/help don't expose the host background
 	// in separators or padding. Derive the prefix from this explicit style.
@@ -139,6 +148,21 @@ func (k Kit) StatusText(text string, state theme.State) string {
 func (k Kit) Selection(text string) string {
 	f := k.theme.Focus
 	return k.paint(text, f.Text, f.Fill, k.theme.Typography.HeadingBold)
+}
+
+// TextStyle is the style Text paints, for a bloom node that draws text in
+// it itself, such as a viewport's rows. It is empty in Plain.
+func (k Kit) TextStyle() lipgloss.Style {
+	p := k.theme.Palette
+	return k.style(p.Text, p.Surface, false)
+}
+
+// SelectionStyle is the style Selection paints, for a bloom node that marks
+// text in it itself, such as the matches of a search. It is empty in Plain,
+// where a text marker has to carry the selection.
+func (k Kit) SelectionStyle() lipgloss.Style {
+	f := k.theme.Focus
+	return k.style(f.Text, f.Fill, k.theme.Typography.HeadingBold)
 }
 
 func (k Kit) FocusText(text string) string {

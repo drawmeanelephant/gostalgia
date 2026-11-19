@@ -380,7 +380,9 @@ scrollable table:
   `RAM` (resident memory), `RESTARTS`, and `EXIT` code / runtime duration.
 - **Navigation & Controls**:
   - `↑` / `↓` / `k` / `j`: Navigate through processes.
-  - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`).
+  - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`), which
+    refreshes while open and scrolls, follows and searches as
+    [the shell keyboard reference](shell.md#keyboard) describes.
   - `c` or `Enter`: Inspect post-mortem crash receipt for failed processes.
   - `x`: Terminate selected process (`proc/stop`) after confirmation.
   - `r`: Prune every terminated process in the environment (`proc/reap`)

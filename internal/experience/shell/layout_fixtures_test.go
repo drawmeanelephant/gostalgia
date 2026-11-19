@@ -72,8 +72,10 @@ func fixtureModel(th theme.Theme, mode ui.ColorMode) *Model {
 	for range 8 {
 		notifs.Tick()
 	}
-	m.transcript = append(m.transcript, entry{"> apps", "command"}, entry{"Echo, Notes and Clock are installed.", ""},
-		entry{"Unicode e\u0301 界 👩‍💻 survives wrapping.", "muted"})
+	for _, e := range []entry{{"> apps", "command"}, {"Echo, Notes and Clock are installed.", ""},
+		{"Unicode e\u0301 界 👩‍💻 survives wrapping.", "muted"}} {
+		m.append(e)
+	}
 	return m
 }
 

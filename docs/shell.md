@@ -78,8 +78,44 @@ JSON is preserved, not passed through path/quote parsing.
 - **Tab**: complete an unambiguous command or ID after launch/run/stop.
 - **Left/Right, Home/End, Ctrl-A/E**: move cursor. Backspace/Delete edits;
   Ctrl-U clears input. Unicode and bracketed paste are supported.
-- **PgUp/PgDown**: scroll transcript. Output is bounded to 400 lines;
-  each result is capped at 12,000 runes. Long input stays cursor-centered.
+- **PgUp/PgDown**: page the transcript by its height. The transcript keeps
+  the newest 10,000 lines, and each result is capped at 12,000 runes. Long
+  lines wrap; a resize keeps the line at the top of the transcript in place.
+  At the end the transcript follows new output; paged back, it stays put
+  while output arrives, and paging down to the end follows again. Running a
+  command or switching views returns it to the end, and `cls` and `clear`
+  empty it and return it there. Long input stays
+  cursor-centered.
+- **Task Manager log tail** (`l` on a process): **↑/↓** (or **k/j**) scroll a
+  line, **PgUp/PgDown** a page, **Home/End** (or **g/G**) jump to the first or
+  last line. **f** toggles following new output; a tail opens at its first
+  line and does not follow until **f**. Scrolling up, or moving to a match
+  above the lines on screen, stops following, and scrolling back to the end
+  does not start it again; press **f**. **/** types a case-insensitive
+  search, starting from the last one; **Enter** finds the first match at or
+  below the top line on screen and **Esc** cancels. **n** and **N** move to
+  the next and previous match, wrapping at the ends. The status line counts
+  the matches. In color, every match is highlighted in
+  the theme's selection colors; in every mode, Plain included, the current
+  match's line is marked in the gutter. **Esc** or **Enter** returns to the
+  table. These keys keep working while a command runs.
+  - While a tail is open, and no command is running, the shell asks
+    `proc/logs` for its last 100 lines every half second, one request at
+    a time. A snapshot that continues the tail appends only the new lines,
+    so a scrolled tail does not move. A snapshot that shares no lines with
+    the tail replaces its lines and keeps the line number on screen: a log
+    that was truncated or rotated, or one that grew by 100 lines or more
+    between two refreshes. A tail keeps at most 100 lines. Snapshots carry
+    no offsets, so a log whose new lines repeat the lines just before them
+    can look unchanged, or grown by fewer lines than it has.
+  - Each opened process keeps its own lines, scroll position, follow state
+    and search while it is listed in the table, and the open one while it
+    is open, so reopening it returns to the same place. A search being
+    typed takes every key except Ctrl-C, Ctrl-D and the palette, and ends
+    when you leave the tail for the table or a crash receipt; the palette,
+    or another view opened from it, leaves it to finish when you come
+    back. A response for a process you have since left never replaces the
+    tail on screen.
 - **Ctrl-C/D**: exit. A pending IPC command doesn't block the event loop;
   while it runs, command editing is disabled (exit/resize/scroll still work).
 
@@ -265,9 +301,10 @@ event-type request on the returned `tea.View`.
     entries around the selection, each as its title and message. It also
     switches when the panel is too narrow to show an entry's title beside
     its badge and timestamp. Below seven body rows it is always compact.
-  - The log tail shows a `LOGS · PID n · name` heading and then as many log
-    lines as fit. Up and Down scroll them from the same offset as the
-    bordered tail. Below seven body rows it is always compact.
+  - The log tail shows a `LOGS · PID n · name` heading, the search or
+    match status when there is one, and then as many log lines as fit. The
+    keys scroll it from the same position as the bordered tail. Below seven
+    body rows it is always compact.
   - The crash receipt shows the process and PID, then the reason, the exit
     code and state, the receipt ID and time, and the end of the log
     excerpt. It switches when the bordered receipt could not reach its
@@ -276,7 +313,7 @@ event-type request on the returned `tea.View`.
   The keys do not change. Up, Down, Enter and `d` act on the entry on
   screen, `a`, `c` and `n` work as before, and Esc goes back. Growing the
   terminal restores the bordered panel with the same selection and log
-  offset.
+  position.
 - **Layers.** Toasts, the command palette and confirmations are bloom layers
   over the frame, never rows in it, so the solved frame is the same with or
   without them.

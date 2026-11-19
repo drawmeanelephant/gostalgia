@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"bloomfx.dev/bloom"
-	"charm.land/bubbles/v2/viewport"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -48,15 +48,18 @@ type ProcessRow struct {
 
 // Model manages state and rendering for the live Task Manager.
 type Model struct {
-	mu          sync.RWMutex
-	procs       []ProcessRow
-	selected    int
-	scroll      int
-	mode        Mode
-	logsPID     int32
-	logsName    string
-	logsContent string
-	logsScroll  int
+	mu       sync.RWMutex
+	procs    []ProcessRow
+	selected int
+	scroll   int
+	mode     Mode
+	logsPID  int32
+	logsName string
+	// logs holds the log tail of each process opened, kept while the
+	// process is in the table.
+	logs        map[int32]*processLog
+	searching   bool
+	searchDraft string
 	receipt     *receipts.CrashReceipt
 	statusMsg   string
 	errorMsg    string
@@ -95,7 +98,12 @@ func (m *Model) SetProcesses(procs []ProcessRow) {
 	if len(m.procs) == 0 {
 		m.selected = 0
 		m.scroll = 0
-		return
+	}
+
+	for pid := range m.logs {
+		if pid != m.logsPID && !slices.ContainsFunc(m.procs, func(p ProcessRow) bool { return p.ID == pid }) {
+			delete(m.logs, pid)
+		}
 	}
 
 	if m.selected >= len(m.procs) {
@@ -133,44 +141,23 @@ func (m *Model) SelectedIndex() int {
 	return m.selected
 }
 
-// SelectNext moves selection down.
+// SelectNext moves the table's selection down. The log tail scrolls with
+// ScrollLogs instead.
 func (m *Model) SelectNext() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.mode == ModeLogs {
-		m.logsScroll++
-		return
-	}
-	if len(m.procs) > 0 && m.selected < len(m.procs)-1 {
+	if m.mode == ModeTable && len(m.procs) > 0 && m.selected < len(m.procs)-1 {
 		m.selected++
 	}
 }
 
-// SelectPrev moves selection up.
+// SelectPrev moves the table's selection up.
 func (m *Model) SelectPrev() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.mode == ModeLogs {
-		if m.logsScroll > 0 {
-			m.logsScroll--
-		}
-		return
-	}
-	if m.selected > 0 {
+	if m.mode == ModeTable && m.selected > 0 {
 		m.selected--
 	}
-}
-
-// ShowLogs sets the logs view mode for a process.
-func (m *Model) ShowLogs(pid int32, name, content string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.mode = ModeLogs
-	m.logsPID = pid
-	m.logsName = ui.Sanitize(name)
-	m.logsContent = ui.Sanitize(content)
-	m.logsScroll = 0
-	m.errorMsg = ""
 }
 
 // ShowReceipt opens the crash receipt inspection view.
@@ -180,6 +167,7 @@ func (m *Model) ShowReceipt(r *receipts.CrashReceipt) {
 	m.mode = ModeReceipt
 	m.receipt = r
 	m.errorMsg = ""
+	m.searching, m.searchDraft = false, ""
 }
 
 // Receipt returns the currently displayed crash receipt if in ModeReceipt.
@@ -204,7 +192,7 @@ func (m *Model) CloseModal() {
 	defer m.mu.Unlock()
 	m.mode = ModeTable
 	m.receipt = nil
-	m.logsContent = ""
+	m.searching, m.searchDraft = false, ""
 }
 
 // SetStatus sets a transient informational status message.
@@ -325,7 +313,7 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 
 	switch m.mode {
 	case ModeLogs:
-		return m.renderLogs(kit, bounds)
+		return bloom.Render(bounds.Width, bounds.Height, m.logsNode(kit, bounds))
 	case ModeReceipt:
 		if m.receipt != nil {
 			return receipts.Render(kit, *m.receipt, bounds)
@@ -334,76 +322,6 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 	default:
 		return m.renderTable(kit, bounds)
 	}
-}
-
-func (m *Model) renderLogs(kit ui.Kit, bounds ui.Bounds) string {
-	if bounds.Height < compactLogsHeight {
-		return m.renderCompactLogs(kit, bounds)
-	}
-	contentBounds := kit.PanelContentBounds(bounds)
-	w := contentBounds.Width
-	h := contentBounds.Height
-
-	var lines []string
-	lines = append(lines, kit.Heading(fmt.Sprintf("CHILD LOG TAIL: %s (PID %d)", m.logsName, m.logsPID)))
-	lines = append(lines, kit.Muted("Esc or Enter returns to process table · ↑↓ scroll"))
-	lines = append(lines, "")
-
-	if visible, ok := m.visibleLogLines(max(1, h-len(lines))); !ok {
-		lines = append(lines, kit.Muted("(no output captured yet)"))
-	} else {
-		for _, l := range visible {
-			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
-		}
-	}
-
-	return kit.Panel(ui.Panel{
-		Title:   fmt.Sprintf("LOGS · PID %d", m.logsPID),
-		Body:    strings.Join(lines, "\n"),
-		Focused: true,
-	}, bounds)
-}
-
-// compactLogsHeight is the smallest height at which the bordered log tail
-// shows a log line under its heading and help. Below it the tail drops its
-// chrome so the log text itself stays on screen.
-const compactLogsHeight = 7
-
-// renderCompactLogs keeps the log tail usable in a body too short for its
-// panel: the process it belongs to when there is room, then as many log
-// lines as fit, scrolled by the same offset as the bordered tail.
-func (m *Model) renderCompactLogs(kit ui.Kit, bounds ui.Bounds) string {
-	w, rows := bounds.Width, bounds.Height
-	var lines []string
-	if rows >= 2 {
-		lines = append(lines, kit.Heading(ui.Truncate(fmt.Sprintf("LOGS · PID %d · %s", m.logsPID, m.logsName), w)))
-		rows--
-	}
-	if visible, ok := m.visibleLogLines(rows); !ok {
-		lines = append(lines, kit.Muted(ui.Truncate("(no output captured yet)", w)))
-	} else {
-		for _, l := range visible {
-			lines = append(lines, kit.Text(ui.Truncate(l, w)))
-		}
-	}
-	return ui.Fit(strings.Join(lines, "\n"), bounds)
-}
-
-// visibleLogLines is the window of log lines rows tall at the current
-// scroll offset; ok is false when no output has been captured.
-func (m *Model) visibleLogLines(rows int) (visible []string, ok bool) {
-	rawLines := strings.Split(m.logsContent, "\n")
-	if len(rawLines) == 0 || (len(rawLines) == 1 && rawLines[0] == "") {
-		return nil, false
-	}
-	// The log tail delegates its clamp to bubbles/viewport (issue #185);
-	// logsScroll stays the canonical offset so SelectPrev/SelectNext and
-	// tests keep the same contract.
-	vp := viewport.New(viewport.WithHeight(rows))
-	vp.SetContentLines(rawLines)
-	vp.SetYOffset(m.logsScroll)
-	scroll := vp.YOffset()
-	return rawLines[scroll:min(len(rawLines), scroll+rows)], true
 }
 
 func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {

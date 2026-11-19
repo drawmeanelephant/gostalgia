@@ -60,6 +60,20 @@ func (l Leaf) Layout(ctx bloom.Context) bloom.Child {
 	return bloom.Text(out)
 }
 
+// SizedNode builds its subtree for the exact space its slot gives it. It
+// asks for no space of its own. Like a Leaf's render function, it must not
+// change state.
+type SizedNode func(ctx bloom.Context) bloom.Child
+
+// View implements bloom.Child.
+func (SizedNode) View() string { return "" }
+
+// Measure implements bloom.Measurer.
+func (SizedNode) Measure(bloom.Size) bloom.Size { return bloom.Size{} }
+
+// Layout implements bloom.Layouter.
+func (n SizedNode) Layout(ctx bloom.Context) bloom.Child { return n(ctx) }
+
 // TabsLeaf is Tabs sized by the layout.
 func (k Kit) TabsLeaf(tabs []Tab, active int) Leaf {
 	return k.Leaf(func(b Bounds) string { return k.Tabs(tabs, active, b.Width) })
