@@ -485,6 +485,13 @@ none is hidden behind a claim of universal neutrality:
   stale cells during the terminal's differential repaint even though the new
   full frame was correct. Close therefore returns `tea.ClearScreen` for a full
   repaint; this workaround is adapter-local and adds no animation or idle work.
+- **Window chrome is opaque with static depth.** Each layer fills its solved
+  rectangle with the theme surface, including border glyphs and blank body
+  cells, so canvas text cannot bleed through. A static two-column/one-row
+  shadow tint behind the window gives it visible depth without animation or
+  idle work; Plain and Monochrome omit the color-only effect. Titles reserve the
+  corners, margins, and complete `[X]` control, then truncate to the remaining
+  display cells for narrow, wide-glyph, or hostile text.
 - **Presentation rendering is deliberately an adapter subset.** The adapter
   maps SDK items, single-line fields, actions, blocks, meters, and grid cells to
   bloom text controls and owns selection/draft state. It does not reuse the

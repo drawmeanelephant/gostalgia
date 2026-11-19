@@ -703,6 +703,16 @@ rendering emits no lifecycle events. No production shell or runtime entry point
 registers the experiment, and apps still supply presentation data rather than
 toolkit views.
 
+Each demo window is an opaque surface: its title, body, blank cells, and border
+glyphs all carry the theme's surface background, so canvas text cannot show
+through. A static shadow band behind each window tints the cells it overlaps
+while leaving their text in place, giving visible depth without an animation
+timer or idle scheduling. Titles reserve fixed space for the complete `[X]`
+control and truncate to the remaining display cells, including wide and hostile
+text. Depth is color-only: Plain and Monochrome attach no shadow effect, and
+ANSI256 output is converted to the kit's profile because bloom blending mixes
+in 24-bit.
+
 Run it with:
 
 ```sh
