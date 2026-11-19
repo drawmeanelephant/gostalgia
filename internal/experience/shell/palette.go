@@ -253,12 +253,15 @@ func (m *Model) openPalette() {
 	m.paletteQuery = ""
 	m.paletteSelected = 0
 	m.previousMode = m.currentMode()
+	// The layer replaces the screen beneath it; no old cue may survive.
+	m.clearHoverAll()
 }
 
 func (m *Model) closePalette() {
 	m.paletteOpen = false
 	m.paletteQuery = ""
 	m.paletteSelected = 0
+	m.clearHoverKind(hoverPaletteItem)
 }
 
 // paletteRect is where the palette goes on the w×h screen: centered
@@ -273,8 +276,8 @@ func paletteRect(w, h int) (y, width, height int) {
 // paletteLayer is the open palette as a modal layer over the screen.
 func (m *Model) paletteLayer() bloom.LayerNode {
 	y, w, h := paletteRect(m.width, m.height)
-	box := m.withMouse(ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) }),
-		m.paletteHits, m.paletteScroll)
+	box := m.withMouseAllowed(ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) }),
+		m.paletteHits, m.paletteScroll, m.paletteMouseAllowed)
 	return bloom.Layer(box).Anchor(bloom.Center, bloom.Start).Offset(0, y).Size(w, h).
 		Modal().Backdrop(m.backdrop()...).ID(layerPalette)
 }
@@ -303,6 +306,10 @@ func (m *Model) renderPalette(paletteW, paletteH int) string {
 			cursor := "  "
 			if i == selected {
 				cursor = m.kit.Theme().Focus.Marker + " "
+			} else if m.hoverAt(hoverPaletteItem, it.key()) {
+				// The pointer's cue occupies the same two cells as the
+				// blank prefix, so the palette geometry never moves.
+				cursor = ui.HoverMarker + " "
 			}
 			tagBadge := "[" + it.Tag + "] "
 			detailText := "  " + it.Detail
@@ -331,6 +338,7 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(r) > 0 {
 			m.paletteQuery = string(r[:len(r)-1])
 			m.paletteSelected = 0
+			m.clearHoverKind(hoverPaletteItem)
 		}
 		return m, nil
 	}
@@ -356,12 +364,14 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(r) > 0 {
 			m.paletteQuery = string(r[:len(r)-1])
 			m.paletteSelected = 0
+			m.clearHoverKind(hoverPaletteItem)
 		}
 		return m, nil
 	}
 	if text := safe(msg.Text); text != "" {
 		m.paletteQuery += text
 		m.paletteSelected = 0
+		m.clearHoverKind(hoverPaletteItem)
 		return m, nil
 	}
 	return m, nil

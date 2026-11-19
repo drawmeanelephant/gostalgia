@@ -238,9 +238,15 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	}), nil, m.homeScroll)
 }
 
-func (m *Model) homeRow(selected bool, name, rest string) string {
-	if selected {
+// homeRow draws one Home item. hovered is the pointer's independent cue:
+// selection stays the keyboard's, and the ASCII hover marker never relies on
+// color.
+func (m *Model) homeRow(selected, hovered bool, name, rest string) string {
+	switch {
+	case selected:
 		return m.kit.Selection(m.kit.Theme().Focus.Marker+" "+name) + rest
+	case hovered:
+		return m.kit.Text(ui.HoverMarker+" "+name) + rest
 	}
 	return "  " + m.kit.Text(name) + rest
 }
@@ -260,7 +266,8 @@ func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 			selectedRow = idx
 		}
 		badge := m.kit.Badge(fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success, 20)
-		rows = append(rows, m.kit.Truncate(m.homeRow(idx == hv.selected, viewText(a.Manifest.Name),
+		rows = append(rows, m.kit.Truncate(m.homeRow(idx == hv.selected,
+			m.hoverAt(hoverHomeRow, hoverHomeKey(homeItemApp, a.Manifest.ID)), viewText(a.Manifest.Name),
 			"  "+badge+"  "+m.kit.Muted(viewText(a.Manifest.ID))), b.Width))
 	}
 	if len(rows) == 0 {
@@ -290,7 +297,8 @@ func (m *Model) renderHomeDocs(b ui.Bounds, hv homeView, base int) string {
 	n := max(1, b.Height-1)
 	start := max(0, min(hv.selected-base-n+1, len(docs)-n))
 	for i := start; i < min(len(docs), start+n); i++ {
-		lines = append(lines, m.kit.Truncate(m.homeRow(base+i == hv.selected, viewText(docs[i].Name),
+		lines = append(lines, m.kit.Truncate(m.homeRow(base+i == hv.selected,
+			m.hoverAt(hoverHomeRow, hoverHomeKey(homeItemDoc, docs[i].Path)), viewText(docs[i].Name),
 			"  "+m.kit.Muted(fmt.Sprintf("%d B", docs[i].Size))), b.Width))
 	}
 	return strings.Join(lines, "\n")

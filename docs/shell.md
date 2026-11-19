@@ -517,11 +517,12 @@ equivalent, and the shell stays complete without a mouse.
   when the effective value changes: `mouse on|off` lasts for this shell,
   is not saved, and holds until the configured value next changes. Each
   shell, including each SSH attach, has its own setting, root and gestures.
-- **Mouse modes.** While on, the shell asks for cell-motion reports
-  (clicks, the wheel and drags); while a cut line with a tooltip is on
-  screen, bloom asks for all motion, for hover. Off asks for none. On exit
-  or detach the terminal is restored as before, mouse tracking included
-  (`ESC[?1000l`, `ESC[?1002l`, `ESC[?1003l`, `ESC[?1006l`).
+- **Mouse modes.** While on, a screen with pointer cues or a cut line with
+  a tooltip asks for all motion, so hover can follow the pointer; other
+  screens ask for cell motion (clicks, the wheel and drags). Off asks for
+  none. On exit or detach the terminal is restored as before, mouse
+  tracking included (`ESC[?1000l`, `ESC[?1002l`, `ESC[?1003l`,
+  `ESC[?1006l`).
 
 Each click runs the same function as its key, which checks the state when
 the click arrives, not when the frame was drawn: a busy shell, an action in
@@ -533,6 +534,20 @@ the covered surface or start a copy; log-tail wheels still work while a command
 runs. A copy that already started keeps its completion feedback. A click only
 selects or opens; stopping, reaping and shutdown stay behind their keys and
 confirmations. Borders, headings, blank cells and the active tab do nothing.
+
+**Pointer cues.** Moving the pointer over a launcher card, header tab,
+palette row, Home row, Task Manager row or app-view grid cell marks it with
+`~`: a `~ ` prefix on cards and rows, `~Label~` on tabs, and `<KEY>` in
+place of `[KEY]` on a grid cell. The cue adds no cells: it replaces blank
+padding or takes them from the same truncated title line, so solving, mouse
+hit boxes and the keyboard selection or active tab do not change. It is
+ASCII in every theme and in Plain. Leaving the target, switching screens, opening a palette or
+confirmation, resizing, replacing the list, scrolling, or `mouse off`
+clears it, and a report routed through a frame drawn before that change is
+ignored. An open palette or dialog also blocks the cue and the click on the
+surface beneath it. Hovering a header tab only shows the cue: entering the
+screen is what marks unseen notifications seen, and severity labels and
+unread counts stay as they were.
 
 | Mouse | Keyboard equivalent |
 |---|---|

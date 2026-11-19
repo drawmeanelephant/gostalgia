@@ -91,6 +91,8 @@ func (m *Model) openConfirm(c confirmation) {
 	c.active = confirmCancel
 	c.polls = m.procSent
 	m.confirm = &c
+	// The dialog covers the screen, so no underlying pointer cue survives.
+	m.clearHoverAll()
 }
 
 // stoppable reports whether a process in state can still be stopped: it

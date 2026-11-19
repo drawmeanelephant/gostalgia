@@ -232,9 +232,15 @@ type Model struct {
 
 	// mouseOff is set while this shell takes no mouse input; see mouse.go.
 	// mouseConfig is the accessibility.mouse setting last read, nil while
-	// it is unset.
+	// it is unset. hover is the pointer's semantic target, never the
+	// keyboard's; see hover.go.
 	mouseOff    bool
 	mouseConfig *bool
+	hover       hoverTarget
+	// hoverEpoch changes when navigation, replacement, resize or the mouse
+	// setting retires every target. A pointer callback from an older frame
+	// is ignored rather than applied to the new screen. See hover.go.
+	hoverEpoch uint64
 
 	// keyEnh records the keyboard enhancement flags the terminal actually
 	// negotiated (KeyboardEnhancementsMsg). It is observational: every
@@ -295,6 +301,8 @@ func (m *Model) setMode(mode viewMode) {
 	}
 	m.mode = mode
 	m.shelf = (mode == modeLauncher)
+	// A screen change retires every pointer target on the old screen.
+	m.clearHoverAll()
 }
 
 // leaveShelf records that the user has left the app shelf, so a launch that
@@ -303,6 +311,7 @@ func (m *Model) leaveShelf() {
 	if m.shelf {
 		m.shelfEpoch++
 		m.launchNotice, m.launchNoticeApp = "", ""
+		m.clearHoverKind(hoverLauncherCard)
 	}
 }
 
@@ -742,7 +751,33 @@ func (m *Model) SetColorModeByName(name string) bool {
 }
 
 func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
+	// A poll keeps rows that remain and replaces the rest. A hovered row
+	// that is gone or moved must not be applied to whatever now occupies
+	// the cells under the pointer.
+	hoverPID := int32(0)
+	hoverRow := -1
+	if m.hover.kind == hoverTaskRow {
+		hoverPID = m.hoverTaskPID()
+		for i, p := range m.tasks.Processes() {
+			if p.ID == hoverPID {
+				hoverRow = i
+				break
+			}
+		}
+	}
 	m.tasks.SetProcesses(procs)
+	if m.hover.kind == hoverTaskRow {
+		row := -1
+		for i, p := range m.tasks.Processes() {
+			if p.ID == hoverPID {
+				row = i
+				break
+			}
+		}
+		if hoverPID == 0 || row < 0 || row != hoverRow {
+			m.clearHoverKind(hoverTaskRow)
+		}
+	}
 	var cmds []tea.Cmd
 
 	for _, p := range procs {
@@ -996,6 +1031,9 @@ func (m *Model) refreshAppsCmd() tea.Cmd {
 // selected by ID when it is still listed. An accepted empty list is data:
 // the shelf shows its empty state rather than stale cards.
 func (m *Model) applyAppList(apps []appStatus) {
+	// The accepted list replaces the shelf, Home's running rows and the
+	// palette's app entries; retire every pointer target they could carry.
+	m.clearHoverAll()
 	id := ""
 	if filtered := m.filteredApps(); m.selected >= 0 && m.selected < len(filtered) {
 		id = filtered[m.selected].Manifest.ID
@@ -1207,6 +1245,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Rows and cells moved; the pointer's old target identity no longer
+		// describes what is under it.
+		m.clearHoverAll()
 	case resultMsg:
 		var cmd tea.Cmd
 		m.busy = false
@@ -1227,6 +1268,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.hasDocs {
 			m.homeData.Documents = msg.documents
+			// Home's document rows and the palette's document entries were
+			// just replaced; their pointer identities are no longer valid.
+			m.clearHoverKind(hoverHomeRow)
+			m.clearHoverKind(hoverPaletteItem)
 		}
 		if msg.switchView == "tasks" {
 			m.taskView = true

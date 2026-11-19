@@ -304,6 +304,13 @@ func FetchLogs(ctx context.Context, client Caller, pid int32, tail int) (string,
 
 // Render formats the Task Manager view depending on the current mode.
 func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
+	return m.RenderHover(kit, bounds, 0)
+}
+
+// RenderHover is Render with the row of process hoverPID marked by the
+// shell's pointer cue. hover is presentation only: it never changes the
+// selection. A zero PID marks no row.
+func (m *Model) RenderHover(kit ui.Kit, bounds ui.Bounds, hoverPID int32) string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -318,15 +325,15 @@ func (m *Model) Render(kit ui.Kit, bounds ui.Bounds) string {
 		if m.receipt != nil {
 			return receipts.Render(kit, *m.receipt, bounds)
 		}
-		return m.renderTable(kit, bounds)
+		return m.renderTable(kit, bounds, hoverPID)
 	default:
-		return m.renderTable(kit, bounds)
+		return m.renderTable(kit, bounds, hoverPID)
 	}
 }
 
-func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
+func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds, hoverPID int32) string {
 	if bounds.Height < compactTableHeight {
-		return m.renderCompactTable(kit, bounds)
+		return m.renderCompactTable(kit, bounds, hoverPID)
 	}
 	contentBounds := kit.PanelContentBounds(bounds)
 	w := contentBounds.Width
@@ -361,7 +368,7 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 	footerReserve := 2 // status and help lines
 	availableRows := max(1, h-headerCount-footerReserve)
 
-	rows = append(rows, m.processLines(kit, cols, w, availableRows)...)
+	rows = append(rows, m.processLines(kit, cols, w, availableRows, hoverPID)...)
 
 	// Pad empty space if needed
 	for len(rows) < h-footerReserve {
@@ -534,16 +541,20 @@ func (m *Model) window(n int) (start, end int) {
 }
 
 // processLines renders up to n process rows, windowed so the selected row
-// stays visible.
-func (m *Model) processLines(kit ui.Kit, cols []column, w, n int) []string {
+// stays visible. A row under the pointer carries the ASCII hover cue unless
+// it is the selected row, whose focus treatment is stronger.
+func (m *Model) processLines(kit ui.Kit, cols []column, w, n int, hoverPID int32) []string {
 	start, end := m.window(n)
 	var lines []string
 	for i := start; i < end; i++ {
 		p := m.procs[i]
 		line := columnLine(kit, cols, func(c column) string { return c.cell(p) })
-		if i == m.selected {
+		switch {
+		case i == m.selected:
 			lines = append(lines, kit.Selection(kit.Truncate(kit.Theme().Focus.Marker+" "+line, w)))
-		} else {
+		case hoverPID != 0 && p.ID == hoverPID:
+			lines = append(lines, kit.Text(kit.Truncate(ui.HoverMarker+" "+line, w)))
+		default:
 			lines = append(lines, kit.Text(kit.Truncate("  "+line, w)))
 		}
 	}
@@ -630,7 +641,7 @@ func (m *Model) LogsInView(f *bloom.Frame) string {
 
 // renderCompactTable keeps the table usable in a body too short for its
 // panel: a header when there is room, then the rows around the selection.
-func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
+func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds, hoverPID int32) string {
 	w := bounds.Width
 	if len(m.procs) == 0 {
 		return ui.Fit(kit.Muted("No Processes Found"), bounds)
@@ -642,7 +653,7 @@ func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
 		lines = append(lines, kit.Heading(kit.Truncate(columnLine(kit, cols, func(c column) string { return c.title }), w)))
 		n--
 	}
-	lines = append(lines, m.processLines(kit, cols, w, n)...)
+	lines = append(lines, m.processLines(kit, cols, w, n, hoverPID)...)
 	return ui.Fit(strings.Join(lines, "\n"), bounds)
 }
 

@@ -365,7 +365,9 @@ func (m *Model) body(home homeView) bloom.Child {
 	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
 		return m.tasks.LogsNode(m.kit, m.baseMouseAllowed)
 	case m.taskView && m.tasks != nil:
-		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) }), m.taskHits, m.taskScroll)
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
+			return m.tasks.RenderHover(m.kit, b, m.hoverTaskPID())
+		}), m.taskHits, m.taskScroll)
 	case m.notifView && m.notifs != nil:
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
 			m.notificationHits, m.notificationScroll)

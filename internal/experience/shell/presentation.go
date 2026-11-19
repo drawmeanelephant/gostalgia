@@ -111,6 +111,8 @@ func fetchView(ctx context.Context, client Caller, id string, version int) (sdk.
 
 func (m *Model) openView(a appStatus) tea.Cmd {
 	m.viewEpoch++
+	// A new screen means no old pointer target remains.
+	m.clearHoverAll()
 	v := &appView{
 		id: a.Manifest.ID, pid: a.PID, epoch: m.viewEpoch, version: sdk.PresentationVersion,
 		data:   sdk.View{Title: a.Manifest.Name, State: sdk.ViewLoading},
@@ -205,6 +207,7 @@ func (m *Model) dismissView() tea.Cmd {
 	v := m.presentation
 	m.presentation = nil
 	m.viewEpoch++
+	m.clearHoverAll()
 	if v == nil || v.cancel == nil {
 		return nil
 	}
@@ -404,6 +407,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 				m.append(entry{"App instance changed; view closed.", "error"})
 				return m.dismissView()
 			}
+			m.pruneGridHover()
 			v.banner = ""
 		}
 		if msg.action && v.id == "com.gostalgia.settings" {
@@ -445,6 +449,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 				m.append(entry{"App instance changed; view closed.", "error"})
 				return m.dismissView()
 			}
+			m.pruneGridHover()
 		}
 		return viewTick(v.epoch)
 	case viewCancelMsg:
@@ -954,7 +959,9 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 					break
 				}
 				c := g.Cells[i]
-				text := "[" + viewText(c.Label) + "]"
+				label := viewText(c.Label)
+				text := "[" + label + "]"
+				hovered := m.hoverAt(hoverGridCell, c.ID)
 				switch {
 				case c.Disabled:
 					text += " (disabled)"
@@ -972,6 +979,11 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 					// marker keeps the selected cell visible, matching item
 					// selection.
 					text = m.kit.Text(m.kit.Theme().Focus.Marker + " " + text)
+				case hovered:
+					// The pointer's ASCII brackets are distinct from the
+					// selected cell's marker and occupy the same two cells
+					// as the normal brackets, so the grid never reflows.
+					text = m.kit.Text("<" + label + ">")
 				default:
 					text = m.kit.Text(text)
 				}

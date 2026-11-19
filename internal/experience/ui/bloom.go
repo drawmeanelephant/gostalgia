@@ -95,6 +95,11 @@ func (k Kit) TabsLeaf(tabs []Tab, active int) Leaf {
 	return k.Leaf(func(b Bounds) string { return k.Tabs(tabs, active, b.Width) })
 }
 
+// TabsLeafHover is TabsHover sized by the layout.
+func (k Kit) TabsLeafHover(tabs []Tab, active int, hovered func(width int) int) Leaf {
+	return k.Leaf(func(b Bounds) string { return k.TabsHover(tabs, active, hovered(b.Width), b.Width) })
+}
+
 // HelpBarLeaf is HelpBar sized by the layout.
 func (k Kit) HelpBarLeaf(bindings []Binding) Leaf {
 	return Sized(func(b Bounds) string { return k.HelpBar(bindings, b.Width) })

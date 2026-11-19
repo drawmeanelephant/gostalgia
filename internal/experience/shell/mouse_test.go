@@ -1116,8 +1116,10 @@ func TestMouseTooltipsShowTheSanitizedCutText(t *testing.T) {
 			t.Fatalf("text that fits shows tooltip %q", tip)
 		}
 	}
-	if v := m.View(); v.MouseMode == tea.MouseModeAllMotion || v.MouseMode == tea.MouseModeNone {
-		t.Fatalf("with nothing cut the shell asks for %v", v.MouseMode)
+	if v := m.View(); v.MouseMode != tea.MouseModeAllMotion {
+		// Pointer cues on the shelf's cards need motion reports even when
+		// no tooltip is available.
+		t.Fatalf("with pointer cues the shell asks for %v, want all motion", v.MouseMode)
 	}
 }
 
