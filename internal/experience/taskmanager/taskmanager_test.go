@@ -193,6 +193,8 @@ func TestLogTailViewing(t *testing.T) {
 	t.Run("refresh reconciles", testLogRefreshReconciles)
 	t.Run("a tail per process", testLogTailsPerProcess)
 	t.Run("follow", testLogFollow)
+	t.Run("match across refresh", testLogMatchAcrossRefresh)
+	t.Run("search belongs to the tail", testLogSearchLeavesWithTail)
 	for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI256} {
 		t.Run(fmt.Sprintf("search/%d", mode), func(t *testing.T) { testLogSearch(t, mode) })
 	}
@@ -395,6 +397,75 @@ func testLogFollow(t *testing.T) {
 	tm.UpdateLogs(3, numberedLog("l", 1, 55))
 	if tm.Following() || logTop(t, tm, kit) != top {
 		t.Fatal("f did not stop following where the tail was")
+	}
+}
+
+// The current match stays on its line as eviction drops lines above it,
+// and is let go when its line is dropped, or when it was on an unfinished
+// last line that a refresh rewrites.
+func testLogMatchAcrossRefresh(t *testing.T) {
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	marker := kit.Theme().Focus.Marker + " "
+	tm := New()
+	search := func(q string) {
+		tm.StartSearch()
+		tm.SearchInput(q)
+		tm.CommitSearch(logFrame(tm, kit))
+	}
+	screen := func() string { return ansi.Strip(logScreen(tm, kit)) }
+
+	tm.ShowLogs(8, "evict", numberedLog("a", 1, 100))
+	search("a 050")
+	if s := screen(); !strings.Contains(s, "Match 1 of 1") || !strings.Contains(s, marker+"a 050") {
+		t.Fatalf("the search shows:\n%s", s)
+	}
+	tm.UpdateLogs(8, numberedLog("a", 21, 120))
+	checkLog(t, tm, numberedLog("a", 21, 120))
+	if s := screen(); !strings.Contains(s, "Match 1 of 1") || !strings.Contains(s, marker+"a 050") {
+		t.Fatalf("evicting the lines above the match lost it:\n%s", s)
+	}
+	tm.SeekMatch(logFrame(tm, kit), true)
+	if s := screen(); !strings.Contains(s, marker+"a 050") {
+		t.Fatalf("n after eviction left the match:\n%s", s)
+	}
+	tm.UpdateLogs(8, numberedLog("a", 61, 160))
+	if s := screen(); !strings.Contains(s, `No match for "a 050"`) || strings.Contains(s, marker+"a ") {
+		t.Fatalf("evicting the matched line kept the match:\n%s", s)
+	}
+	tm.SeekMatch(logFrame(tm, kit), false)
+	checkLog(t, tm, numberedLog("a", 61, 160))
+
+	tm.ShowLogs(9, "partial", "one\ntwo\nthr")
+	search("thr")
+	if s := screen(); !strings.Contains(s, "Match 1 of 1") || !strings.Contains(s, marker+"thr") {
+		t.Fatalf("the unfinished line's match shows:\n%s", s)
+	}
+	tm.UpdateLogs(9, "one\ntwo\nthree\n")
+	checkLog(t, tm, "one\ntwo\nthree\n")
+	if s := screen(); !strings.Contains(s, `1 match for "thr"`) || strings.Contains(s, marker+"t") || strings.Contains(s, marker+"o") {
+		t.Fatalf("rewriting the unfinished line kept its old match:\n%s", s)
+	}
+	tm.SeekMatch(logFrame(tm, kit), true)
+	if s := screen(); !strings.Contains(s, "Match 1 of 1") || !strings.Contains(s, marker+"three") {
+		t.Fatalf("n did not find the rewritten line:\n%s", s)
+	}
+}
+
+// A search being typed belongs to the open tail: leaving it, for the table
+// or a crash receipt, drops the search.
+func testLogSearchLeavesWithTail(t *testing.T) {
+	tm := New()
+	tm.ShowLogs(3, "svc", "one\n")
+	tm.StartSearch()
+	tm.SearchInput("on")
+	tm.ShowReceipt(&receipts.CrashReceipt{ID: "r1", PID: 3})
+	if tm.Searching() {
+		t.Fatal("a crash receipt kept the log search")
+	}
+	tm.CloseModal()
+	tm.ShowLogs(3, "svc", "one\n")
+	if tm.Searching() {
+		t.Fatal("reopening the tail resumed an abandoned search")
 	}
 }
 

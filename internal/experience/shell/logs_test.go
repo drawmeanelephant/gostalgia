@@ -203,6 +203,34 @@ func TestLogTailKeyboardFollowAndSearch(t *testing.T) {
 	}
 }
 
+// While a command runs, the open log tail still scrolls, follows and
+// searches, and Enter still returns to the table; only its refresh waits
+// for the command, as the process table's does.
+func TestLogTailKeysWhileBusy(t *testing.T) {
+	m, _ := logsFixture(t)
+	m.Update(requestLogs(t, m, 2)())
+	m.busy = true
+	press(m, keyDown, keyDown)
+	if line := m.tasks.LogsPos().Line; line != 2 {
+		t.Fatalf("Down twice while busy reached line %d", line)
+	}
+	press(m, typed("f"))
+	if !m.tasks.Following() {
+		t.Fatal("f while busy did not follow")
+	}
+	press(m, typed("/"), typed("0"), typed("3"), typed("8"), keyEnter)
+	if body := bodyText(t, m); !strings.Contains(body, "Match 1 of 1") || !strings.Contains(body, m.kit.Theme().Focus.Marker+" worker 038") {
+		t.Fatalf("searching while busy shows:\n%s", body)
+	}
+	if _, ok := tickLogs(m); ok {
+		t.Fatal("the tail refreshed while a command ran")
+	}
+	press(m, keyEnter)
+	if m.tasks.Mode() != taskmanager.ModeTable {
+		t.Fatalf("Enter while busy left mode %v", m.tasks.Mode())
+	}
+}
+
 // A late answer for another process, or for a request since superseded,
 // never shows its lines; a late refresh still brings that process's own
 // kept tail up to date for when it is opened again.

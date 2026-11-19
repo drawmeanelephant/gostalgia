@@ -1289,14 +1289,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		// The log tail's keys only read what it has, so they work while
+		// a command runs.
+		if m.taskView && m.presentation == nil && m.tasks.Mode() == taskmanager.ModeLogs {
+			return m.handleLogsKey(msg)
+		}
 		if m.busy {
 			return m, nil
 		}
 		if m.presentation != nil {
 			return m, m.viewKey(msg)
-		}
-		if m.taskView && m.tasks.Mode() == taskmanager.ModeLogs {
-			return m.handleLogsKey(msg)
 		}
 		if m.taskView {
 			switch msg.String() {

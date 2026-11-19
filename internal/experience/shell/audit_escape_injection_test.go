@@ -126,24 +126,38 @@ func TestAuditDocCommandOutputSanitized(t *testing.T) {
 }
 
 // injections are terminal control strings, each with its payload marked
-// cHduZWQ, in the 7-bit forms and with the terminators terminals accept.
-var injections = []struct{ name, seq string }{
-	{"OSC 8 BEL", "\x1b]8;;https://evil.invalid/cHduZWQ\aclick\x1b]8;;\a"},
-	{"OSC 8 ST", "\x1b]8;;https://evil.invalid/cHduZWQ\x1b\\click\x1b]8;;\x1b\\"},
-	{"OSC 52 BEL", "\x1b]52;c;cHduZWQ=\a"},
-	{"OSC 52 ST", "\x1b]52;c;cHduZWQ=\x1b\\"},
-	{"DCS", "\x1bP1$qcHduZWQ\x1b\\"},
-	{"DCS tmux passthrough", "\x1bPtmux;\x1b\x1b]52;c;cHduZWQ=\a\x1b\\"},
-	{"APC ST", "\x1b_Ga=T,f=100;cHduZWQ=\x1b\\"},
+// cHduZWQ, with the terminators terminals accept: the 7-bit forms, and
+// the 8-bit C1 forms as UTF-8. Sanitize drops a C1 introducer as the
+// control character it is, which leaves its payload inert, plain text.
+var injections = []struct {
+	name, seq string
+	inert     bool
+}{
+	{"OSC 8 BEL", "\x1b]8;;https://evil.invalid/cHduZWQ\aclick\x1b]8;;\a", false},
+	{"OSC 8 ST", "\x1b]8;;https://evil.invalid/cHduZWQ\x1b\\click\x1b]8;;\x1b\\", false},
+	{"OSC 52 BEL", "\x1b]52;c;cHduZWQ=\a", false},
+	{"OSC 52 ST", "\x1b]52;c;cHduZWQ=\x1b\\", false},
+	{"DCS", "\x1bP1$qcHduZWQ\x1b\\", false},
+	{"DCS tmux passthrough", "\x1bPtmux;\x1b\x1b]52;c;cHduZWQ=\a\x1b\\", false},
+	{"APC ST", "\x1b_Ga=T,f=100;cHduZWQ=\x1b\\", false},
+	{"C1 OSC 8", "\u009d8;;https://evil.invalid/cHduZWQ\u009cclick\u009d8;;\u009c", true},
+	{"C1 OSC 52 BEL", "\u009d52;c;cHduZWQ=\a", true},
+	{"C1 DCS", "\u00901$qcHduZWQ\u009c", true},
+	{"C1 APC", "\u009fGa=T,f=100;cHduZWQ=\u009c", true},
 }
 
-// checkInjected fails if view, drawn from text holding inj between
-// "safe before" and "safe after", lets any control string or its payload
-// through, or loses the safe text around it. Plain views carry no escape
-// at all; colored ones keep only the kit's own styling.
-func checkInjected(t *testing.T, where string, view string, plain bool) {
+// checkInjected fails if view, drawn from text holding an injection
+// between "safe before" and "safe after", lets any control string
+// through, or its payload unless the injection leaves that inert, or
+// loses the safe text around it. Plain views carry no escape at all;
+// colored ones keep only the kit's own styling.
+func checkInjected(t *testing.T, where string, view string, plain, inert bool) {
 	t.Helper()
-	for _, bad := range []string{"\x1b]", "\x1bP", "\x1b_", "\x1b^", "\x1bX", "\a", "\u0090", "\u009b", "\u009d", "\u009f", "cHduZWQ", "evil.invalid"} {
+	bad := []string{"\x1b]", "\x1bP", "\x1b_", "\x1b^", "\x1bX", "\a", "\u0090", "\u009b", "\u009c", "\u009d", "\u009f"}
+	if !inert {
+		bad = append(bad, "cHduZWQ", "evil.invalid")
+	}
+	for _, bad := range bad {
 		if strings.Contains(view, bad) {
 			t.Fatalf("%s: rendered %q", where, bad)
 		}
@@ -166,9 +180,9 @@ func TestAuditTranscriptBufferSanitized(t *testing.T) {
 				m.setMode(modePrompt)
 				text := "safe before " + inj.seq + " safe after"
 				m.Update(resultMsg{text: text})
-				checkInjected(t, "output", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "output", m.View().Content, mode == ui.Plain, inj.inert)
 				m.Update(resultMsg{err: errors.New(text)})
-				checkInjected(t, "error", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "error", m.View().Content, mode == ui.Plain, inj.inert)
 				for i, e := range m.transcript {
 					if strings.ContainsAny(e.text, "\x1b\a") || strings.ContainsAny(m.transcriptBuf.Line(i), "\a") {
 						t.Fatalf("line %d was kept unsanitized: %q", i, e.text)
@@ -176,7 +190,7 @@ func TestAuditTranscriptBufferSanitized(t *testing.T) {
 				}
 				for _, th := range []theme.Theme{theme.Midnight(), theme.Monochrome(), theme.HighContrast()} {
 					m.SetTheme(th, mode)
-					checkInjected(t, "restyled "+th.Name, m.View().Content, mode == ui.Plain)
+					checkInjected(t, "restyled "+th.Name, m.View().Content, mode == ui.Plain, inj.inert)
 				}
 			})
 		}
@@ -198,7 +212,7 @@ func TestAuditLogBuffersSanitized(t *testing.T) {
 				press(m, tea.KeyPressMsg{Code: tea.KeyF5})
 				m.Update(procUpdateMsg{procs: client.procs})
 				m.Update(requestLogs(t, m, 2)())
-				checkInjected(t, "opened", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "opened", m.View().Content, mode == ui.Plain, inj.inert)
 
 				press(m, typed("f"))
 				client.logs[2] = "boot\n" + line + "more " + inj.seq + "\n" + line
@@ -207,23 +221,23 @@ func TestAuditLogBuffersSanitized(t *testing.T) {
 					t.Fatal("no refresh")
 				}
 				m.Update(refresh)
-				checkInjected(t, "refreshed", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "refreshed", m.View().Content, mode == ui.Plain, inj.inert)
 
 				client.logs[2] = line + "rotated " + inj.seq
 				refresh, _ = tickLogs(m)
 				m.Update(refresh)
-				checkInjected(t, "replaced", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "replaced", m.View().Content, mode == ui.Plain, inj.inert)
 
 				press(m, typed("/"))
 				m.Update(tea.PasteMsg{Content: "safe" + inj.seq})
 				press(m, keyEnter, typed("n"))
 				view := m.View().Content
-				checkInjected(t, "searched", view, mode == ui.Plain)
+				checkInjected(t, "searched", view, mode == ui.Plain, inj.inert)
 				if !strings.Contains(ansi.Strip(view), "for \"safe") {
 					t.Fatalf("the search did not run:\n%s", ansi.Strip(view))
 				}
 				m.SetTheme(theme.Midnight(), mode)
-				checkInjected(t, "restyled", m.View().Content, mode == ui.Plain)
+				checkInjected(t, "restyled", m.View().Content, mode == ui.Plain, inj.inert)
 			})
 		}
 	}

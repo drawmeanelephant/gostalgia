@@ -204,6 +204,8 @@ func (l *processLog) matchStatus() string {
 	switch {
 	case total == 0:
 		return fmt.Sprintf("No match for %q", l.query)
+	case current == 0 && total == 1:
+		return fmt.Sprintf("1 match for %q · n next · N previous", l.query)
 	case current == 0:
 		return fmt.Sprintf("%d matches for %q · n next · N previous", total, l.query)
 	}
@@ -319,7 +321,7 @@ func (m *Model) StartSearch() {
 func (m *Model) Searching() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.searching
+	return m.searching && m.mode == ModeLogs
 }
 
 // SearchInput types sanitized text into the search.

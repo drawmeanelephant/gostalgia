@@ -167,6 +167,7 @@ func (m *Model) ShowReceipt(r *receipts.CrashReceipt) {
 	m.mode = ModeReceipt
 	m.receipt = r
 	m.errorMsg = ""
+	m.searching, m.searchDraft = false, ""
 }
 
 // Receipt returns the currently displayed crash receipt if in ModeReceipt.

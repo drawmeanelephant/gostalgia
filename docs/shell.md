@@ -88,20 +88,29 @@ JSON is preserved, not passed through path/quote parsing.
 - **Task Manager log tail** (`l` on a process): **↑/↓** (or **k/j**) scroll a
   line, **PgUp/PgDown** a page, **Home/End** (or **g/G**) jump to the first or
   last line. **f** toggles following new output; a tail opens at its first
-  line and does not follow until **f**. **/** types a case-insensitive search,
-  **Enter** finds the first match from the top of the tail and **Esc**
-  cancels; **n** and **N** move to the next and previous match, wrapping at
-  the ends. Matches are highlighted, and the current one is marked in the
-  gutter. **Esc** or **Enter** returns to the table.
-  - While a tail is open the shell asks `proc/logs` for its last 100 lines
-    every half second, one request at a time. A snapshot that continues the
-    tail appends only the new lines, so a scrolled tail does not move; a
-    log that was truncated or rotated replaces the lines and keeps the line
-    number. A tail keeps at most 100 lines.
+  line and does not follow until **f**. Scrolling up, or moving to a match
+  above the lines on screen, stops following, and scrolling back to the end
+  does not start it again; press **f**. **/** types a case-insensitive search, **Enter** finds the
+  first match at or below the top line on screen and **Esc** cancels; **n**
+  and **N** move to the next and previous match, wrapping at the ends. The
+  status line counts the matches. In color, every match is highlighted in
+  the theme's selection colors; in every mode, Plain included, the current
+  match's line is marked in the gutter. **Esc** or **Enter** returns to the
+  table. These keys keep working while a command runs.
+  - While a tail is open, and no command is running, the shell asks
+    `proc/logs` for its last 100 lines every half second, one request at
+    a time. A snapshot that continues the tail appends only the new lines,
+    so a scrolled tail does not move. A snapshot that shares no lines with
+    the tail replaces its lines and keeps the line number on screen: a log
+    that was truncated or rotated, or one that grew by 100 lines or more
+    between two refreshes. A tail keeps at most 100 lines. Snapshots carry
+    no offsets, so a log that only repeats the same lines can look
+    unchanged when it has grown.
   - Each opened process keeps its own lines, scroll position, follow state
-    and search while it is listed in the table, so reopening it returns to
-    the same place. A response for a process you have since left never
-    replaces the tail on screen.
+    and search while it is listed in the table, and the open one while it
+    is open, so reopening it returns to the same place. A search being
+    typed ends when you leave the tail. A response for a process you have
+    since left never replaces the tail on screen.
 - **Ctrl-C/D**: exit. A pending IPC command doesn't block the event loop;
   while it runs, command editing is disabled (exit/resize/scroll still work).
 
