@@ -39,7 +39,7 @@ func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 		title = k.theme.Focus.Marker + " " + title
 	}
 	if bounds.Width < 2 || bounds.Height < 3 {
-		return Fit(k.Heading(Truncate(title, bounds.Width))+"\n"+p.Body, bounds)
+		return Fit(k.Heading(k.Truncate(title, bounds.Width))+"\n"+p.Body, bounds)
 	}
 	palette := k.theme.Palette
 	color := palette.Border
@@ -61,7 +61,7 @@ func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 	}
 	out := []string{
 		stroke(border.TopLeft + strings.Repeat(border.Top, inner) + border.TopRight),
-		stroke(border.Left) + k.paint(Fit(" "+Truncate(title, max(0, inner-1)), Bounds{inner, 1}),
+		stroke(border.Left) + k.paint(Fit(" "+k.Truncate(title, max(0, inner-1)), Bounds{inner, 1}),
 			titleFG, titleBG, k.theme.Typography.TitleBold) + stroke(border.Right),
 	}
 	body := strings.Split(p.Body, "\n")
@@ -112,7 +112,7 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 	gap := strings.Repeat(" ", max(0, k.theme.Spacing.Gap))
 	parts := make([]string, len(tabs))
 	for i, tab := range tabs {
-		text := Truncate(label(tab.Label), max(0, width-2))
+		text := k.Truncate(label(tab.Label), max(0, width-2))
 		fg, bg := k.theme.Palette.Text, k.theme.Palette.Header
 		if tab.Disabled {
 			text = "(" + text + ")"
@@ -172,7 +172,7 @@ func (k Kit) Badge(text string, state theme.State, width int) string {
 			content = label(text)
 		}
 	}
-	return k.paint(Truncate(content, width), s.Text, s.Fill, true)
+	return k.paint(k.Truncate(content, width), s.Text, s.Fill, true)
 }
 
 type AppCard struct {
@@ -200,7 +200,7 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 		details += "  v" + label(card.Version)
 	}
 	status := k.Badge(card.Status, card.State, content.Width)
-	body := status + "\n" + k.Muted(Truncate(details, content.Width))
+	body := status + "\n" + k.Muted(k.Truncate(details, content.Width))
 	if card.Description != "" {
 		body += "\n" + Wrap(Sanitize(card.Description), content.Width)
 	}
@@ -300,11 +300,11 @@ func (k Kit) Progress(progress Progress, width int) string {
 	}
 	prefix := ""
 	if progress.Label != "" {
-		prefix = Truncate(label(progress.Label), width/3) + " "
+		prefix = k.Truncate(label(progress.Label), width/3) + " "
 	}
 	cells := width - ansi.StringWidth(prefix+suffix) - 2
 	if cells < 1 {
-		return k.StatusText(Fit(Truncate(strings.TrimSpace(suffix), width), Bounds{width, 1}), progress.State)
+		return k.StatusText(Fit(k.Truncate(strings.TrimSpace(suffix), width), Bounds{width, 1}), progress.State)
 	}
 	filled := int(math.Round(value * float64(cells)))
 	bar := strings.Repeat(k.theme.Progress.Filled, filled) + strings.Repeat(k.theme.Progress.Track, cells-filled)
@@ -353,7 +353,7 @@ func (k Kit) HelpBar(bindings []Binding, width int) string {
 	var parts []string
 	for _, binding := range bindings {
 		s := k.theme.Status(theme.Normal)
-		keyText := label(binding.Key)
+		keyText := label(k.KeyLabel(binding.Key))
 		if binding.Disabled {
 			s = k.theme.Status(theme.Disabled)
 			keyText = "(" + keyText + ")"
@@ -361,5 +361,5 @@ func (k Kit) HelpBar(bindings []Binding, width int) string {
 		key := k.paint(keyText, s.Text, s.Fill, k.theme.Typography.KeyBold)
 		parts = append(parts, key+" "+k.paint(label(binding.Help), s.Text, s.Fill, false))
 	}
-	return k.Text(Fit(strings.Join(parts, " · "), Bounds{width, 1}))
+	return k.Text(Fit(strings.Join(parts, k.Separator()), Bounds{width, 1}))
 }

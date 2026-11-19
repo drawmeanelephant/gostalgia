@@ -162,9 +162,9 @@ func envPath(cwd, input string) string {
 	return path.Join(cwd, input)
 }
 
-func execute(ctx context.Context, c Caller, cwd, line string) resultMsg {
+func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(string) string) resultMsg {
 	result := resultMsg{cwd: cwd, executedLine: line}
-	text, next, quit, err := command(ctx, c, cwd, line)
+	text, next, quit, err := command(ctx, c, cwd, line, chrome...)
 	result.text, result.cwd, result.quit, result.err = text, next, quit, err
 	if result.text == "__DETACH__" {
 		result.detach = true
@@ -283,9 +283,14 @@ func execute(ctx context.Context, c Caller, cwd, line string) resultMsg {
 	return result
 }
 
-func command(ctx context.Context, c Caller, cwd, line string) (string, string, bool, error) {
+func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(string) string) (string, string, bool, error) {
 	ok := func(s string) (string, string, bool, error) { return s, cwd, false, nil }
 	fail := func(err error) (string, string, bool, error) { return "", cwd, false, err }
+	hint := func(s string) string { return s }
+	if len(chrome) > 0 && chrome[0] != nil {
+		hint = chrome[0]
+	}
+	separator := hint(" · ")
 	// Preserve everything after the raw IPC method as JSON, including quotes.
 	head, tail, _ := strings.Cut(strings.TrimSpace(line), " ")
 	if strings.EqualFold(head, "call") {
@@ -364,7 +369,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		if len(args) != 0 {
 			return fail(fmt.Errorf("usage: help"))
 		}
-		return ok(helpText)
+		return ok(hint(helpText))
 	case "detach":
 		if len(args) != 0 {
 			return fail(fmt.Errorf("usage: detach"))
@@ -497,8 +502,8 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			return fail(err)
 		}
 		var out []string
-		out = append(out, fmt.Sprintf("SESSION %s · User: %s (%s)", viewText(detail.ID), viewText(detail.User.Name), viewText(detail.User.ID)))
-		out = append(out, fmt.Sprintf("Started: %s · Active: %t", detail.StartedAt.Format("2006-01-02 15:04:05"), detail.Active))
+		out = append(out, fmt.Sprintf("SESSION %s%sUser: %s (%s)", viewText(detail.ID), separator, viewText(detail.User.Name), viewText(detail.User.ID)))
+		out = append(out, fmt.Sprintf("Started: %s%sActive: %t", detail.StartedAt.Format("2006-01-02 15:04:05"), separator, detail.Active))
 		out = append(out, fmt.Sprintf("Attached clients: %d", len(detail.Attachments)))
 		for _, a := range detail.Attachments {
 			out = append(out, fmt.Sprintf("  - %s (%s) client %s, attached %s", viewText(a.ID), viewText(a.ClientType), viewText(a.ClientID), a.AttachedAt.Format("15:04:05")))
@@ -526,9 +531,9 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		for _, a := range apps {
 			state := "READY"
 			if a.Running {
-				state = fmt.Sprintf("LIVE · PID %d", a.PID)
+				state = fmt.Sprintf("LIVE%sPID %d", separator, a.PID)
 			}
-			rows = append(rows, fmt.Sprintf("%s  %s v%s\n  %s · caps: %s", safe(a.Manifest.ID), safe(a.Manifest.Name), safe(a.Manifest.Version), state, strings.Join(a.Manifest.Permissions, ", ")))
+			rows = append(rows, fmt.Sprintf("%s  %s v%s\n  %s%scaps: %s", safe(a.Manifest.ID), safe(a.Manifest.Name), safe(a.Manifest.Version), state, separator, strings.Join(a.Manifest.Permissions, ", ")))
 		}
 		return ok(strings.Join(rows, "\n"))
 	case "launch", "run", "stop":
@@ -803,10 +808,10 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			durStr = "-"
 		}
 		var out []string
-		out = append(out, fmt.Sprintf("PROCESS %d (%s) · %s · %s (exit %s, time %s)",
-			logs.ID, safe(logs.Name), logs.Kind, logs.State, exitStr, durStr))
-		out = append(out, fmt.Sprintf("stdout: %dB (dropped %dB) · stderr: %dB (dropped %dB)",
-			logs.Stdout.TotalBytes, logs.Stdout.DroppedBytes, logs.Stderr.TotalBytes, logs.Stderr.DroppedBytes))
+		out = append(out, fmt.Sprintf("PROCESS %d (%s)%s%s%s%s (exit %s, time %s)",
+			logs.ID, safe(logs.Name), separator, logs.Kind, separator, logs.State, exitStr, durStr))
+		out = append(out, fmt.Sprintf("stdout: %dB (dropped %dB)%sstderr: %dB (dropped %dB)",
+			logs.Stdout.TotalBytes, logs.Stdout.DroppedBytes, separator, logs.Stderr.TotalBytes, logs.Stderr.DroppedBytes))
 		if logs.Stdout.Content != "" {
 			out = append(out, "--- STDOUT ---")
 			out = append(out, safe(strings.TrimRight(logs.Stdout.Content, "\r\n")))
@@ -929,7 +934,7 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 		}
 		return "Shutdown requested", cwd, true, nil
 	default:
-		return fail(fmt.Errorf("unknown command %q — type help", cmd))
+		return fail(fmt.Errorf("unknown command %q %s", cmd, hint("— type help")))
 	}
 }
 

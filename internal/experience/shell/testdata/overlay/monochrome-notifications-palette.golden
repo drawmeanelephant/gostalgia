@@ -1,24 +1,24 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home   Apps   Prompt   Tasks  [Notifications (2)]                           |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
 | +----| > COMMAND PALETTE (Ctrl-P / Esc)                               |----+ |
 | | > N| >                                                              |    | |
 | | NOT|                                                                |    | |
-| |    | > [APP] Switch to Echo   com.gostalgia.echo · PID 7 (LI…       |    | |
-| |   *|   [APP] Stop Echo  Graceful stop com.gostalgia.ec…             |    | |
-| |    |   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already ru |    | |
+| |    | > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |    | |
+| |   *|   [APP] Stop Echo  Graceful stop com.gostalgia....             |    | |
+| |    |   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |    | |
 | | > *|   [APP] Launch Notes  com.gostalgia.notes                      |    | |
-| |    |   [APP] Switch to Clock  com.gostalgia.clock · PID 31 (…       |    | |
-| |    |   [APP] Stop Clock  Graceful stop com.gostalgia.cl…            |    | |
-| |    |   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already  |    | |
-| |    |   [CMD] help  Command center help and keybin…                  |    | |
-| |    |   [CMD] home  Switch to Home screen dashboar…                  |    | |
+| |    |   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |    | |
+| |    |   [APP] Stop Clock  Graceful stop com.gostalgia....            |    | |
+| |    |   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |    | |
+| |    |   [CMD] help  Command center help and keyb...                  |    | |
+| |    |   [CMD] home  Switch to Home screen dashbo...                  |    | |
 | |    +----------------------------------------------------------------+    | |
 | |                                                                          | |
 | +--------------------------------------------------------------------------+ |
 |                                                                              |
-| PALETTE> Type to filter · ↑↓ navigate · Enter execute · Esc close            |
+| PALETTE> Type to filter | Up/Down navigate | Enter execute | Esc close       |
 +------------------------------------------------------------------------------+
-Esc CLOSE · Enter EXECUTE · ↑↓ NAVIGATE · Ctrl-C EXIT
+Esc CLOSE | Enter EXECUTE | Up/Down NAVIGATE | Ctrl-C EXIT

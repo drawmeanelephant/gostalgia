@@ -1,7 +1,7 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home   Apps  [Prompt]  Tasks   Notifications (2)                            |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | transcript line 12                                                           |
 | transcript line 13                                                           |
@@ -21,4 +21,4 @@
 |                                                                              |
 | C:\users\guest> stop com.gostalgia.echo                                      |
 +------------------------------------------------------------------------------+
-Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT
+Tab NEXT ACTION | Enter CHOOSE | Esc CANCEL | Ctrl-C EXIT

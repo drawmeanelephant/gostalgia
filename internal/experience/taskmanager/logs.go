@@ -189,7 +189,7 @@ func (l *processLog) seek(v bloom.ViewportView, forward bool) {
 }
 
 // matchStatus counts the matches and says which is current.
-func (l *processLog) matchStatus() string {
+func (l *processLog) matchStatus(kit ui.Kit) string {
 	if l.re == nil {
 		return ""
 	}
@@ -202,15 +202,16 @@ func (l *processLog) matchStatus() string {
 			}
 		}
 	}
+	separator := kit.Separator()
 	switch {
 	case total == 0:
 		return fmt.Sprintf("No match for %q", l.query)
 	case current == 0 && total == 1:
-		return fmt.Sprintf("1 match for %q · n next · N previous", l.query)
+		return fmt.Sprintf("1 match for %q%sn next%sN previous", l.query, separator, separator)
 	case current == 0:
-		return fmt.Sprintf("%d matches for %q · n next · N previous", total, l.query)
+		return fmt.Sprintf("%d matches for %q%sn next%sN previous", total, l.query, separator, separator)
 	}
-	return fmt.Sprintf("Match %d of %d for %q · n next · N previous", current, total, l.query)
+	return fmt.Sprintf("Match %d of %d for %q%sn next%sN previous", current, total, l.query, separator, separator)
 }
 
 // ShowLogs opens the log tail of a process with a proc/logs snapshot of
@@ -402,30 +403,31 @@ func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds, scrollAllowed func() bool
 	}
 	follow := ""
 	if l.following() {
-		follow = " · FOLLOW"
+		follow = kit.Separator() + "FOLLOW"
 	}
-	status := l.matchStatus()
+	status := l.matchStatus(kit)
 	if m.searching {
-		status = "Search: " + m.searchDraft + "_  Enter find · Esc cancel"
+		status = "Search: " + m.searchDraft + "_  Enter find" + kit.Separator() + "Esc cancel"
 	}
 	line := func(text func(string) string, s string) bloom.Child {
-		return bloom.Fixed(1, kit.Leaf(func(b ui.Bounds) string { return text(ui.Truncate(s, b.Width)) }))
+		return bloom.Fixed(1, kit.Leaf(func(b ui.Bounds) string { return text(kit.Truncate(s, b.Width)) }))
 	}
 	var rows []bloom.Child
+	separator := kit.Separator()
 	if bounds.Height < compactLogsHeight {
 		switch {
 		case bounds.Height >= 3 && status != "":
-			rows = append(rows, line(kit.Heading, fmt.Sprintf("LOGS · PID %d · %s%s", m.logsPID, m.logsName, follow)), line(kit.Muted, status))
+			rows = append(rows, line(kit.Heading, fmt.Sprintf("LOGS%sPID %d%s%s%s", separator, m.logsPID, separator, m.logsName, follow)), line(kit.Muted, status))
 		case bounds.Height >= 2 && status != "":
 			rows = append(rows, line(kit.Heading, status))
 		case bounds.Height >= 2:
-			rows = append(rows, line(kit.Heading, fmt.Sprintf("LOGS · PID %d · %s%s", m.logsPID, m.logsName, follow)))
+			rows = append(rows, line(kit.Heading, fmt.Sprintf("LOGS%sPID %d%s%s%s", separator, m.logsPID, separator, m.logsName, follow)))
 		}
 		return bloom.Column(append(rows, bloom.Fill(m.logText(kit, l, scrollAllowed)))...)
 	}
 	help := status
 	if help == "" {
-		help = "Esc back · ↑↓ PgUp PgDn scroll · f follow · / search"
+		help = kit.Hint("Esc back · ↑↓ PgUp PgDn scroll · f follow · / search")
 	}
 	rows = append(rows,
 		line(kit.Heading, fmt.Sprintf("CHILD LOG TAIL: %s (PID %d)%s", m.logsName, m.logsPID, follow)),
@@ -433,14 +435,14 @@ func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds, scrollAllowed func() bool
 		bloom.Fixed(1, nil),
 		bloom.Fill(m.logText(kit, l, scrollAllowed)),
 	)
-	return kit.PanelNode(ui.Panel{Title: fmt.Sprintf("LOGS · PID %d", m.logsPID), Focused: true}, bloom.Column(rows...))
+	return kit.PanelNode(ui.Panel{Title: fmt.Sprintf("LOGS%sPID %d", separator, m.logsPID), Focused: true}, bloom.Column(rows...))
 }
 
 // logText is the log's lines in a viewport, the current match's line
 // marked in the gutter, or a notice while there are none.
 func (m *Model) logText(kit ui.Kit, l *processLog, scrollAllowed func() bool) bloom.Child {
 	if l.buf.Len() == 0 {
-		return kit.Leaf(func(b ui.Bounds) string { return kit.Muted(ui.Truncate("(no output captured yet)", b.Width)) })
+		return kit.Leaf(func(b ui.Bounds) string { return kit.Muted(kit.Truncate("(no output captured yet)", b.Width)) })
 	}
 	marker := kit.Theme().Focus.Marker + " "
 	current, matched := l.match.Line, l.matched

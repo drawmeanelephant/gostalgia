@@ -884,10 +884,11 @@ func (m *Model) submit(line string) tea.Cmd {
 	m.historyPos = len(m.history)
 	m.input, m.cursor, m.draft = nil, 0, ""
 	cwd := m.cwd
+	hint := m.kit.Hint
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
-		return execute(ctx, m.client, cwd, line)
+		return execute(ctx, m.client, cwd, line, hint)
 	}
 }
 
@@ -1149,7 +1150,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.kit.Theme().ReducedMotion {
 				rm = "enabled"
 			}
-			m.append(entry{fmt.Sprintf("Active theme: %s · Mode: %v · Reduced motion: %s", m.kit.Theme().Name, m.kit.Mode(), rm), "accent"})
+			m.append(entry{fmt.Sprintf("Active theme: %s%sMode: %v%sReduced motion: %s", m.kit.Theme().Name, m.kit.Separator(), m.kit.Mode(), m.kit.Separator(), rm), "accent"})
 			m.append(entry{"Available themes: " + strings.Join(msg.themeNames, ", "), "muted"})
 		}
 		if msg.toggleMotion {

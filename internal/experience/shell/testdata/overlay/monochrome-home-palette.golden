@@ -1,24 +1,24 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 | [Home]  Apps   Prompt   Tasks   Notifications (2)                            |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
-| SYSTE| > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
-| Uptim| >                                                              |      |
-|      |                                                                |      |
-| RUNNI| > [APP] Switch to Echo   com.gostalgia.echo · PID 7 (LI…       |      |
-|   Ech|   [APP] Stop Echo  Graceful stop com.gostalgia.ec…             |      |
-| > Clo|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already ru |      |
-|      |   [APP] Launch Notes  com.gostalgia.notes                      |      |
-| DOCUM|   [APP] Switch to Clock  com.gostalgia.clock · PID 31 (…       |      |
-|   rea|   [APP] Stop Clock  Graceful stop com.gostalgia.cl…            |      |
-|   tod|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already  |      |
-|      |   [CMD] help  Command center help and keybin…                  |      |
-|      |   [CMD] home  Switch to Home screen dashboar…                  |      |
-|      +----------------------------------------------------------------+      |
+|  __ _| > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
+| /__/ | >                                                              |      |
+| \_|\_|                                                                |      |
+|      | > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |      |
+|      |   [APP] Stop Echo  Graceful stop com.gostalgia....             |      |
+| SYSTE|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |      |
+| Uptim|   [APP] Launch Notes  com.gostalgia.notes                      |      |
+|      |   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |      |
+| RUNNI|   [APP] Stop Clock  Graceful stop com.gostalgia....            |      |
+|   Ech|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |      |
+| > Clo|   [CMD] help  Command center help and keyb...                  |      |
+|      |   [CMD] home  Switch to Home screen dashbo...                  |      |
+| DOCUM+----------------------------------------------------------------+      |
+|   readme.txt  120 B                                                          |
+|   todo.txt  48 B                                                             |
 |                                                                              |
-|                                                                              |
-|                                                                              |
-| PALETTE> Type to filter · ↑↓ navigate · Enter execute · Esc close            |
+| PALETTE> Type to filter | Up/Down navigate | Enter execute | Esc close       |
 +------------------------------------------------------------------------------+
-Esc CLOSE · Enter EXECUTE · ↑↓ NAVIGATE · Ctrl-C EXIT
+Esc CLOSE | Enter EXECUTE | Up/Down NAVIGATE | Ctrl-C EXIT

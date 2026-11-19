@@ -27,7 +27,7 @@ func (m *Model) paletteItems() []paletteItem {
 			items = append(items, paletteItem{
 				Tag:    "APP",
 				Title:  "Switch to " + name,
-				Detail: fmt.Sprintf("%s · PID %d (LIVE)", id, app.PID),
+				Detail: fmt.Sprintf("%s%sPID %d (LIVE)", id, m.kit.Separator(), app.PID),
 				Action: func(m *Model) tea.Cmd {
 					return m.openView(app)
 				},
@@ -292,7 +292,7 @@ func (m *Model) renderPalette(paletteW, paletteH int) string {
 	}
 
 	if len(filtered) == 0 {
-		inner = append(inner, m.kit.Muted("  ◇ No matching commands, apps, or documents."))
+		inner = append(inner, m.kit.Muted("  "+m.kit.EmptyMarker()+" No matching commands, apps, or documents."))
 	} else {
 		visible := max(1, paletteH-3-len(inner))
 		start := max(0, selected-visible+1)
@@ -307,9 +307,9 @@ func (m *Model) renderPalette(paletteW, paletteH int) string {
 			tagBadge := "[" + it.Tag + "] "
 			detailText := "  " + it.Detail
 			if i == selected {
-				inner = append(inner, m.kit.Selection(ui.Truncate(cursor+tagBadge+it.Title, paletteW-4))+" "+m.kit.Muted(ui.Truncate(detailText, paletteW/2)))
+				inner = append(inner, m.kit.Selection(m.kit.Truncate(cursor+tagBadge+it.Title, paletteW-4))+" "+m.kit.Muted(m.kit.Truncate(detailText, paletteW/2)))
 			} else {
-				inner = append(inner, m.kit.Heading(cursor+tagBadge)+m.kit.Text(it.Title)+m.kit.Muted(ui.Truncate(detailText, paletteW/2)))
+				inner = append(inner, m.kit.Heading(cursor+tagBadge)+m.kit.Text(it.Title)+m.kit.Muted(m.kit.Truncate(detailText, paletteW/2)))
 			}
 		}
 	}

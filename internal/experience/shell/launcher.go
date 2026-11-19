@@ -72,7 +72,7 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	var lines []string
 	filtered := m.filteredApps()
 	selected := min(m.selected, max(0, len(filtered)-1))
-	lines = append(lines, ui.Truncate(m.launcherSearch(), w))
+	lines = append(lines, m.kit.Truncate(m.launcherSearch(), w))
 
 	if len(m.apps) == 0 {
 		notice := m.kit.Notice(ui.Notice{
@@ -95,8 +95,8 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 		lines = append(lines, strings.Split(m.launcherCard(filtered[i], i == selected, w, cardHeight), "\n")...)
 	}
 	a := filtered[selected]
-	lines = append(lines, m.kit.Muted(ui.Truncate(safe(a.Manifest.Description), w)),
-		m.kit.Muted(ui.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, " · ")), w)))
+	lines = append(lines, m.kit.Muted(m.kit.Truncate(safe(a.Manifest.Description), w)),
+		m.kit.Muted(m.kit.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, m.kit.Separator())), w)))
 	return lines
 }
 

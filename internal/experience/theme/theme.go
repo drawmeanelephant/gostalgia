@@ -126,7 +126,7 @@ func Monochrome() Theme {
 		States: States{
 			Normal:   Status{Text: lipgloss.Color("15"), Fill: lipgloss.Color("0"), Symbol: "[READY]", Label: "READY", Message: "Ready when you are."},
 			Disabled: Status{Text: lipgloss.Color("7"), Fill: lipgloss.Color("0"), Symbol: "[DISABLED]", Label: "DISABLED", Message: "This action is unavailable."},
-			Busy:     Status{Text: lipgloss.Color("15"), Fill: lipgloss.Color("0"), Symbol: "[BUSY]", Label: "BUSY", Message: "Working on your request…"},
+			Busy:     Status{Text: lipgloss.Color("15"), Fill: lipgloss.Color("0"), Symbol: "[BUSY]", Label: "BUSY", Message: "Working on your request..."},
 			Success:  Status{Text: lipgloss.Color("15"), Fill: lipgloss.Color("0"), Symbol: "[OK]", Label: "OK", Message: "All set."},
 			Error:    Status{Text: lipgloss.Color("15"), Fill: lipgloss.Color("0"), Symbol: "[FAIL]", Label: "FAIL", Message: "Something went wrong. Try again."},
 			Empty:    Status{Text: lipgloss.Color("7"), Fill: lipgloss.Color("0"), Symbol: "[EMPTY]", Label: "EMPTY", Message: "Nothing here yet."},

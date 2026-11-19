@@ -383,21 +383,21 @@ func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice st
 		title := kit.Heading(t.Title)
 		msg := kit.Text(t.Message)
 
-		line := fmt.Sprintf("%s %s · %s", badge, title, msg)
+		line := fmt.Sprintf("%s %s%s%s", badge, title, kit.Separator(), msg)
 		if t.Wrap {
 			wrapped := strings.Split(ansi.Wrap(line, width, ""), "\n")
 			if len(wrapped) > maxToastRows {
 				wrapped = wrapped[:maxToastRows]
-				wrapped[maxToastRows-1] = ui.Truncate(wrapped[maxToastRows-1]+"…", width)
+				wrapped[maxToastRows-1] = kit.Truncate(wrapped[maxToastRows-1]+kit.Hint("…"), width)
 			}
 			toasts = append(toasts, wrapped)
 			continue
 		}
-		toasts = append(toasts, []string{ui.Truncate(line, width)})
+		toasts = append(toasts, []string{kit.Truncate(line, width)})
 	}
 
 	if m.droppedToasts > 0 {
-		notice = ui.Truncate(kit.Muted(fmt.Sprintf("(+%d alerts suppressed by flood bounding)", m.droppedToasts)), width)
+		notice = kit.Truncate(kit.Muted(fmt.Sprintf("(+%d alerts suppressed by flood bounding)", m.droppedToasts)), width)
 	}
 	return toasts, notice
 }
@@ -443,7 +443,7 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 	if m.dnd {
 		dndStatus = "DND ON (toasts suppressed)"
 	}
-	header := fmt.Sprintf("NOTIFICATIONS: %d total · %d unread · %s", len(m.history), m.unseenCountLocked(), dndStatus)
+	header := fmt.Sprintf("NOTIFICATIONS: %d total%s%d unread%s%s", len(m.history), kit.Separator(), m.unseenCountLocked(), kit.Separator(), dndStatus)
 
 	if len(m.history) == 0 {
 		emptyNotice := kit.Notice(ui.Notice{
@@ -461,7 +461,7 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 	start, end := m.window(panelItems(bodyHeight))
 
 	var lines []string
-	lines = append(lines, kit.Muted(ui.Truncate(header, w)), "")
+	lines = append(lines, kit.Muted(kit.Truncate(header, w)), "")
 
 	for i := start; i < end; i++ {
 		n := m.history[i]
@@ -480,11 +480,11 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		detailLine := fmt.Sprintf("    %s", n.Message)
 
 		if focused {
-			headerLine = kit.Selection(ui.Truncate(headerLine, w))
-			detailLine = kit.Text(ui.Truncate(detailLine, w))
+			headerLine = kit.Selection(kit.Truncate(headerLine, w))
+			detailLine = kit.Text(kit.Truncate(detailLine, w))
 		} else {
-			headerLine = kit.Heading(ui.Truncate(headerLine, w))
-			detailLine = kit.Muted(ui.Truncate(detailLine, w))
+			headerLine = kit.Heading(kit.Truncate(headerLine, w))
+			detailLine = kit.Muted(kit.Truncate(detailLine, w))
 		}
 
 		lines = append(lines, headerLine, detailLine)
@@ -527,12 +527,12 @@ func (m *Manager) renderCompactPanel(kit ui.Kit, bounds ui.Bounds) string {
 		dndStatus = "DND ON"
 	}
 	if len(m.history) == 0 {
-		return ui.Fit(kit.Muted(ui.Truncate("No notifications · "+dndStatus, w)), bounds)
+		return ui.Fit(kit.Muted(kit.Truncate("No notifications"+kit.Separator()+dndStatus, w)), bounds)
 	}
 	var lines []string
 	if rows >= 3 {
-		summary := fmt.Sprintf("%d/%d · %d unread · %s", m.selected+1, len(m.history), m.unseenCountLocked(), dndStatus)
-		lines = append(lines, kit.Muted(ui.Truncate(summary, w)))
+		summary := fmt.Sprintf("%d/%d%s%d unread%s%s", m.selected+1, len(m.history), kit.Separator(), m.unseenCountLocked(), kit.Separator(), dndStatus)
+		lines = append(lines, kit.Muted(kit.Truncate(summary, w)))
 		rows--
 	}
 	start, end := m.window(max(1, rows/itemRows))
@@ -542,8 +542,8 @@ func (m *Manager) renderCompactPanel(kit ui.Kit, bounds ui.Bounds) string {
 		if n.Receipt != nil {
 			titleText += " [RECEIPT]"
 		}
-		headerLine := ui.Truncate(entryPrefix(kit, i == m.selected)+seenMarker(kit, n)+titleText, w)
-		detailLine := ui.Truncate("    "+n.Message, w)
+		headerLine := kit.Truncate(entryPrefix(kit, i == m.selected)+seenMarker(kit, n)+titleText, w)
+		detailLine := kit.Truncate("    "+n.Message, w)
 		if i == m.selected {
 			lines = append(lines, kit.Selection(headerLine), kit.Text(detailLine))
 		} else {
@@ -634,7 +634,7 @@ func seenMarker(kit ui.Kit, n Notification) string {
 		return "  "
 	}
 	sym := "● "
-	if kit.Theme().Name == "monochrome" || kit.Mode() == ui.Plain {
+	if kit.ASCIIChrome() || kit.Mode() == ui.Plain {
 		sym = "* "
 	}
 	return kit.StatusText(sym, theme.Success)

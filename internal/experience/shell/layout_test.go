@@ -134,7 +134,12 @@ func TestFrameGeometryEveryScreenThemeAndSize(t *testing.T) {
 					v := m.View()
 					lines := checkRendered(t, v, size[0], size[1])
 					screen := strings.Join(lines, "\n")
-					want := activation[s.name]
+					want := append([]string(nil), activation[s.name]...)
+					if th.Name == theme.Monochrome().Name {
+						for i := range want {
+							want[i] = strings.ReplaceAll(want[i], " · ", " | ")
+						}
+					}
 					if strings.HasPrefix(s.name, "palette-from-") {
 						want = []string{"PALETTE>"}
 					}
@@ -554,7 +559,8 @@ func checkMinimumNotifications(t *testing.T, th theme.Theme, mode ui.ColorMode) 
 
 	// a and n keep working and their effect is visible in the summary.
 	press(m, tea.KeyPressMsg{Code: 'a', Text: "a"}, tea.KeyPressMsg{Code: 'n', Text: "n"})
-	if body = bodyText(t, m); !strings.Contains(body, "2/2 · 0 unread · DND ON") || !m.notifs.DND() {
+	summary := "2/2" + m.kit.Separator() + "0 unread" + m.kit.Separator() + "DND ON"
+	if body = bodyText(t, m); !strings.Contains(body, summary) || !m.notifs.DND() {
 		t.Fatalf("a/n not reflected at 30x10:\n%s", body)
 	}
 
@@ -619,7 +625,7 @@ func TestMinimumLogsShowAndScrollText(t *testing.T) {
 			m.taskView = true
 			m.tasks.ShowLogs(7, "com.gostalgia.echo", strings.Join(log, "\n"))
 			body := bodyText(t, m)
-			for _, want := range []string{"LOGS · PID 7", "log line 01", "log line 02"} {
+			for _, want := range []string{"LOGS" + m.kit.Separator() + "PID 7", "log line 01", "log line 02"} {
 				if !strings.Contains(body, want) {
 					t.Fatalf("%q not on screen at 30x10:\n%s", want, body)
 				}
@@ -636,7 +642,7 @@ func TestMinimumLogsShowAndScrollText(t *testing.T) {
 
 			sized(m, 80, 24)
 			body = bodyText(t, m)
-			for _, want := range []string{"LOGS · PID 7", "CHILD LOG TAIL: com.gostalgia.echo (PID 7)", "log line 05", "log line 11"} {
+			for _, want := range []string{"LOGS" + m.kit.Separator() + "PID 7", "CHILD LOG TAIL: com.gostalgia.echo (PID 7)", "log line 05", "log line 11"} {
 				if !strings.Contains(body, want) {
 					t.Fatalf("80x24 log tail lost %q:\n%s", want, body)
 				}

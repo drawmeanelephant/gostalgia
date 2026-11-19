@@ -354,7 +354,14 @@ failed-launch badge shake, with the same per-model clock injected into
 `bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or copy
 flash and schedules no animation frames; `anim.SetMotion` is never used, and
 idle shells retain only their existing functional polling
-([experience.md](experience.md#finite-per-session-motion-issue-213)).
+([experience.md](experience.md#finite-per-session-motion-issue-213)). Since #214 the
+Home dashboard also uses `bloom/fig`: the bundled `big` FIGlet font (with two
+tracking cells) falls back to bundled `mini` and then the spaced title according
+to solved content cells. Both fonts are ASCII and are licensed under
+BSD-3-Clause, as recorded from the pinned `fig/fonts/LICENSES.md` in
+[experience.md](experience.md#home-figlet-wordmark-issue-214). The wordmark is
+static, uses the kit's heading tokens, and adds no animation or terminal-owner
+responsibilities.
 
 **steep (Issue #212).** `getsteep.dev/steep` and its separate
 `getsteep.dev/steep/reel` module are direct **test-only** dependencies, both

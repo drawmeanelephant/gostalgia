@@ -1,10 +1,10 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home   Apps   Prompt   Tasks   Notifications  [Pad]                         |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | Pad                                                                          |
-| Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back             |
+| Tab focus | Enter action | Up/Down item | LRUD grid | Esc cancel/back        |
 | Mascot                                                                       |
 | (\_/)                                                                        |
 | (o.o)                                                                        |
@@ -21,4 +21,4 @@
 |                                                                              |
 | C:\users\guest> App view owns focus. Esc returns to prompt.                  |
 +------------------------------------------------------------------------------+
-Esc CANCEL/BACK · Ctrl-C EXIT · Tab FOCUS · (Enter) ACTION · ↑↓ ITEM · F2 APPS
+Esc CANCEL/BACK | Ctrl-C EXIT | Tab FOCUS | (Enter) ACTION | Up/Down ITEM | F2 A

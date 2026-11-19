@@ -286,8 +286,8 @@ func (m *Model) badge(b ui.Bounds) string {
 	if userName == "" {
 		userName = "guest"
 	}
-	badge := m.kit.Badge(statusLabel, theme.Success, b.Width) + m.kit.Muted(fmt.Sprintf("   %s · C: environment drive", userName))
-	return ui.Truncate(badge, b.Width)
+	badge := m.kit.Badge(statusLabel, theme.Success, b.Width) + m.kit.Muted(fmt.Sprintf("   %s%sC: environment drive", userName, m.kit.Separator()))
+	return m.kit.Truncate(badge, b.Width)
 }
 
 // toastLayer is the toast stack over a w×h body, anchored to its
@@ -309,7 +309,7 @@ func (m *Model) toastLayer(w, h int) bloom.LayerNode {
 		newest := toasts[n-1]
 		lines = newest[:min(len(newest), max(room, h-1))]
 		if len(lines) < len(newest) {
-			lines[len(lines)-1] = ui.Truncate(lines[len(lines)-1]+"…", width)
+			lines[len(lines)-1] = m.kit.Truncate(lines[len(lines)-1]+m.kit.Hint("…"), width)
 		}
 		kept := 1
 		for ; kept < n && len(lines)+len(toasts[n-1-kept]) <= room; kept++ {
@@ -348,7 +348,7 @@ func (m *Model) body(home homeView) bloom.Child {
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
 			lines := m.viewLines(b.Height)
 			for i, line := range lines {
-				lines[i] = ui.Truncate(line, b.Width)
+				lines[i] = m.kit.Truncate(line, b.Width)
 			}
 			return strings.Join(lines, "\n")
 		}), m.viewHits, nil)
@@ -385,13 +385,14 @@ func (m *Model) promptNode() bloom.Child {
 func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 	promptPath := safe(dosPath(m.cwd))
 	if lipgloss.Width(promptPath) > w/2 {
-		promptPath = "C:…" + ui.Tail(promptPath, max(1, w/2-3))
+		ellipsis := m.kit.Hint("…")
+		promptPath = "C:" + ellipsis + ui.Tail(promptPath, max(1, w/2-2-lipgloss.Width(ellipsis)))
 	}
 	prefix := promptPath + "> "
 	prompt := m.kit.Heading(prefix)
 	switch {
 	case m.paletteOpen:
-		prompt = m.kit.Heading("PALETTE> ") + m.kit.Muted("Type to filter · ↑↓ navigate · Enter execute · Esc close")
+		prompt = m.kit.Heading("PALETTE> ") + m.kit.Muted(m.kit.Hint("Type to filter · ↑↓ navigate · Enter execute · Esc close"))
 	case m.presentation != nil:
 		prompt += m.kit.Muted("App view owns focus. Esc returns to prompt.")
 	case m.taskView:
@@ -410,12 +411,12 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 		if sel >= 0 && filtered[sel].Running {
 			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter relaunch, F3 stop, F4 view.", viewText(filtered[sel].Manifest.Name), filtered[sel].PID), theme.Success)
 		} else if sel >= 0 {
-			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop · F4 view · Esc prompt.", viewText(filtered[sel].Manifest.Name)))
+			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop%sF4 view%sEsc prompt.", viewText(filtered[sel].Manifest.Name), m.kit.Separator(), m.kit.Separator()))
 		} else {
 			prompt += m.kit.Muted("Esc returns to prompt.")
 		}
 	case m.currentMode() == modeHome:
-		prompt += m.kit.Muted("Home view owns focus. Esc returns to prompt · Ctrl-P palette.")
+		prompt += m.kit.Muted(m.kit.Hint("Home view owns focus. Esc returns to prompt · Ctrl-P palette."))
 	default:
 		// Show a cursor-centered slice rather than allowing long pasted
 		// input to push the prompt off screen. Cell width, not bytes,
@@ -425,9 +426,9 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 		before := ui.Tail(string(m.input[:m.cursor]), room/2)
 		after := ui.Fit(string(m.input[m.cursor:]), ui.Bounds{Width: room + 1 - lipgloss.Width(before), Height: 1})
 		x = lipgloss.Width(prefix) + lipgloss.Width(before)
-		return ui.Truncate(prompt+m.kit.Text(before)+m.kit.Text(after), w), x, x < w
+		return m.kit.Truncate(prompt+m.kit.Text(before)+m.kit.Text(after), w), x, x < w
 	}
-	return ui.Truncate(prompt, w), 0, false
+	return m.kit.Truncate(prompt, w), 0, false
 }
 
 func (m *Model) bindings(home homeView) []ui.Binding {
