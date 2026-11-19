@@ -8,8 +8,8 @@
 |                                                                              |
 | RUNNING APPLIC+----------------------------------------------+               |
 |   Echo  [OK] L| > Shut down Gostalgia?                       |               |
-| > Clock  [OK] | Stops every app and service in this          |               |
-|               | environment and ends every attached session. |               |
+| > Clock  [OK] | Stops every app and service and ends every   |               |
+|               | attached session.                            |               |
 | DOCUMENT SHORT|                                              |               |
 |   readme.txt  | [Cancel]  Shut down                          |               |
 |   todo.txt  48+----------------------------------------------+               |

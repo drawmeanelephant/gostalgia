@@ -8,8 +8,8 @@
 | transcript line 14                                                           |
 | transcript lin+----------------------------------------------+               |
 | transcript lin| > Stop Echo?                                 |               |
-| transcript lin| Stops Echo (com.gostalgia.echo), running as  |               |
-| transcript lin| PID 7. Work it has not saved may be lost.    |               |
+| transcript lin| Stops Echo (com.gostalgia.echo), PID 7.      |               |
+| transcript lin| Unsaved work may be lost.                    |               |
 | transcript lin|                                              |               |
 | transcript lin| [Cancel]  Stop app                           |               |
 | transcript lin+----------------------------------------------+               |

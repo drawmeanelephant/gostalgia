@@ -164,18 +164,18 @@ func entryPaths() []entryPath {
 	}
 	return []entryPath{
 		{"typed shutdown", prompt("shutdown"), "sys/shutdown", `{"reason":"requested by Charm shell"}`,
-			[]string{"Shut down Gostalgia?", "every app and service in this environment"}},
+			[]string{"Shut down Gostalgia?", "Stops every app and service", "every attached session"}},
 		{"palette shutdown", palette("shut down gostalgia"), "sys/shutdown", `{"reason":"requested by Charm shell"}`,
 			[]string{"Shut down Gostalgia?"}},
-		{"typed stop", prompt("stop com.gostalgia.clock"), "app/stop", `{"id":"com.gostalgia.clock"}`,
-			[]string{"Stop Clock?", "com.gostalgia.clock", "PID 31"}},
+		{"typed stop", prompt("stop com.gostalgia.echo"), "app/stop", `{"id":"com.gostalgia.echo"}`,
+			[]string{"Stop Echo?", "com.gostalgia.echo", "PID 7"}},
 		{"palette stop", palette("stop echo"), "app/stop", `{"id":"com.gostalgia.echo"}`,
 			[]string{"Stop Echo?", "com.gostalgia.echo", "PID 7"}},
 		{"launcher F3", func(t *testing.T, m *Model) {
 			m.setMode(modeLauncher)
-			m.selected = 2
+			m.selected = 0
 			act(t, m, key(tea.KeyF3))
-		}, "app/stop", `{"id":"com.gostalgia.clock"}`, []string{"Stop Clock?", "com.gostalgia.clock", "PID 31"}},
+		}, "app/stop", `{"id":"com.gostalgia.echo"}`, []string{"Stop Echo?", "com.gostalgia.echo", "PID 7"}},
 		{"tasks x", func(t *testing.T, m *Model) {
 			m.taskView = true
 			selectPID(t, m, 7)
@@ -184,8 +184,8 @@ func entryPaths() []entryPath {
 		{"tasks r", func(t *testing.T, m *Model) {
 			m.taskView = true
 			act(t, m, typed("r"))
-		}, "proc/reap", `{}`, []string{"Reap terminated processes?", "across the whole environment", "not only the selected row"}},
-		{"typed reap", prompt("reap"), "proc/reap", `{}`, []string{"Reap terminated processes?", "whole environment"}},
+		}, "proc/reap", `{}`, []string{"Reap ended processes?", "every terminated process in the environment", "not only this row"}},
+		{"typed reap", prompt("reap"), "proc/reap", `{}`, []string{"Reap ended processes?", "in the environment"}},
 	}
 }
 
@@ -274,14 +274,14 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 	t.Run("app relaunched under a new PID", func(t *testing.T) {
 		m, rec := recordingFixture(t)
 		m.setMode(modeLauncher)
-		m.selected = 2
+		m.selected = 0
 		act(t, m, key(tea.KeyF3))
 		act(t, m, tabKey)
 		relaunched := append([]appStatus(nil), m.apps...)
-		relaunched[2].PID = 44
+		relaunched[0].PID = 44
 		relaunched[0], relaunched[2] = relaunched[2], relaunched[0]
 		m.Update(resultMsg{apps: relaunched})
-		if !strings.Contains(dialogWords(m), "no longer running as PID 31") {
+		if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
 			t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
 		}
 		act(t, m, enterKey)
@@ -289,6 +289,45 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 		act(t, m, enterKey)
 		if got := rec.destructive(); len(got) != 0 {
 			t.Fatalf("stale confirmation sent %v", got)
+		}
+	})
+	// The app list refreshes only after a command, but the process table
+	// is polled; a relaunch the poll sees first must still disable the
+	// stop, because app/stop would reach the new instance.
+	t.Run("app relaunched, seen only in the process table", func(t *testing.T) {
+		m, rec := recordingFixture(t)
+		m.setMode(modeLauncher)
+		m.selected = 0
+		act(t, m, key(tea.KeyF3))
+		act(t, m, tabKey)
+		if m.confirm.active != confirmProceed {
+			t.Fatal("stop was not confirmable before the relaunch")
+		}
+		rows := m.tasks.Processes()
+		rows[1] = taskmanager.ProcessRow{ID: 45, Name: "com.gostalgia.echo", Kind: "app", State: "running"}
+		m.Update(procUpdateMsg{procs: rows})
+		if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
+			t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
+		}
+		act(t, m, enterKey)
+		act(t, m, tabKey)
+		act(t, m, enterKey)
+		if got := rec.destructive(); len(got) != 0 {
+			t.Fatalf("stale confirmation sent %v", got)
+		}
+	})
+	t.Run("app listed as running but its process has failed", func(t *testing.T) {
+		m, rec := recordingFixture(t)
+		m.setMode(modeLauncher)
+		m.selected = 2 // Clock: the list says PID 31, the table says it failed
+		act(t, m, key(tea.KeyF3))
+		if m.confirm == nil || !strings.Contains(dialogWords(m), "Clock is no longer running as PID 31.") {
+			t.Fatalf("dialog does not explain:\n%s", dialogText(m))
+		}
+		m.confirm.active = confirmProceed
+		act(t, m, enterKey)
+		if got := rec.destructive(); len(got) != 0 {
+			t.Fatalf("stopped a failed app: %v", got)
 		}
 	})
 	t.Run("process stopped", func(t *testing.T) {
@@ -442,5 +481,57 @@ func TestTypedConfirmationKeepsDraftUntilConfirmed(t *testing.T) {
 	act(t, m, escKey)
 	if string(m.input) != "shutdown" || m.cursor != len("shutdown") {
 		t.Fatalf("cancel lost the draft: %q at %d", string(m.input), m.cursor)
+	}
+}
+
+// At the minimum screen every dialog shows its whole body, blocked reason
+// included, and both actions, so the scope of what is confirmed is never
+// cut off.
+func TestConfirmationsFitTheMinimumScreen(t *testing.T) {
+	check := func(t *testing.T, m *Model) {
+		t.Helper()
+		m.Update(tea.WindowSizeMsg{Width: minFrameWidth, Height: minFrameHeight})
+		d := m.confirmDialog()
+		words := dialogWords(m)
+		for _, want := range []string{d.Title, strings.Join(strings.Fields(d.Body), " "), d.Actions[0].Label, d.Actions[1].Label} {
+			if !strings.Contains(words, want) {
+				t.Fatalf("%d×%d dialog lacks %q:\n%s", minFrameWidth, minFrameHeight, want, dialogText(m))
+			}
+		}
+	}
+	for _, p := range entryPaths() {
+		t.Run(p.name, func(t *testing.T) {
+			m, _ := recordingFixture(t)
+			p.open(t, m)
+			check(t, m)
+		})
+	}
+	t.Run("blocked", func(t *testing.T) {
+		m, _ := recordingFixture(t)
+		m.taskView = true
+		selectPID(t, m, 7)
+		act(t, m, typed("x"))
+		m.procPending = true
+		check(t, m)
+	})
+}
+
+// Below the minimum size the dialog is not drawn, so Enter there confirms
+// nothing; the dialog is still open once the screen is large enough again.
+func TestEnterBelowMinimumSizeDoesNotConfirm(t *testing.T) {
+	m, rec := recordingFixture(t)
+	m.openConfirm(confirmation{kind: confirmShutdown})
+	act(t, m, tabKey)
+	m.Update(tea.WindowSizeMsg{Width: minFrameWidth - 1, Height: minFrameHeight})
+	act(t, m, enterKey)
+	m.Update(tea.WindowSizeMsg{Width: minFrameWidth, Height: minFrameHeight - 1})
+	act(t, m, enterKey)
+	if got := rec.destructive(); len(got) != 0 || m.confirm == nil {
+		t.Fatalf("hidden dialog confirmed: %v, open %v", got, m.confirm != nil)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	act(t, m, enterKey)
+	if got := rec.destructive(); len(got) != 1 || got[0].method != "sys/shutdown" {
+		t.Fatalf("visible dialog sent %v", got)
 	}
 }

@@ -290,8 +290,8 @@ around it with its state untouched:
   the exact screen beneath: the view, focus, prompt draft and cursor, launcher
   query and selection, app instance and field drafts, task selection and
   subview, notification selection, and transcript scroll.
-- While it is open the palette owns every key except `Ctrl-C`: typing,
-  paste, navigation, paging, and the F-key view shortcuts never reach the
+- While it is open the palette owns every key except `Ctrl-C` and `Ctrl-D`
+  (exit): typing, paste, navigation, paging, and the F-key view shortcuts never reach the
   screen beneath, and that screen shows no cursor.
 - In color themes at 256 colors or more, the screen beneath is dimmed
   (`fx.Dim`). Monochrome, `ui.Plain` and 16-color sessions get no backdrop.
@@ -307,23 +307,27 @@ Destructive actions open a `kit.Dialog` layer before sending any request:
 | Stop process | Task Manager `x` | `proc/stop` with that PID |
 | Reap | Task Manager `r`, typed `reap` | `proc/reap` (environment-wide) |
 
-- The dialog names its target: the environment, the app's name, ID and
-  running PID, or the process name and PID. The reap dialog says that it
-  removes every terminated process in the environment, not only the selected
-  row, because `proc/reap` takes no PID.
+- The dialog names its target: every app, service and attached session, the
+  app's name, ID and running PID, or the process name and PID. The reap
+  dialog says that it clears every terminated process in the environment,
+  not only the selected row, because `proc/reap` takes no PID.
 - The dialog keeps the target it showed. A refresh, relaunch or row reorder
   can disable confirmation (the dialog then says why), never retarget it to
   another app or process. Availability is checked again when Enter is
-  pressed.
+  pressed. Because `app/stop` names only the app, an app stop is disabled
+  once either the app list or the polled process table shows that the PID
+  the dialog named has ended or that the app runs under another PID.
 - `Cancel` is focused when the dialog opens. `Tab`/`→` and
   `Shift-Tab`/`←` move between enabled actions, `Enter` chooses the focused
   one, and `Esc` cancels. Canceling sends nothing; confirming sends exactly
-  one request. A repeat-flagged held `Enter` never confirms.
+  one request. A repeat-flagged held `Enter` never confirms, and neither
+  does `Enter` below the 30×10 minimum, where the dialog is not drawn.
+  At 30×10 every dialog shows its whole body and both actions.
 - The action is disabled, shown in the kit's parentheses, while the shell is
   busy, while a confirmed stop or reap is still in flight, for an app that is
   not running (including an unknown ID), and for a process that has ended.
-- The dialog owns every key except `Ctrl-C`, the covered prompt shows no
-  cursor, and the typed command stays in the prompt until it is confirmed.
+- The dialog owns every key except `Ctrl-C` and `Ctrl-D` (exit), the covered
+  prompt shows no cursor, and the typed command stays in the prompt until it is confirmed.
 - Raw `call METHOD` requests, other commands, and app presentation actions
   are not confirmed.
 
@@ -342,9 +346,10 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 - `FocusApp`: Active app presentation view owns keyboard interaction; `Esc`
   retracts presentation and restores prompt focus.
 - `FocusPalette`: The command palette layer owns every keystroke except
-  `Ctrl-C`; `Esc` closes only the palette and restores the view and focus
+  `Ctrl-C` and `Ctrl-D`; `Esc` closes only the palette and restores the view and focus
   beneath it.
-- `FocusDialog`: An open confirmation owns every keystroke except `Ctrl-C`;
+- `FocusDialog`: An open confirmation owns every keystroke except `Ctrl-C`
+  and `Ctrl-D`;
   it takes priority over the palette and every view.
 
 ### Single-instance launch and graceful stop
@@ -388,7 +393,8 @@ scrollable table:
   owns toast lifetime: each toast expires after the manager's tick count
   (8 by default), and the caps, flood bounding, and DND are the manager's
   too. Drawing toasts, or opening and closing the palette or a dialog, never
-  advances or restarts a countdown.
+  advances or restarts a countdown. The Notification Center lists the same
+  events itself, so no toasts are drawn over it.
 - **Notification Center**: Dedicated full-screen panel listing complete event history,
   timestamps, severities (`INFO`, `WARN`, `ERROR`), and associated PIDs.
   - Unseen vs. Seen distinction: events arrive unread until inspected.

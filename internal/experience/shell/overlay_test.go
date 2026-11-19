@@ -600,3 +600,70 @@ func TestOverlaySnapshots(t *testing.T) {
 		})
 	}
 }
+
+// A toast lands in the same corner over every screen and leaves the rest
+// of the screen, its state and its focus as they were. The Notification
+// Center lists the same events itself and shows no toasts.
+func TestToastsOverlayEveryScreen(t *testing.T) {
+	for _, size := range [][2]int{{80, 24}, {30, 10}} {
+		for _, s := range overlayUnderlays() {
+			t.Run(fmt.Sprintf("%s/%dx%d", s.name, size[0], size[1]), func(t *testing.T) {
+				m := sized(fixtureModel(theme.Nostalgia(), ui.Plain), size[0], size[1])
+				s.setup(m)
+				body := checkFrame(t, m)[slotBody]
+				base, want, focus := screenText(m.View()), underlayOf(m), m.Focus()
+				withToasts(m, 1)
+				stack, ok := m.solve().Rect(layerToasts)
+				if s.name == "notifications" {
+					if ok {
+						t.Fatalf("toast layer %v over the Notification Center", stack)
+					}
+					return
+				}
+				if !ok || !stack.In(body) || stack.Max != body.Max {
+					t.Fatalf("toast %v (ok %v) not at the bottom right of %v", stack, ok, body)
+				}
+				lines := screenText(m.View())
+				if !strings.Contains(strings.Join(lines[stack.Min.Y:stack.Max.Y], "\n"), "CRASH") {
+					t.Fatalf("toast not drawn:\n%s", strings.Join(lines, "\n"))
+				}
+				if got, was := bodyOutside(lines, body, stack), bodyOutside(base, body, stack); strings.Join(got, "\n") != strings.Join(was, "\n") {
+					t.Fatalf("the screen moved:\n%s\nwas\n%s", strings.Join(got, "\n"), strings.Join(was, "\n"))
+				}
+				if got := underlayOf(m); got != want || m.Focus() != focus {
+					t.Fatalf("the toast changed the screen's state:\n got %+v\nwant %+v", got, want)
+				}
+			})
+		}
+	}
+}
+
+// Up and Down move the palette's selection, and Enter runs the selected
+// result, not the first.
+func TestPaletteArrowsChooseTheResult(t *testing.T) {
+	m, rec := recordingFixture(t)
+	m.setMode(modeHome)
+	act(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	act(t, m, typed("launch"))
+	act(t, m, key(tea.KeyDown))
+	act(t, m, key(tea.KeyDown))
+	act(t, m, key(tea.KeyUp))
+	items := m.filteredPaletteItems()
+	if m.paletteSelected != 1 || len(items) < 3 || items[1].Title != "Launch Notes" {
+		t.Fatalf("selection %d over %d results", m.paletteSelected, len(items))
+	}
+	marker := m.kit.Theme().Focus.Marker
+	if !strings.Contains(lineWith(strings.Join(screenText(m.View()), "\n"), "Launch Notes"), marker) {
+		t.Fatalf("the selected result is not marked:\n%s", strings.Join(screenText(m.View()), "\n"))
+	}
+	act(t, m, enterKey)
+	var launches []ipcCall
+	for _, c := range rec.all() {
+		if c.method == "app/launch" {
+			launches = append(launches, c)
+		}
+	}
+	if len(launches) != 1 || launches[0].params != `{"id":"com.gostalgia.notes"}` {
+		t.Fatalf("Enter sent %v, want one launch of Notes", rec.all())
+	}
+}

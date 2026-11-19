@@ -8,11 +8,11 @@
 | | Notes                                                                    | |
 | | [READY] READ+----------------------------------------------+             | |
 | | com.gostalgi| > Stop Clock?                                |             | |
-| +-------------| Stops Clock (com.gostalgia.clock), running   |-------------+ |
-| +-------------| as PID 31. Work it has not saved may be      |-------------+ |
-| | > Clock     | lost.                                        |             | |
+| +-------------| Clock is no longer running as PID 31. Stops  |-------------+ |
+| +-------------| Clock (com.gostalgia.clock), PID 31. Unsaved |-------------+ |
+| | > Clock     | work may be lost.                            |             | |
 | | [OK] LIVE / |                                              |             | |
-| | com.gostalgi| [Cancel]  Stop app                           |             | |
+| | com.gostalgi| [Cancel] (Stop app)                          |             | |
 | +-------------+----------------------------------------------+-------------+ |
 | Fixture app Clock with a description long enough to clip.                    |
 | GRANT  ipc · files                                                           |

@@ -227,14 +227,20 @@ func (k Kit) dialogBox(dialog Dialog, bounds Bounds) (panel string, box Bounds) 
 	body := Wrap(ansi.Wrap(Sanitize(dialog.Body), content.Width, ""), content.Width)
 	if len(dialog.Actions) > 0 {
 		bodyLines := strings.Split(body, "\n")
-		body = strings.Join(bodyLines[:min(len(bodyLines), max(0, content.Height-2))], "\n")
+		// A blank row separates the actions only when the whole body fits
+		// with it; otherwise the row goes to the body.
+		gap := "\n\n"
+		if len(bodyLines) > content.Height-2 {
+			gap = "\n"
+		}
+		body = strings.Join(bodyLines[:min(len(bodyLines), max(0, content.Height-len(gap)))], "\n")
 		tabs := make([]Tab, len(dialog.Actions))
 		for i, action := range dialog.Actions {
 			tabs[i] = Tab(action)
 		}
 		actions := k.Tabs(tabs, dialog.Active, content.Width)
-		if content.Height >= 3 {
-			body += "\n\n" + actions
+		if content.Height >= 2 && body != "" {
+			body += gap + actions
 		} else {
 			body = actions
 		}

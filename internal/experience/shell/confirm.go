@@ -122,6 +122,19 @@ func (m *Model) confirmBlocked(c confirmation) string {
 				running = a.Running && a.PID == c.pid
 			}
 		}
+		// The app list refreshes only after commands, but the process table
+		// is polled. app/stop names only the app, so a table that shows the
+		// dialog's PID ended, or the app live under another PID, means
+		// confirming would stop an instance the dialog never showed.
+		if running && m.tasks != nil {
+			for _, p := range m.tasks.Processes() {
+				switch {
+				case p.ID == c.pid && !stoppable(p.State),
+					p.ID != c.pid && p.Kind == "app" && p.Name == c.appID && stoppable(p.State):
+					running = false
+				}
+			}
+		}
 		if !running {
 			return fmt.Sprintf("%s is no longer running as PID %d.", name, c.pid)
 		}
@@ -148,10 +161,10 @@ func (m *Model) confirmDialog() ui.Dialog {
 	switch c.kind {
 	case confirmShutdown:
 		title, verb = "Shut down Gostalgia?", "Shut down"
-		body = "Stops every app and service in this environment and ends every attached session."
+		body = "Stops every app and service and ends every attached session."
 	case confirmStopApp:
 		title, verb = "Stop "+viewText(c.name)+"?", "Stop app"
-		body = fmt.Sprintf("Stops %s (%s), running as PID %d. Work it has not saved may be lost.",
+		body = fmt.Sprintf("Stops %s (%s), PID %d. Unsaved work may be lost.",
 			viewText(c.name), viewText(c.appID), c.pid)
 		if c.pid == 0 {
 			body = fmt.Sprintf("App: %s (%s).", viewText(c.name), viewText(c.appID))
@@ -160,12 +173,13 @@ func (m *Model) confirmDialog() ui.Dialog {
 		title, verb = fmt.Sprintf("Stop process %d?", c.pid), "Stop process"
 		body = fmt.Sprintf("Stops %s (PID %d).", viewText(c.name), c.pid)
 	case confirmReap:
-		title, verb = "Reap terminated processes?", "Reap all"
-		body = "Removes every terminated process from the process table across the whole environment, not only the selected row."
+		title, verb = "Reap ended processes?", "Reap all"
+		body = "Clears every terminated process in the environment, not only this row."
 	}
+	// A reason comes first so a small screen still shows it.
 	blocked := m.confirmBlocked(c)
 	if blocked != "" {
-		body += " " + blocked
+		body = blocked + " " + body
 	}
 	return ui.Dialog{
 		Title: title, Body: body, State: theme.Error, Active: c.active,
@@ -185,8 +199,10 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left":
 		m.moveConfirm(actions, -1)
 	case "enter":
-		if msg.IsRepeat {
-			// A held Enter acts once; its repeats never confirm.
+		// A held Enter acts once; its repeats never confirm. Below the
+		// minimum size the dialog is not on screen, so nothing it would
+		// confirm can be seen.
+		if msg.IsRepeat || m.width < minFrameWidth || m.height < minFrameHeight {
 			return m, nil
 		}
 		active := m.confirm.active
