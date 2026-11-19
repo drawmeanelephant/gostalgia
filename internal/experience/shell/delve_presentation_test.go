@@ -350,6 +350,60 @@ func TestUnhintedBlocksKeepLegacySemantics(t *testing.T) {
 	}
 }
 
+// TestValidatedHintedFocusSurvivesSanitizer checks the rendered endpoint of
+// the SDK boundary: a validated hinted block may contain wide and combining
+// text, and sanitization leaves its code-point columns intact, so a cropped
+// viewport keeps the glyph the focus named.
+func TestValidatedHintedFocusSurvivesSanitizer(t *testing.T) {
+	line := strings.Repeat("界", 30) + strings.Repeat("e\u0301", 10) + "@" + strings.Repeat("x", 60)
+	data := sdk.View{
+		Version: 3, Instance: "launch", Title: "Map", State: sdk.ViewReady,
+		Blocks: []sdk.Block{{
+			ID: "map", Text: strings.Join([]string{"Y0", line, "Y2", "Y3"}, "\n"),
+			Focus: &sdk.BlockFocus{X: 50, Y: 1},
+		}},
+		Status: "ok",
+	}
+	if err := data.Validate(); err != nil {
+		t.Fatalf("control-free hinted block rejected: %v", err)
+	}
+	m := delveModel(t, 30, 10, data)
+	m.presentation.inspect = true
+	m.presentation.inspectTop = -1
+	view := plainView(t, m)
+	if !strings.Contains(view, "e\u0301@") {
+		t.Fatalf("crop lost the focal glyph after a combining cluster:\n%s", view)
+	}
+	if !strings.Contains(view, "界") || strings.ContainsRune(view, '\uFFFD') {
+		t.Fatalf("crop split a wide or combining cluster:\n%s", view)
+	}
+}
+
+// TestUnhintedBlockKeepsSanitizerSemantics proves the boundary change does
+// not leak into legacy art: a block without the optional hint still expands
+// tabs and strips ANSI sequences and controls exactly as before.
+func TestUnhintedBlockKeepsSanitizerSemantics(t *testing.T) {
+	data := sdk.View{
+		Version: 3, Instance: "launch", Title: "Legacy art", State: sdk.ViewReady,
+		Blocks: []sdk.Block{{ID: "art", Label: "Art", Text: "a\tb\n\x00\x1b[31mred\x1b[0m"}},
+		Status: "ok",
+	}
+	if err := data.Validate(); err != nil {
+		t.Fatalf("unhinted legacy block rejected: %v", err)
+	}
+	m := delveModel(t, 80, 24, data)
+	view := plainView(t, m)
+	if !strings.Contains(view, "a       b") {
+		t.Fatalf("unhinted block did not expand the tab to its 8-cell stop:\n%s", view)
+	}
+	if !strings.Contains(view, "red") || strings.ContainsRune(view, '\x00') {
+		t.Fatalf("unhinted block did not sanitize controls:\n%q", view)
+	}
+	if strings.Contains(m.View().Content, "\x1b[31m") {
+		t.Fatalf("unhinted block leaked app ANSI into the frame: %q", m.View().Content)
+	}
+}
+
 // TestDelveSemanticPresentationAcrossThemesAndPlain covers the finite theme
 // population plus Plain: each renders the map view, vitals, and reachable
 // actions with readable text, and no theme invents ANSI in Plain mode.

@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -101,6 +102,13 @@ type Block struct {
 // Both are validated against the block's own text, so a focus never names a
 // cell the block does not contain. The experience converts the column to
 // display cells when it crops, keeping the named cell in view.
+//
+// Because the experience sanitizes block text before rendering, a hinted
+// block must be valid UTF-8 and carry no terminal controls other than
+// newlines: tabs, escape sequences, and other controls are expanded or
+// dropped, which would move the named cell. Control-free text, including
+// wide and combining runes, is rendered unchanged, so its coordinates stay
+// exact. Blocks without a focus keep the ordinary sanitization.
 type BlockFocus struct {
 	X int `json:"x"`
 	Y int `json:"y"`
@@ -307,6 +315,9 @@ func (v View) Validate() error {
 			return fmt.Errorf("presentation: block %q exceeds line or size budget", block.ID)
 		}
 		if block.Focus != nil {
+			if !focusTextStable(block.Text) {
+				return fmt.Errorf("presentation: block %q focus requires control-free text", block.ID)
+			}
 			lines := strings.Split(text, "\n")
 			if block.Focus.Y < 0 || block.Focus.Y >= len(lines) ||
 				block.Focus.X < 0 || block.Focus.X >= utf8.RuneCountInString(lines[block.Focus.Y]) {
@@ -351,6 +362,24 @@ func (v View) Validate() error {
 		}
 	}
 	return nil
+}
+
+// focusTextStable reports whether the experience sanitizer leaves text
+// coordinate-for-coordinate unchanged. Sanitization strips ANSI sequences,
+// expands tabs, drops other terminal controls, and replaces invalid UTF-8;
+// each of those moves the code-point columns a BlockFocus validated against
+// the raw text. Newlines are structural and preserved, so a hinted block may
+// contain them. Unhinted blocks keep the legacy sanitization.
+func focusTextStable(text string) bool {
+	if !utf8.ValidString(text) {
+		return false
+	}
+	for _, r := range text {
+		if r != '\n' && unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // fieldValueLimit is the per-field value budget: multiline fields get the

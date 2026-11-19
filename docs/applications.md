@@ -509,12 +509,23 @@ concrete vocabulary is:
 - `sdk.ViewState`: `ready`, `loading`, or `error`. An error state requires an
   error banner. `status` is informational text, not an IPC error.
 - `sdk.Block` (version 2): a preformatted multi-line text region for ASCII art
-  or pre-wrapped content. `id`, optional `label` caption, and `text`. Lines are
+  or pre-wrapped content. `id`, optional `label` caption, `text`, and optional
+  version-3 `focus`. Lines are
   rendered verbatim in order: the shell clips each line at the viewport edge
   and never wraps, so apps can draw fixed-width figures. Tabs expand to the
   next 8-cell tab stop during sanitization; use spaces for pixel-exact
   alignment. One trailing newline terminates the last line rather than
   counting as an extra line.
+- `sdk.BlockFocus` (version 3): optional `focus: {x, y}` on a `sdk.Block`,
+  naming the cell the experience should keep visible when it crops a bounded
+  viewport — for example a map's player tile. `x` counts Unicode code points
+  from the left of `y`'s line and `y` counts lines from the block's top; both
+  are validated against the block's own text, and a focus on a version below
+  3 is an error. A hinted block must be valid UTF-8 with no terminal controls
+  other than newlines (no tabs or ANSI escapes), so the named cell survives
+  sanitization unchanged; control-free text, including wide and combining
+  runes, is unaffected. An unhinted block keeps the ordinary sanitization
+  above and renders exactly as before, so the hint is always optional.
 - `sdk.Meter` (version 2): `id`, `label`, and a finite `value` fraction. The
   shell clamps `value` to [0,1] and draws it in the theme's progress vocabulary
   (ASCII `#`/`-` in monochrome).
