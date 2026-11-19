@@ -3,7 +3,6 @@ package shell
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"image"
 	"io"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/runtime"
@@ -64,16 +62,9 @@ type copyObserver struct {
 	results chan resultMsg
 	copies  chan copyMsg
 	probed  chan struct{}
-	events  chan string
 }
 
 func (m *copyObserver) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.MouseMsg:
-		m.events <- fmt.Sprintf("%T: %+v", msg, msg)
-	case bloom.SelectionMsg:
-		m.events <- fmt.Sprintf("selection: %+v", msg)
-	}
 	if p, ok := msg.(probeMsg); ok {
 		p.fn(m.Model)
 		m.probed <- struct{}{}
@@ -142,7 +133,7 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 
 	ctx := t.Context()
 	m := &copyObserver{Model: New(ctx, client, rt.Done()), results: make(chan resultMsg, 20),
-		copies: make(chan copyMsg, 4), probed: make(chan struct{}), events: make(chan string, 100)}
+		copies: make(chan copyMsg, 4), probed: make(chan struct{})}
 	output := &lockedBuffer{}
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output),
 		tea.WithoutSignalHandler(), tea.WithWindowSize(80, 24))
@@ -156,16 +147,18 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 		case msg := <-ch:
 			return msg
 		case <-time.After(perStep):
-			for {
-				select {
-				case event := <-m.events:
-					t.Logf("event before timeout: %s", event)
-				default:
-					t.Logf("last terminal output: %q", output.String())
-					t.Fatalf("timed out at %s", step)
-					return copyMsg{}
-				}
+			t.Fatalf("timed out at %s", step)
+			return copyMsg{}
+		}
+	}
+	waitOutput := func(needle string) {
+		t.Helper()
+		deadline := time.Now().Add(perStep)
+		for !strings.Contains(output.String(), needle) {
+			if time.Now().After(deadline) {
+				t.Fatalf("renderer did not draw %q", needle)
 			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	}
 	probe := func(fn func(*Model)) {
@@ -192,6 +185,10 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 	case <-time.After(perStep):
 		t.Fatal("echo timed out")
 	}
+	// Mouse events are routed through Bubble Tea's last drawn frame. The
+	// result message proves the model changed, but not that the renderer has
+	// drawn it yet; wait for that frame before locating text for a gesture.
+	waitOutput("[echo #1]")
 
 	const word = "copy-me-please"
 	selectWord := func(step string) (copyMsg, string) {
