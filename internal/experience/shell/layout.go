@@ -98,7 +98,7 @@ func rootKeyOf(k ui.Kit, mouseOff bool) rootKey {
 func (m *Model) root() *bloom.Root {
 	if key := rootKeyOf(m.kit, m.mouseOff); m.ui == nil || m.uiKey != key {
 		fg, bg := m.kit.Colors()
-		opts := []bloom.Option{bloom.WithColors(fg, bg), bloom.WithCopyFlash(false),
+		opts := []bloom.Option{bloom.WithColors(fg, bg), bloom.WithClock(m.motionNow), bloom.WithCopyFlash(false),
 			bloom.WithSelectionStyle(m.kit.MouseSelectionStyle())}
 		if !m.mouseOff {
 			opts = append(opts, bloom.WithTooltips(bloom.Tooltips{Style: m.kit.TooltipStyle()}))
@@ -231,7 +231,7 @@ func (m *Model) frame(home homeView) bloom.Child {
 	}
 	rows := []bloom.Child{
 		bloom.Fixed(1, m.tabsNode()).ID(slotTabs),
-		bloom.Fixed(1, m.kit.Leaf(m.badge)).ID(slotBadge),
+		bloom.Fixed(1, m.badgeNode()).ID(slotBadge),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
 		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),

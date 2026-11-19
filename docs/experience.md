@@ -176,6 +176,32 @@ autodetection or host environment heuristics:
     `ui.Progress` renders static bracketed progress tracks and explicit `BUSY` / `WORKING`
     text rather than animated spinners or moving markers.
   - The experience layer runs zero background animation loops or unrequested frame redraws.
+  - ReducedMotion attaches no transition effects, disables selection-copy flash with
+    `bloom.WithCopyFlash(false)`, shows event results immediately in their static state,
+    and schedules zero animation-frame commands. Turning it on during an effect also
+    cancels subsequent animation updates without changing the static frame.
+
+### Finite per-session motion (Issue #213)
+
+The contract permits only event-triggered transitions of **200 ms or less**, with frame
+commands scheduled only while an effect is active. The implemented subset is deliberately
+one candidate from the approved list: a **160 ms `fx.Shake` of the status badge when an
+application launch fails**, whether the failure comes from a typed `launch`/`run` command,
+the launcher, or a palette action. It starts at progress zero, finishes at progress one,
+and then removes the transition node. Palette/dialog transitions, toast entrances,
+collapsible-layout animation, and all other effects remain unattached.
+
+Each shell model owns its motion value and clock. The same injected clock goes to
+`bloom.WithClock` for the model's root and `anim.Clock` for the badge value; production uses
+`time.Now`, while tests advance both deterministic time sources explicitly. No code calls
+the process-global `anim.SetMotion`, so concurrent local or SSH-attached shells can retain
+opposite policies and change them independently. `motion on` means ReducedMotion is enabled;
+`motion off` enables finite transitions for that shell only.
+
+An idle shell starts no decorative goroutine, clock, spinner, permanent animation loop, or
+new frame command. The existing 500 ms process/configuration/log refresh and notification
+expiry ticks remain functional polling, not animation. A completed failed-launch shake does
+not restart on later renders or polls.
 
 ## Components
 
@@ -196,8 +222,9 @@ Named states are `Normal`, `Disabled`, `Busy`, `Success`, `Error`, and `Empty`.
 Focus is independent of status; disabled panels/tabs do not appear focused.
 Symbols and words communicate states without relying on color alone. These
 components render state, not behavior: the caller must enforce disabled actions.
-There are no decorative goroutines, clocks, spinners, or permanently running
-animation loops.
+There are no decorative goroutines, spinners, or permanently running animation
+loops. The only finite transition clock is the event-owned failed-launch effect
+described above.
 
 The current prompt/home and app shelf share panel/title, tabs, status badge,
 focus, and help vocabulary. Shelf app cards expose running PID vs. ready status;
@@ -633,16 +660,25 @@ still require normal-mouse state to be reset, and every supported raw reset is
 still checked.
 
 Static steep snapshots live in
-`internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. ANSI styling is
-removed for reviewable text. Only runtime-assigned PID digits and elapsed uptime
-are normalized, without changing display-cell widths. Snapshot updates are
-never automatic in CI. Regenerate them deliberately, inspect every changed file,
-and then run the normal comparison twice without the update environment:
+`internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. Motion snapshots
+in `testdata/TestSteepMotionScenarios/` show the failed launch at 0 ms, its shifted
+badge at 20 ms, and the restored static frame at 160 ms, plus immediate ReducedMotion
+output. `TestSteepMotionScenarios` boots the same real runtime and injects both clocks;
+captured frame messages and explicit clock advances replace wall-clock sleeps. Static
+failed-launch goldens in `testdata/motion/` preserve pre-#213 output for Nostalgia with
+ReducedMotion and the three default-reduced themes. ANSI styling is removed for
+reviewable steep text. Only runtime-assigned PID digits and elapsed uptime are
+normalized, without changing display-cell widths. Snapshot updates are never automatic
+in CI. Regenerate them deliberately, inspect every changed file, and then run the normal
+comparison twice without the update environment:
 
 ```sh
 UPDATE_SNAPSHOTS=true go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
 go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
 go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+UPDATE_SNAPSHOTS=true go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
+go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
+go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
 ```
 
 Regenerate component goldens deliberately, then inspect their diff:

@@ -151,6 +151,7 @@ type Model struct {
 	kit             ui.Kit
 	ui              *bloom.Root // this model's own root; see root()
 	uiKey           rootKey
+	motion          motionState // this model's own clocks and finite effects
 	presentation    *appView
 	viewEpoch       uint64
 	viewSub         *ipc.ClientSubscription
@@ -335,6 +336,7 @@ func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}
 		lastProcs:     make(map[int32]procTracking),
 		user:          "guest",
 	}
+	m.motion.now = time.Now
 	m.setKit(ui.New(t, mode))
 	m.append(entry{"Welcome home. A familiar prompt. A whole new environment.", "accent"})
 	m.append(entry{"Type help to explore, or F2 to open your app shelf.", "muted"})
@@ -602,7 +604,7 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 				defer cancel()
 				var out json.RawMessage
 				if err := client.Call(c, "app/launch", map[string]string{"id": id}, &out); err != nil {
-					return resultMsg{err: err}
+					return resultMsg{err: err, failedLaunch: true}
 				}
 				var apps []appStatus
 				_ = client.Call(c, "app/list", nil, &apps)
@@ -616,7 +618,7 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		return resultMsg{err: fmt.Errorf("app %s not found", id)}
+		return resultMsg{err: fmt.Errorf("app %s not found", id), failedLaunch: true}
 	}
 }
 
@@ -863,7 +865,9 @@ func (m *Model) submit(line string) tea.Cmd {
 }
 
 // Update passes msg to the bloom root, except the terminal's own colors and
-// profile, then to the shell.
+// profile, then to the shell and this model's finite effects. Motion is
+// updated after the shell so turning ReducedMotion on cannot schedule another
+// frame from an effect that was active when the message arrived.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.MouseMsg); ok && m.mouseOff {
 		// A report sent before the terminal saw the mouse turned off.
@@ -874,7 +878,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rootCmd = m.root().Update(msg)
 	}
 	model, cmd := m.update(msg)
-	return model, tea.Batch(rootCmd, cmd)
+	return model, tea.Batch(rootCmd, cmd, m.updateMotion(msg))
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1164,6 +1168,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.append(entry{msg.err.Error(), "error"})
+			if failedLaunchResult(msg) {
+				cmd = tea.Batch(cmd, m.startFailedLaunch())
+			}
 		}
 		if msg.detach {
 			if m.attached {

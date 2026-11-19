@@ -1,0 +1,358 @@
+package shell
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"bloomfx.dev/bloom"
+	"bloomfx.dev/bloom/anim"
+	tea "charm.land/bubbletea/v2"
+	"gostalgia/internal/experience/notifications"
+	"gostalgia/internal/experience/theme"
+	"gostalgia/internal/experience/ui"
+)
+
+type fakeMotionClock struct{ now time.Time }
+
+func newFakeMotionClock() *fakeMotionClock {
+	return &fakeMotionClock{now: time.Unix(1_700_000_000, 0)}
+}
+
+func (c *fakeMotionClock) Now() time.Time { return c.now }
+
+func (c *fakeMotionClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+
+func motionModel(th theme.Theme, mode ui.ColorMode, clock *fakeMotionClock) *Model {
+	m := NewWithTheme(context.Background(), noopCaller{}, nil, th, mode)
+	m.motion.now = clock.Now
+	m.motion.ready = false
+	m.syncMotion()
+	m.setMode(modePrompt)
+	return m
+}
+
+// commandMessages executes only the current command tree. Bubble Tea's real
+// timers run in a synctest bubble, so collecting a scheduled frame needs no
+// wall-clock sleep. Commands returned by those messages are deliberately not
+// fed back: each trace checks one Update at a time.
+func commandMessages(t *testing.T, cmd tea.Cmd) []tea.Msg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+	messages := make(chan tea.Msg, 128)
+	var wg sync.WaitGroup
+	var walk func(tea.Cmd)
+	walk = func(next tea.Cmd) {
+		if next == nil {
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			msg := next()
+			if batch, ok := msg.(tea.BatchMsg); ok {
+				for _, child := range batch {
+					walk(child)
+				}
+				return
+			}
+			if msg != nil {
+				messages <- msg
+			}
+		}()
+	}
+	synctest.Test(t, func(t *testing.T) {
+		walk(cmd)
+		synctest.Wait()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		wg.Wait()
+	})
+	close(messages)
+	var out []tea.Msg
+	for msg := range messages {
+		out = append(out, msg)
+	}
+	return out
+}
+
+func animationFrames(messages []tea.Msg) int {
+	count := 0
+	for _, msg := range messages {
+		if _, ok := msg.(anim.FrameMsg); ok {
+			count++
+		}
+	}
+	return count
+}
+
+func onlyAnimationFrame(t *testing.T, cmd tea.Cmd) anim.FrameMsg {
+	t.Helper()
+	messages := commandMessages(t, cmd)
+	if animationFrames(messages) != 1 || len(messages) != 1 {
+		t.Fatalf("command messages = %v, want one animation frame", messageTypes(messages))
+	}
+	return messages[0].(anim.FrameMsg)
+}
+
+func messageTypes(messages []tea.Msg) []string {
+	out := make([]string, len(messages))
+	for i, msg := range messages {
+		out[i] = fmt.Sprintf("%T", msg)
+	}
+	return out
+}
+
+func failedLaunch() resultMsg {
+	return resultMsg{err: errors.New("app: unknown application"), executedLine: "launch com.test.missing"}
+}
+
+func TestMotionStaticSnapshots(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		theme theme.Theme
+		mode  ui.ColorMode
+	}{
+		{name: "nostalgia-reduced", theme: theme.Nostalgia().WithReducedMotion(true), mode: ui.ANSI256},
+		{name: "monochrome", theme: theme.Monochrome(), mode: ui.Plain},
+		{name: "high-contrast", theme: theme.HighContrast(), mode: ui.ANSI256},
+		{name: "high-contrast-light", theme: theme.HighContrastLight(), mode: ui.ANSI256},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewWithTheme(context.Background(), noopCaller{}, nil, tc.theme, tc.mode)
+			m.setMode(modePrompt)
+			m.Update(failedLaunch())
+			got := m.View().Content
+			path := filepath.Join("testdata", "motion", tc.name+"-failed-launch.golden")
+			if *updateVisual {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != string(want) {
+				t.Fatalf("static failed-launch frame changed:\n%s", strings.ReplaceAll(got, "\x1b", "\\x1b"))
+			}
+		})
+	}
+}
+
+func TestFailedLaunchShakeIsFiniteAndDeterministic(t *testing.T) {
+	var mids, settled []string
+	for run := range 2 {
+		clock := newFakeMotionClock()
+		m := motionModel(theme.Nostalgia(), ui.ANSI256, clock)
+		_, cmd := m.Update(failedLaunch())
+		frame := onlyAnimationFrame(t, cmd)
+		if !m.motion.launchShake.Animating() || m.motion.launchShake.Float() != 0 {
+			t.Fatalf("run %d did not start at progress zero", run)
+		}
+		initial := m.View().Content
+
+		clock.Advance(20 * time.Millisecond)
+		_, cmd = m.Update(frame)
+		mid := m.View().Content
+		if mid == initial {
+			t.Fatalf("run %d badge did not move at 20ms", run)
+		}
+		if got := m.motion.launchShake.Float(); got != 0.125 {
+			t.Fatalf("run %d progress at 20ms = %v, want 0.125", run, got)
+		}
+		onlyAnimationFrame(t, cmd)
+
+		clock.Advance(launchShakeDuration - 20*time.Millisecond)
+		_, cmd = m.Update(frame)
+		if cmd != nil {
+			t.Fatalf("run %d scheduled work after 160ms: %v", run, messageTypes(commandMessages(t, cmd)))
+		}
+		if m.motion.launchShake.Animating() || m.motion.launchShake.Float() != 1 {
+			t.Fatalf("run %d did not settle at 160ms", run)
+		}
+		final := m.View().Content
+
+		reference := motionModel(theme.Nostalgia().WithReducedMotion(true), ui.ANSI256, newFakeMotionClock())
+		reference.Update(failedLaunch())
+		if final != reference.View().Content {
+			t.Fatalf("run %d settled frame differs from ReducedMotion static output", run)
+		}
+		if _, cmd := m.Update(struct{}{}); cmd != nil {
+			t.Fatalf("run %d idle update scheduled %v", run, messageTypes(commandMessages(t, cmd)))
+		}
+		clock.Advance(40 * time.Millisecond)
+		if _, cmd := m.Update(frame); cmd != nil {
+			t.Fatalf("run %d restarted after 200ms", run)
+		}
+		mids, settled = append(mids, mid), append(settled, final)
+	}
+	if mids[0] != mids[1] || settled[0] != settled[1] {
+		t.Fatal("identical events and clock advances produced different frames")
+	}
+}
+
+func TestRootUsesTheInjectedClock(t *testing.T) {
+	clock := newFakeMotionClock()
+	m, rec := mouseModel(t, 80, 24)
+	m.motion.now = clock.Now
+	m.motion.ready = false
+	m.syncMotion()
+	m.ui = nil
+	m.setMode(modeLauncher)
+	card := rectOf(t, m, launcherCard("com.gostalgia.notes")).Min
+	clickAt(t, m, card)
+	clock.Advance(401 * time.Millisecond)
+	clickAt(t, m, card)
+	if got := len(calls(rec, "app/launch")); got != 0 {
+		t.Fatalf("clicks 401ms apart on the injected root clock launched %d times", got)
+	}
+	clock.Advance(time.Millisecond)
+	clickAt(t, m, card)
+	if got := len(calls(rec, "app/launch")); got != 1 {
+		t.Fatalf("quick second click on the injected root clock launched %d times, want 1", got)
+	}
+}
+
+func TestReducedMotionSchedulesNoAnimationIncludingCopyAndPolicyChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		th   theme.Theme
+		mode ui.ColorMode
+	}{
+		{"nostalgia", theme.Nostalgia().WithReducedMotion(true), ui.ANSI256},
+		{"monochrome", theme.Monochrome(), ui.Plain},
+		{"high-contrast", theme.HighContrast(), ui.ANSI256},
+		{"high-contrast-light", theme.HighContrastLight(), ui.ANSI256},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := motionModel(tc.th, tc.mode, newFakeMotionClock())
+			if _, cmd := m.Update(failedLaunch()); animationFrames(commandMessages(t, cmd)) != 0 {
+				t.Fatal("failed launch scheduled an animation frame")
+			}
+			_, cmd := m.Update(bloom.SelectionMsg{Text: "safe text"})
+			messages := commandMessages(t, cmd)
+			if animationFrames(messages) != 0 {
+				t.Fatal("selection copy scheduled copy flash")
+			}
+			for _, msg := range messages {
+				if _, ok := msg.(copyMsg); ok {
+					_, copyCmd := m.Update(msg)
+					if animationFrames(commandMessages(t, copyCmd)) != 0 {
+						t.Fatal("copy feedback scheduled an animation frame")
+					}
+				}
+			}
+		})
+	}
+
+	clock := newFakeMotionClock()
+	m := motionModel(theme.Nostalgia(), ui.ANSI256, clock)
+	_, cmd := m.Update(failedLaunch())
+	frame := onlyAnimationFrame(t, cmd)
+	clock.Advance(20 * time.Millisecond)
+	reduced := true
+	_, cmd = m.Update(configUpdateMsg{reducedMotion: &reduced})
+	if animationFrames(commandMessages(t, cmd)) != 0 || m.motion.ready {
+		t.Fatal("turning ReducedMotion on scheduled a frame or retained the effect")
+	}
+	static := m.View().Content
+	clock.Advance(launchShakeDuration)
+	_, cmd = m.Update(frame)
+	if animationFrames(commandMessages(t, cmd)) != 0 || m.View().Content != static {
+		t.Fatal("a pre-policy frame restarted motion or changed the static frame")
+	}
+}
+
+func TestMotionIdleAndFunctionalPollingStayDistinct(t *testing.T) {
+	clock := newFakeMotionClock()
+	m := motionModel(theme.Nostalgia(), ui.ANSI256, clock)
+	if _, cmd := m.Update(struct{}{}); cmd != nil {
+		t.Fatal("initial idle update scheduled work")
+	}
+	_, cmd := m.Update(failedLaunch())
+	frame := onlyAnimationFrame(t, cmd)
+	clock.Advance(launchShakeDuration)
+	m.Update(frame)
+
+	m.notifs.Flash(notifications.Notification{Title: "functional expiry", Message: "manager-owned"})
+	for range 8 {
+		_, cmd = m.Update(tickMsg(clock.Now()))
+		messages := commandMessages(t, cmd)
+		if animationFrames(messages) != 0 {
+			t.Fatal("functional polling scheduled an animation frame")
+		}
+		if len(messages) == 0 {
+			t.Fatal("functional polling lost its refresh commands")
+		}
+	}
+	if len(m.notifs.ActiveToasts()) != 0 {
+		t.Fatal("notification expiry no longer advances on functional ticks")
+	}
+	if _, cmd = m.Update(struct{}{}); cmd != nil {
+		t.Fatal("settled idle update scheduled work")
+	}
+}
+
+func TestShellModelsKeepIndependentMotionPolicies(t *testing.T) {
+	enabled := motionModel(theme.Nostalgia(), ui.ANSI256, newFakeMotionClock())
+	reduced := motionModel(theme.Monochrome(), ui.Plain, newFakeMotionClock())
+	_, enabledCmd := enabled.Update(failedLaunch())
+	_, reducedCmd := reduced.Update(failedLaunch())
+	if animationFrames(commandMessages(t, enabledCmd)) != 1 || animationFrames(commandMessages(t, reducedCmd)) != 0 {
+		t.Fatal("opposite initial policies shared animation scheduling")
+	}
+	reducedStatic := reduced.View().Content
+
+	turnOnReduced, turnOffReduced := true, false
+	_, enabledCmd = enabled.Update(configUpdateMsg{reducedMotion: &turnOnReduced})
+	_, reducedCmd = reduced.Update(configUpdateMsg{reducedMotion: &turnOffReduced})
+	if animationFrames(commandMessages(t, enabledCmd)) != 0 || animationFrames(commandMessages(t, reducedCmd)) != 0 {
+		t.Fatal("changing policy itself scheduled an animation")
+	}
+	if reduced.Theme().ReducedMotion || !enabled.Theme().ReducedMotion || reduced.View().Content != reducedStatic {
+		t.Fatal("one model's policy change affected the other")
+	}
+	_, enabledCmd = enabled.Update(failedLaunch())
+	_, reducedCmd = reduced.Update(failedLaunch())
+	if animationFrames(commandMessages(t, enabledCmd)) != 0 || animationFrames(commandMessages(t, reducedCmd)) != 1 {
+		t.Fatal("opposite changed policies shared animation scheduling")
+	}
+
+	// Exercise the two models concurrently as sshx does in one server process.
+	// Each goroutine touches only its own model and clock; -race guards this.
+	var wg sync.WaitGroup
+	errs := make(chan string, 2)
+	for i, m := range []*Model{enabled, reduced} {
+		wg.Add(1)
+		go func(i int, m *Model) {
+			defer wg.Done()
+			for n := range 20 {
+				m.SetReducedMotion((i+n)%2 == 0)
+				_, cmd := m.Update(failedLaunch())
+				if m.Theme().ReducedMotion && cmd != nil {
+					errs <- fmt.Sprintf("model %d scheduled reduced-motion work", i)
+					return
+				}
+				_ = m.View().Content
+			}
+		}(i, m)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+}
