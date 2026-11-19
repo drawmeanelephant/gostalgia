@@ -3,7 +3,7 @@ HEADER
 SELECTED
 +--------------------------------------+
 | > Echo                               |
-| [OK] LIVE / PID 7                    |
-| com.gostalgia.echo  v0.1.0           |
+| [OK] LIVE / PID 7                +-+ |
+| com.gostalgia.echo  v0.1.0       | | |
 | A friendly first app.                |
 +--------------------------------------+

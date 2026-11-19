@@ -3,7 +3,7 @@ HEADER
 SELECTED
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ › Echo                               ┃
-┃ ✓ LIVE / PID 7                       ┃
-┃ com.gostalgia.echo  v0.1.0           ┃
+┃ ✓ LIVE / PID 7                   +-+ ┃
+┃ com.gostalgia.echo  v0.1.0       | | ┃
 ┃ A friendly first app.                ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

@@ -62,7 +62,7 @@ func (m *Model) launcherCard(a appStatus, focused bool, w, cardHeight int) strin
 	}
 	return m.kit.AppCard(ui.AppCard{
 		Name: a.Manifest.Name, ID: a.Manifest.ID, Version: a.Manifest.Version,
-		Status: status, State: state, Focused: focused,
+		Icon: a.Manifest.Icon, Status: status, State: state, Focused: focused,
 	}, ui.Bounds{Width: w, Height: cardHeight})
 }
 

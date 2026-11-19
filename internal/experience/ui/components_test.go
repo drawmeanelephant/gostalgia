@@ -149,7 +149,7 @@ func TestComponentsStayInsideOuterBounds(t *testing.T) {
 				{12, 8}, {30, 10}, {80, 24}, {120, 40}, {240, 80}} {
 				for _, state := range []theme.State{theme.Normal, theme.Disabled, theme.Busy, theme.Success, theme.Error, theme.Empty} {
 					assertRectangle(t, k.Panel(Panel{Title: long, Body: long + "\n" + long, State: state, Focused: true}, bounds), bounds)
-					assertRectangle(t, k.AppCard(AppCard{Name: long, ID: long, Description: long, State: state, Focused: true}, bounds), bounds)
+					assertRectangle(t, k.AppCard(AppCard{Name: long, ID: long, Description: long, Icon: long, State: state, Focused: true}, bounds), bounds)
 					assertRectangle(t, k.Dialog(Dialog{Title: long, Body: long, State: state,
 						Actions: []Action{{Label: long}, {Label: long, Disabled: true}}}, bounds), bounds)
 					assertRectangle(t, k.Notice(Notice{Title: long, Message: long, State: state}, bounds), bounds)
@@ -306,7 +306,7 @@ func TestComponentLabelsFilterTerminalControls(t *testing.T) {
 	text := "hello\x1b]52;c;unsafe\a\x1b[2J\r"
 	for _, view := range []string{
 		k.Panel(Panel{Title: text}, Bounds{24, 4}),
-		k.AppCard(AppCard{Name: text, ID: text, Version: text, Description: text, Status: text}, Bounds{24, 7}),
+		k.AppCard(AppCard{Name: text, ID: text, Version: text, Description: text, Icon: text, Status: text}, Bounds{24, 7}),
 		k.Dialog(Dialog{Title: text, Body: text, Actions: []Action{{Label: text}}}, Bounds{24, 8}),
 		k.Tabs([]Tab{{Label: text}}, 0, 24),
 		k.Notice(Notice{Title: text, Message: text}, Bounds{24, 6}),

@@ -6,8 +6,8 @@
 ┃ SEARCH: steepnotifier                                                        ┃
 ┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
 ┃ ┃ › Steep Notifier                                                         ┃ ┃
-┃ ┃ ✓ LIVE / PID N                                                           ┃ ┃
-┃ ┃ com.test.steepnotifier  v1.0.0                                           ┃ ┃
+┃ ┃ ✓ LIVE / PID N                                                       +-+ ┃ ┃
+┃ ┃ com.test.steepnotifier  v1.0.0                                       | | ┃ ┃
 ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┃                                                                              ┃
 ┃ GRANT  ipc · notify                                                          ┃

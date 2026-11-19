@@ -6,13 +6,13 @@
 | SEARCH: o                                                                    |
 | +--------------------------------------------------------------------------+ |
 | | Notes                                                                    | |
-| | [READY] READ+----------------------------------------------+             | |
-| | com.gostalgi| > Stop Clock?                                |             | |
+| | [READY] READ+----------------------------------------------+         +-+ | |
+| | com.gostalgi| > Stop Clock?                                |         | | | |
 | +-------------| Clock is no longer running as PID 31. App:   |-------------+ |
 | +-------------| Clock (com.gostalgia.clock).                 |-------------+ |
 | | > Clock     |                                              |             | |
-| | [OK] LIVE / | [Cancel] (Stop app)                          |             | |
-| | com.gostalgi+----------------------------------------------+             | |
+| | [OK] LIVE / | [Cancel] (Stop app)                          |         +-+ | |
+| | com.gostalgi+----------------------------------------------+         | | | |
 | +--------------------------------------------------------------------------+ |
 | Fixture app Clock with a description long enough to clip.                    |
 | GRANT  ipc | files                                                           |

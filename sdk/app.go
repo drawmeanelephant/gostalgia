@@ -68,9 +68,16 @@ type Manifest struct {
 	Permissions     []string    `json:"permissions,omitempty"`
 	PathGrants      []PathGrant `json:"path_grants,omitempty"`
 	Description     string      `json:"description,omitempty"`
+	Icon            string      `json:"icon,omitempty"`
 	Isolation       string      `json:"isolation,omitempty"`
 	DocumentTypes   []string    `json:"document_types,omitempty"`
 }
+
+// MaxIconBytes bounds the optional icon art a manifest may carry. It is a
+// storage limit for registration and transport only: the experience layer
+// sanitizes the art and normalizes it to two display lines of at most twelve
+// cells each. Manifests without an icon remain valid and usable.
+const MaxIconBytes = 512
 
 // PathGrant requests environment filesystem access, independently of capabilities.
 type PathGrant struct {
@@ -129,6 +136,12 @@ func (m Manifest) Validate() error {
 	}
 	if (m.Mode == "" || m.Mode == ModeInProc) && (m.Isolation == IsolationSandbox || m.Isolation == IsolationStrict) {
 		return fmt.Errorf("app: manifest %s: inproc mode does not support %q isolation", m.ID, m.Isolation)
+	}
+	// Icon art is optional display metadata. Only its storage size is asserted
+	// here; terminal sanitization and the two-line/twelve-cell display bounds
+	// belong to the experience layer that renders it.
+	if len(m.Icon) > MaxIconBytes {
+		return fmt.Errorf("app: manifest %s: icon art must be at most %d bytes", m.ID, MaxIconBytes)
 	}
 
 	seen := make(map[string]bool)

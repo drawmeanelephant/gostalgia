@@ -95,6 +95,36 @@ func TestRegistryValidation(t *testing.T) {
 	}
 }
 
+// The registry and the manager's app/list snapshot carry optional icon art
+// unchanged, and a manifest without it remains valid for launch and listing.
+func TestRegistryListCarriesOptionalIcon(t *testing.T) {
+	bus := events.NewBus()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reg := NewRegistry()
+
+	iconManifest := fakeManifest
+	iconManifest.ID, iconManifest.Entrypoint, iconManifest.Name = "com.test.icon", "icon", "Icon"
+	iconManifest.Icon = ">_\n>_"
+	must(t, reg.RegisterBuiltin(iconManifest, func() (Instance, error) { return &fakeInstance{}, nil }))
+	must(t, reg.RegisterBuiltin(fakeManifest, func() (Instance, error) { return &fakeInstance{}, nil }))
+
+	m := NewManager(reg, process.NewManager(bus, log), ipc.NewRouter(), bus, log)
+	statuses := m.List()
+	if len(statuses) != 2 {
+		t.Fatalf("List returned %d apps, want 2", len(statuses))
+	}
+	got := map[string]string{}
+	for _, status := range statuses {
+		got[status.Manifest.ID] = status.Manifest.Icon
+	}
+	if got[iconManifest.ID] != iconManifest.Icon {
+		t.Fatalf("listed icon = %q, want %q", got[iconManifest.ID], iconManifest.Icon)
+	}
+	if icon, ok := got[fakeManifest.ID]; !ok || icon != "" {
+		t.Fatalf("legacy manifest icon = %q, present = %v", icon, ok)
+	}
+}
+
 func TestRegistryLoadManifests(t *testing.T) {
 	reg := NewRegistry()
 	fmap := fstest.MapFS{
@@ -114,7 +144,7 @@ func TestRegistryLoadManifests(t *testing.T) {
 	// Valid directory loads and is visible.
 	fmap2 := fstest.MapFS{
 		"apps/manifests/com.example.good.json": &fstest.MapFile{
-			Data: []byte(`{"id":"com.example.good","name":"Good","version":"0.2.0","entrypoint":"good"}`),
+			Data: []byte(`{"id":"com.example.good","name":"Good","version":"0.2.0","entrypoint":"good","icon":">_"}`),
 		},
 	}
 	n, err = reg.LoadManifests(fmap2, "apps/manifests")
@@ -125,6 +155,9 @@ func TestRegistryLoadManifests(t *testing.T) {
 	m, ok := reg.Manifest("com.example.good")
 	if !ok || m.Name != "Good" {
 		t.Fatalf("manifest = %+v ok=%v", m, ok)
+	}
+	if m.Icon != ">_" {
+		t.Fatalf("registered icon = %q, want %q", m.Icon, ">_")
 	}
 }
 

@@ -5,5 +5,6 @@
   "entrypoint": "notes",
   "permissions": ["ipc", "fs.read", "fs.write"],
   "document_types": [".txt", ".md", ".log", ".json", ".csv", ".text"],
+  "icon": ".--.\n|__|",
   "description": "Text editor with safe saving, dirty state, and crash recovery."
 }

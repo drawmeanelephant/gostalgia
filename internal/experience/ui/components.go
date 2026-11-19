@@ -196,9 +196,14 @@ func (k Kit) Severity(symbol, name string, state theme.State, width int) string 
 
 type AppCard struct {
 	Name, ID, Version, Description string
-	Status                         string
-	State                          theme.State
-	Focused                        bool
+	// Icon is optional untrusted icon art. AppCard sanitizes it and draws at
+	// most two lines of twelve display cells beside the status and identity;
+	// missing or unusable art uses a generic ASCII glyph, and a card too
+	// narrow for both identity and art shows no icon column at all.
+	Icon    string
+	Status  string
+	State   theme.State
+	Focused bool
 }
 
 func (k Kit) AppCard(card AppCard, bounds Bounds) string {
@@ -243,7 +248,35 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 	if card.Description != "" {
 		body += "\n" + Wrap(Sanitize(card.Description), content.Width)
 	}
+	body = k.appCardIcon(body, card.Icon, content.Width)
 	return k.Panel(Panel{Title: card.Name, Body: body, State: card.State, Focused: card.Focused}, bounds)
+}
+
+// appCardIcon places icon art in the right-hand columns of a card body's
+// first lines, beside the status and identity. The column is reserved only
+// when the detail text keeps a readable share of the width, so missing art
+// never leaves a decorative gap and a narrow card protects its name/state.
+func (k Kit) appCardIcon(body, raw string, width int) string {
+	const (
+		iconGap   = 2
+		minDetail = 18
+	)
+	icon := k.appIcon(raw)
+	iconWidth := 0
+	for _, line := range icon {
+		iconWidth = max(iconWidth, ansi.StringWidth(line))
+	}
+	if iconWidth == 0 || width < iconWidth+iconGap+minDetail {
+		return body
+	}
+	rows := strings.Split(body, "\n")
+	detailWidth := width - iconWidth - iconGap
+	for i := 0; i < len(rows) && i < len(icon); i++ {
+		pad := strings.Repeat(" ", iconWidth-ansi.StringWidth(icon[i]))
+		rows[i] = Fit(rows[i], Bounds{Width: detailWidth, Height: 1}) +
+			strings.Repeat(" ", iconGap) + pad + k.Muted(icon[i])
+	}
+	return strings.Join(rows, "\n")
 }
 
 type Action struct {

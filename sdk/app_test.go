@@ -1,6 +1,68 @@
 package sdk
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+func TestManifestOptionalIconMetadata(t *testing.T) {
+	// Manifests written before icon metadata existed still decode, and they
+	// simply carry no art.
+	legacy, err := ParseManifest([]byte(`{"id":"com.test.app","name":"App","version":"1.0.0","entrypoint":"app"}`))
+	if err != nil {
+		t.Fatalf("legacy manifest: %v", err)
+	}
+	if legacy.Icon != "" {
+		t.Fatalf("legacy manifest icon = %q, want none", legacy.Icon)
+	}
+
+	// Optional art survives strict decoding verbatim; display sanitization is
+	// the experience layer's job.
+	const art = ">_\n>_"
+	withIcon, err := ParseManifest([]byte(`{"id":"com.test.app","name":"App","version":"1.0.0","entrypoint":"app","icon":">_\n>_"}`))
+	if err != nil {
+		t.Fatalf("manifest with icon: %v", err)
+	}
+	if withIcon.Icon != art {
+		t.Fatalf("icon = %q, want %q", withIcon.Icon, art)
+	}
+
+	// Hostile terminal controls are transport metadata, not a manifest error.
+	hostile, err := ParseManifest([]byte(`{"id":"com.test.app","name":"App","version":"1.0.0","entrypoint":"app","icon":"\u001b[31mX\u001b[0m\nY"}`))
+	if err != nil {
+		t.Fatalf("manifest with hostile icon: %v", err)
+	}
+	if !strings.Contains(hostile.Icon, "\x1b") {
+		t.Fatalf("hostile icon changed at the SDK boundary: %q", hostile.Icon)
+	}
+
+	// A list transport round trip carries the optional field unchanged.
+	type listed struct {
+		Manifest Manifest `json:"manifest"`
+	}
+	data, err := json.Marshal(listed{Manifest: withIcon})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip listed
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	if roundTrip.Manifest.Icon != art {
+		t.Fatalf("round-trip icon = %q, want %q", roundTrip.Manifest.Icon, art)
+	}
+
+	// Storage is bounded at registration; the exact limit still passes.
+	atLimit := strings.Repeat("x", MaxIconBytes)
+	if _, err := ParseManifest([]byte(`{"id":"com.test.app","name":"App","version":"1.0.0","entrypoint":"app","icon":"` + atLimit + `"}`)); err != nil {
+		t.Fatalf("icon at the storage limit: %v", err)
+	}
+	over := strings.Repeat("x", MaxIconBytes+1)
+	if _, err := ParseManifest([]byte(`{"id":"com.test.app","name":"App","version":"1.0.0","entrypoint":"app","icon":"` + over + `"}`)); err == nil || !strings.Contains(err.Error(), "icon art") {
+		t.Fatalf("oversized icon error = %v", err)
+	}
+}
 
 func TestManifestContract(t *testing.T) {
 	good := `{"id":"com.test.app","name":"App","version":"1.2.3","entrypoint":"app","permissions":["ipc","fs.read"]}`

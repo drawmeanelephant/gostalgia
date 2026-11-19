@@ -58,6 +58,7 @@ For an external application:
 | `permissions` | no | Array of distinct capability strings; omitted/empty means no grants. Unknown, duplicate, and `admin` permissions are rejected. |
 | `path_grants` | no | Package-managed scoped VFS requests (`path`, `access`, `recursive`), see [packages](packages.md). |
 | `description` | no | App shelf description. |
+| `icon` | no | Optional ASCII art for the app shelf card, at most 512 bytes. The experience layer strips terminal controls and shows at most two lines of twelve display cells beside the name and status; missing or unusable art shows a generic ASCII glyph, and compact cards omit it. Old manifests without an icon remain valid. |
 
 `sdk.ParseManifest([]byte)` decodes and validates; `Manifest.Validate()` checks
 a Go value. Registration takes a defensive copy of permissions. Mutating the

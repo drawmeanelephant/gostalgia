@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "entrypoint": "echo",
   "permissions": ["ipc"],
+  "icon": ">_",
   "description": "Your words, reflected back. A tiny app with a tiny permission grant."
 }
