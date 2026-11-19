@@ -1398,15 +1398,15 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.paletteSelected = 0
 			return m, nil
 		}
+		if m.taskView && m.tasks.Searching() {
+			m.tasks.SearchInput(text)
+			return m, nil
+		}
 		if m.busy {
 			return m, nil
 		}
 		if m.presentation != nil {
 			return m, m.viewKey(tea.KeyPressMsg{Code: tea.KeyExtended, Text: text})
-		}
-		if m.taskView && m.tasks.Searching() {
-			m.tasks.SearchInput(text)
-			return m, nil
 		}
 		if m.taskView || m.notifView {
 			return m, nil
@@ -1452,8 +1452,9 @@ func (m *Model) handleLogsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleLogSearchKey types the log tail's search, which takes every key
-// but Ctrl-C until Enter finds it or Esc cancels it.
+// handleLogSearchKey types the log tail's search. Until Enter finds it or
+// Esc cancels it, it takes every key but Ctrl-C, Ctrl-D and the palette,
+// which, like any modal layer, comes back to the search as it was.
 func (m *Model) handleLogSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":

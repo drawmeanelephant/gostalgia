@@ -222,12 +222,46 @@ func TestLogTailKeysWhileBusy(t *testing.T) {
 	if body := bodyText(t, m); !strings.Contains(body, "Match 1 of 1") || !strings.Contains(body, m.kit.Theme().Focus.Marker+" worker 038") {
 		t.Fatalf("searching while busy shows:\n%s", body)
 	}
+	press(m, typed("/"))
+	for range 3 {
+		press(m, tea.KeyPressMsg{Code: tea.KeyBackspace})
+	}
+	m.Update(tea.PasteMsg{Content: "worker 039"})
+	press(m, keyEnter)
+	if body := bodyText(t, m); !strings.Contains(body, `Match 1 of 1 for "worker 039"`) {
+		t.Fatalf("pasting into the search while busy shows:\n%s", body)
+	}
 	if _, ok := tickLogs(m); ok {
 		t.Fatal("the tail refreshed while a command ran")
 	}
 	press(m, keyEnter)
 	if m.tasks.Mode() != taskmanager.ModeTable {
 		t.Fatalf("Enter while busy left mode %v", m.tasks.Mode())
+	}
+}
+
+// The palette opened over a search being typed takes the keys until it
+// closes, and then the search has them again, its draft as it was.
+func TestLogSearchUnderPalette(t *testing.T) {
+	m, _ := logsFixture(t)
+	m.Update(requestLogs(t, m, 2)())
+	press(m, typed("/"), typed("0"), typed("3"))
+	press(m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if !m.paletteOpen {
+		t.Fatal("Ctrl-P did not open the palette over the search")
+	}
+	press(m, typed("z"))
+	m.Update(tea.PasteMsg{Content: "q"})
+	if m.paletteQuery != "zq" {
+		t.Fatalf("the palette query is %q", m.paletteQuery)
+	}
+	press(m, keyEsc)
+	if m.paletteOpen || !m.tasks.Searching() {
+		t.Fatalf("Esc left the palette open (%v) or ended the search", m.paletteOpen)
+	}
+	press(m, typed("7"), keyEnter)
+	if body := bodyText(t, m); !strings.Contains(body, `Match 1 of 1 for "037"`) {
+		t.Fatalf("the search did not resume its draft:\n%s", body)
 	}
 }
 
