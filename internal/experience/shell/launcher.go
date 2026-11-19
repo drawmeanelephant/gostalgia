@@ -116,9 +116,13 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "f3":
-		if len(filtered) > 0 && m.selected < len(filtered) {
+		if len(filtered) > 0 && m.selected < len(filtered) && !msg.IsRepeat {
 			a := filtered[m.selected]
-			return m, m.submit("stop " + a.Manifest.ID)
+			if !a.Running {
+				m.append(entry{viewText(a.Manifest.Name) + " is not running.", "error"})
+				return m, nil
+			}
+			m.openConfirm(stopAppConfirmation(a))
 		}
 		return m, nil
 	case "f4":

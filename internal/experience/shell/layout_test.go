@@ -72,12 +72,9 @@ func checkFrame(t *testing.T, m *Model) map[frameSlot]image.Rectangle {
 	}
 	rects := map[frameSlot]image.Rectangle{}
 	next := inner.Min.Y
-	for _, id := range []frameSlot{slotTabs, slotBadge, slotBody, slotToasts, slotPrompt} {
+	for _, id := range []frameSlot{slotTabs, slotBadge, slotBody, slotPrompt} {
 		r, ok := f.Rect(id)
 		if !ok {
-			if id == slotToasts {
-				continue
-			}
 			t.Fatalf("slot %d missing", id)
 		}
 		if r.Dx() != inner.Dx() || !r.In(inner) || r.Dy() <= 0 {

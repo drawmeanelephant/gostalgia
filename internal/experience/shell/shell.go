@@ -50,6 +50,7 @@ const (
 	FocusPalette
 	FocusTasks
 	FocusNotifications
+	FocusDialog
 )
 
 func (f FocusState) String() string {
@@ -66,6 +67,8 @@ func (f FocusState) String() string {
 		return "tasks"
 	case FocusNotifications:
 		return "notifications"
+	case FocusDialog:
+		return "dialog"
 	default:
 		return "prompt"
 	}
@@ -144,6 +147,11 @@ type Model struct {
 	paletteQuery    string
 	paletteSelected int
 	previousMode    viewMode
+	// confirm is the open confirmation dialog, if any; see confirm.go.
+	confirm *confirmation
+	// procPending is set while a confirmed process stop or reap is in
+	// flight, so another cannot be confirmed until its result arrives.
+	procPending bool
 
 	taskView  bool
 	notifView bool
@@ -225,6 +233,9 @@ func (m *Model) setMode(mode viewMode) {
 }
 
 func (m *Model) Focus() FocusState {
+	if m.confirm != nil {
+		return FocusDialog
+	}
 	if m.paletteOpen {
 		return FocusPalette
 	}
@@ -862,6 +873,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case procActionMsg:
 		m.initExperience()
+		m.procPending = false
 		if msg.err != nil {
 			m.tasks.SetError(msg.err.Error())
 		} else {
@@ -1099,6 +1111,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 
+		// Modal layers own every other keystroke: nothing beneath them,
+		// shortcuts included, sees a key while one is open.
+		if m.confirm != nil {
+			return m.handleConfirmKey(msg)
+		}
 		// super+space is a second palette chord that only key
 		// disambiguation can name; it never collides with typing because
 		// a super chord carries no text, and terminals without
@@ -1111,10 +1128,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.paletteOpen {
+			return m.handlePaletteKey(msg)
+		}
 		if m.isShortcut("home", keyStr) {
-			if m.paletteOpen {
-				m.closePalette()
-			}
 			cancel := m.dismissView()
 			m.taskView = false
 			m.notifView = false
@@ -1127,9 +1144,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cancel
 		}
 		if m.isShortcut("launcher", keyStr) {
-			if m.paletteOpen {
-				m.closePalette()
-			}
 			cancel := m.dismissView()
 			m.taskView = false
 			m.notifView = false
@@ -1142,9 +1156,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cancel
 		}
 		if m.isShortcut("tasks", keyStr) {
-			if m.paletteOpen {
-				m.closePalette()
-			}
 			cancel := m.dismissView()
 			m.taskView = !m.taskView
 			if m.taskView {
@@ -1156,9 +1167,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cancel
 		}
 		if m.isShortcut("notifications", keyStr) {
-			if m.paletteOpen {
-				m.closePalette()
-			}
 			cancel := m.dismissView()
 			m.notifView = !m.notifView
 			if m.notifView {
@@ -1170,9 +1178,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cancel
 		}
 		if m.isShortcut("settings", keyStr) {
-			if m.paletteOpen {
-				m.closePalette()
-			}
 			if m.presentation != nil && m.presentation.id == "com.gostalgia.settings" {
 				cancel := m.dismissView()
 				return m, cancel
@@ -1193,10 +1198,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch keyStr {
 		case "esc":
-			if m.paletteOpen {
-				m.closePalette()
-				return m, nil
-			}
 			if m.presentation != nil {
 				return m, m.viewKey(msg)
 			}
@@ -1232,9 +1233,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.scroll = max(0, m.scroll-max(1, m.height/2))
 			return m, nil
-		}
-		if m.paletteOpen {
-			return m.handlePaletteKey(msg)
 		}
 		if m.busy {
 			return m, nil
@@ -1278,14 +1276,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 			case "x":
-				if m.tasks.Mode() == taskmanager.ModeTable {
+				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
 					if sel := m.tasks.SelectedProcess(); sel != nil {
-						return m, m.stopProcessCmd(sel.ID)
+						m.openConfirm(confirmation{kind: confirmStopProcess, pid: sel.ID, name: sel.Name})
 					}
 				}
 			case "r":
-				if m.tasks.Mode() == taskmanager.ModeTable {
-					return m, m.reapProcessesCmd()
+				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
+					m.openConfirm(confirmation{kind: confirmReap})
 				}
 			}
 			return m, nil
@@ -1332,7 +1330,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Bracketed paste delivers the whole paste as one message instead of
 		// typed keys; route it into the same insert paths as text input.
 		text := safe(msg.Content)
-		if text == "" {
+		if text == "" || m.confirm != nil {
 			return m, nil
 		}
 		if m.paletteOpen {
@@ -1486,7 +1484,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openPalette()
 			return m, nil
 		}
-		return m, m.submit(line)
+		return m, m.run(line)
 	case tea.KeyBackspace:
 		m.deleteClusterBackward()
 	case tea.KeyDelete:

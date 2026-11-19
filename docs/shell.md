@@ -45,7 +45,8 @@ JSON is preserved, not passed through path/quote parsing.
 ## Keyboard
 
 - **F2**: switch between prompt and app shelf. **↑/↓** selects an app;
-  **Enter** launches it; **F3** stops it; **Esc** returns to the prompt. The
+  **Enter** launches it; **F3** stops it after a confirmation; **Esc** returns
+  to the prompt. The
   shelf displays description and manifest permissions.
 - **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
@@ -68,6 +69,11 @@ JSON is preserved, not passed through path/quote parsing.
     row) commits once instead of repeating work per auto-repeat; key releases
     are consumed and never type, submit, or activate. Where they didn't
     negotiate, repeats behave as they always have.
+- **Confirmations**: `shutdown`, stopping an app (F3, the palette, or
+  `stop APP-ID`), Task Manager `x`, and `r` or `reap` open a dialog first.
+  Cancel is focused; **Tab/Shift-Tab** (or **←/→**) moves, **Enter** chooses,
+  **Esc** cancels. See
+  [Confirmations](experience.md#confirmations).
 - **↑/↓** at prompt: history (100 commands, current draft restored).
 - **Tab**: complete an unambiguous command or ID after launch/run/stop.
 - **Left/Right, Home/End, Ctrl-A/E**: move cursor. Backspace/Delete edits;
@@ -199,8 +205,9 @@ exact pin:
 3. **Blending needs a workaround.** Effects that mix colors, such as
    `fx.Dim` backdrops, produce 24-bit colors even after the root receives an
    ANSI256 `tea.ColorProfileMsg`. Plain and Monochrome attach no blending or
-   backdrop effects at all. Other profiles convert only the composed content
-   with `colorprofile.Writer{Profile: <the shell's chosen profile>}`, never
+   backdrop effects at all, and neither does ANSI16, whose sixteen colors
+   cannot show a dim. Under ANSI256 the shell converts only the composed
+   content with `colorprofile.Writer{Profile: colorprofile.ANSI256}`, never
    the whole terminal stream (cursor, alternate-screen, keyboard-enhancement
    and restoration sequences pass through untouched).
 4. **Sanitize first.** External text passes through `ui.Sanitize` before it
@@ -227,16 +234,16 @@ frame as a bloom tree, and `View()` draws it with the model's own root,
 event-type request on the returned `tea.View`.
 
 - **Frame.** A kit `Panel` titled `G O S T A L G I A / PERSONAL COMPUTING`
-  holds a column of tabs, the status badge, the body (`Fill`), toasts and
-  the prompt; the help bar is the last terminal row, below the panel. The
+  holds a column of tabs, the status badge, the body (`Fill`) and the
+  prompt; the help bar is the last terminal row, below the panel. The
   panel is a `ui.PanelNode`, so its border, title row and padding come from
   `Kit.PanelContentRect` (the same insets `PanelContentBounds` reports); the
   shell never subtracts them itself. Size-dependent kit output (`Tabs`,
   `HelpBar`, the Task Manager, Notification Center, palette, launcher and
   app views) enters the tree as `ui.Leaf` adapters that render into exactly
   the rectangle the layout gives them.
-- **Responsive priorities.** When the frame is short, the optional rows give
-  way in this order: the blank spacer rows, then toasts. Tabs, badge, prompt
+- **Responsive priorities.** When the frame is short, the blank spacer rows
+  give way. Tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the
   smallest frame, 30×10, leaves. On Home, a document list longer than the
   space first shrinks to a window that follows the selection. When even its
@@ -270,6 +277,27 @@ event-type request on the returned `tea.View`.
   screen, `a`, `c` and `n` work as before, and Esc goes back. Growing the
   terminal restores the bordered panel with the same selection and log
   offset.
+- **Layers.** Toasts, the command palette and confirmations are bloom layers
+  over the frame, never rows in it, so the solved frame is the same with or
+  without them.
+  - The toast stack is a layer over the body, anchored to its bottom-right
+    corner: at most 48 cells wide, at most a third of the body tall (one row
+    at 30×10), keeping the newest toasts and dropping the flood notice
+    first. The body's rectangle, the transcript's height and scroll, and
+    its visible lines are unchanged as toasts appear, stack and expire. The
+    layer only draws `notifications.Manager`'s active toasts; it has no
+    timer of its own.
+  - The palette is a modal layer centered between the frame's top border and
+    the prompt row (at most 66×14), and a confirmation is a
+    `Kit.DialogLayer` centered one cell inside the screen. Only one modal is
+    open at a time; a confirmation opened from the palette replaces it.
+  - A modal layer's backdrop dims the screen beneath it by 45% (`fx.Dim`) in
+    color themes at ANSI256 or TrueColor, converted back to the session's
+    profile as rule 3 describes. Monochrome, `ui.Plain` and ANSI16 get no
+    backdrop.
+  - The shell routes keys to the open modal before anything else except
+    `Ctrl-C`/`Ctrl-D`, so nothing beneath it, shortcuts included, sees a
+    key or a paste.
 - **Below the minimum.** Under 30 columns or 10 rows the shell keeps its own
   notice, `GOSTALGIA / Resize to 30×10 or larger. / Ctrl-C exits.`, clipped
   to the terminal, instead of a squeezed frame. Exactly 30×10 draws the
@@ -282,7 +310,8 @@ event-type request on the returned `tea.View`.
   point, measured in cells, so it lands correctly after combining marks,
   wide CJK characters and ZWJ emoji. Long input is sliced around the cursor
   by whole graphemes, keeping one cell free for the cursor at the end of the
-  input. A busy prompt, any other mode, and the size notice show no cursor.
+  input. A busy prompt, any other mode, an open palette or confirmation, and the
+  size notice show no cursor; closing the layer restores it.
 - **Root lifecycle.** Each shell model owns one root, built with
   `bloom.WithColors` from its kit's text and surface colors and
   `bloom.WithCopyFlash(false)`. The root is rebuilt lazily, on the next

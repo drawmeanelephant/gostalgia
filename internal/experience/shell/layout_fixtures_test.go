@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gostalgia/internal/experience/notifications"
@@ -64,8 +65,24 @@ func fixtureModel(th theme.Theme, mode ui.ColorMode) *Model {
 		Message: "PID 31 exit 2 (failed)", Level: notifications.LevelError, Source: "process", PID: 31, Receipt: &receipt})
 	notifs.Record(notifications.Notification{ID: "n2", Timestamp: fixtureTime.Add(time.Minute), Title: "indexer Backoff",
 		Message: "PID 12 backoff restart 4", Level: notifications.LevelWarning, Source: "process", PID: 12})
+	// A settled session: the alerts stay unread history, but their toasts
+	// have expired, so screens show their own content. Toasts overlay the
+	// body without changing its layout; withToasts and the toast tests
+	// cover them.
+	for range 8 {
+		notifs.Tick()
+	}
 	m.transcript = append(m.transcript, entry{"> apps", "command"}, entry{"Echo, Notes and Clock are installed.", ""},
 		entry{"Unicode e\u0301 界 👩‍💻 survives wrapping.", "muted"})
+	return m
+}
+
+// withToasts records n fresh process alerts, each with an active toast.
+func withToasts(m *Model, n int) *Model {
+	for i := range n {
+		m.notifs.Record(notifications.Notification{ID: fmt.Sprintf("toast-%d", i), Timestamp: fixtureTime,
+			Title: fmt.Sprintf("worker-%d Crashed", i), Message: "exit 1", Level: notifications.LevelError, Source: "process"})
+	}
 	return m
 }
 

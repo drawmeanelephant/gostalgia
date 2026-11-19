@@ -185,7 +185,7 @@ autodetection or host environment heuristics:
 | `Tabs` | One padded row; keeps the active tab visible when leading tabs must be dropped. Brackets show selection; parentheses show disabled tabs. |
 | `AppCard` | Name/focus header, real status badge, identity/version, and optional description. Compact layouts prioritize name and status. |
 | `Badge` | Bounded inline symbol and label; an empty label uses the state label. |
-| `Dialog` | Centered canvas, double border, wrapped message, selectable/disabled actions. Actions take priority over a long body. Caller owns visibility, input, confirmation, and overlay composition. |
+| `Dialog` | A box at most 48 cells wide: double border, title, word-wrapped message, and selectable/disabled actions. Actions take priority over a long body. `Kit.Dialog` centers it on a canvas of its own; `Kit.DialogLayer` returns it as a centered modal bloom layer, a focus scope the caller composes over the current screen with `bloom.Overlay`. The kit only renders: the caller owns visibility, input routing, target validation, and what confirming does. The kit sends no requests, and apps never supply dialogs or terminal views. |
 | `Progress` | Static clamped fraction/percentage, or indeterminate text without a fabricated percentage. No tick or animation command. |
 | `Notice` | Friendly default or caller-supplied empty, busy, disabled, success, and error messages. |
 | `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. |
@@ -266,21 +266,66 @@ replaces minimal static shelves with searchable friendly-name application cards:
   description, and permissions grant line.
 - **Honest Empty States**: If no applications are installed or if a query has no
   matches, an honest `Notice` component is displayed with query clearing advice.
-- **Actions**: `Enter` launches the selected app, `F3` sends a graceful stop
-  request, and `F4` switches focus directly to the app's presentation view.
+- **Actions**: `Enter` launches the selected app, `F3` asks to confirm a
+  graceful stop of the selected running app (see
+  [Confirmations](#confirmations)), and `F4` switches focus directly to the
+  app's presentation view. On an app that is not running, `F3` is disabled in
+  the help bar and reports that the app is not running.
 
 ### Command palette overlay
 
-The command palette (`modePalette`, opened with `Ctrl+P` anywhere or `/` at an
-empty prompt) provides a modal overlay for keyboard-driven navigation:
+The command palette (opened with `Ctrl+P` anywhere or `/` at an empty prompt)
+is a centered modal bloom layer over the current screen, which stays on screen
+around it with its state untouched:
 
 - Indexes installed applications (`[APP]`), documents in the user documents
   folder (`[DOC]`), and core system commands (`[CMD]`).
-- Supports fuzzy/prefix substring filtering.
-- Navigated via `↑` / `↓`; pressing `Enter` immediately executes the selected
-  action (launches app, opens document, or runs shell command) and dismisses
-  the overlay.
-- `Esc` or `Ctrl+P` dismisses the overlay without taking action.
+- Supports fuzzy/prefix substring filtering. A query that matches nothing
+  shows an empty state and activates nothing.
+- Navigated via `↑` / `↓`; pressing `Enter` executes the selected action
+  once (launches an app, opens a document, or runs a shell command) and
+  dismisses the palette. Shutdown and Stop entries open a confirmation
+  instead of acting.
+- `Esc` or `Ctrl+P` dismisses the palette without taking action and restores
+  the exact screen beneath: the view, focus, prompt draft and cursor, launcher
+  query and selection, app instance and field drafts, task selection and
+  subview, notification selection, and transcript scroll.
+- While it is open the palette owns every key except `Ctrl-C`: typing,
+  paste, navigation, paging, and the F-key view shortcuts never reach the
+  screen beneath, and that screen shows no cursor.
+- In color themes at 256 colors or more, the screen beneath is dimmed
+  (`fx.Dim`). Monochrome, `ui.Plain` and 16-color sessions get no backdrop.
+
+### Confirmations
+
+Destructive actions open a `kit.Dialog` layer before sending any request:
+
+| Action | Entry points | Request on confirm |
+|---|---|---|
+| Shut down | typed `shutdown`, palette `shutdown` | `sys/shutdown` |
+| Stop app | Launcher `F3`, palette `Stop NAME`, typed `stop APP-ID` | `app/stop` with that app ID |
+| Stop process | Task Manager `x` | `proc/stop` with that PID |
+| Reap | Task Manager `r`, typed `reap` | `proc/reap` (environment-wide) |
+
+- The dialog names its target: the environment, the app's name, ID and
+  running PID, or the process name and PID. The reap dialog says that it
+  removes every terminated process in the environment, not only the selected
+  row, because `proc/reap` takes no PID.
+- The dialog keeps the target it showed. A refresh, relaunch or row reorder
+  can disable confirmation (the dialog then says why), never retarget it to
+  another app or process. Availability is checked again when Enter is
+  pressed.
+- `Cancel` is focused when the dialog opens. `Tab`/`→` and
+  `Shift-Tab`/`←` move between enabled actions, `Enter` chooses the focused
+  one, and `Esc` cancels. Canceling sends nothing; confirming sends exactly
+  one request. A repeat-flagged held `Enter` never confirms.
+- The action is disabled, shown in the kit's parentheses, while the shell is
+  busy, while a confirmed stop or reap is still in flight, for an app that is
+  not running (including an unknown ID), and for a process that has ended.
+- The dialog owns every key except `Ctrl-C`, the covered prompt shows no
+  cursor, and the typed command stays in the prompt until it is confirmed.
+- Raw `call METHOD` requests, other commands, and app presentation actions
+  are not confirmed.
 
 ### Predictable focus management
 
@@ -296,8 +341,11 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
   or returns to the prompt.
 - `FocusApp`: Active app presentation view owns keyboard interaction; `Esc`
   retracts presentation and restores prompt focus.
-- `FocusPalette`: Command palette overlay owns all keystrokes; `Esc` restores
-  prior view mode.
+- `FocusPalette`: The command palette layer owns every keystroke except
+  `Ctrl-C`; `Esc` closes only the palette and restores the view and focus
+  beneath it.
+- `FocusDialog`: An open confirmation owns every keystroke except `Ctrl-C`;
+  it takes priority over the palette and every view.
 
 ### Single-instance launch and graceful stop
 
@@ -305,8 +353,8 @@ Applications follow the platform single-instance contract. When launching an
 app that is already running or rejected by the runtime, the shell handles the
 rejection gracefully: the error is recorded in the transcript, focus safely
 transitions to the prompt to display the diagnostic message, and the terminal
-state remains intact. Stopping an application via `F3` or `stop <app-id>`
-issues a graceful IPC stop request.
+state remains intact. Stopping an application via `F3`, the palette, or
+`stop <app-id>` issues a graceful IPC stop request once it is confirmed.
 
 ## Task Manager, Notifications, and Crash Receipts
 
@@ -323,16 +371,24 @@ scrollable table:
   - `↑` / `↓` / `k` / `j`: Navigate through processes.
   - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`).
   - `c` or `Enter`: Inspect post-mortem crash receipt for failed processes.
-  - `x`: Terminate selected process (`proc/stop`).
-  - `r`: Prune terminated processes (`proc/reap`).
+  - `x`: Terminate selected process (`proc/stop`) after confirmation.
+  - `r`: Prune every terminated process in the environment (`proc/reap`)
+    after confirmation.
   - `Esc`: Return to process table or exit Task Manager view.
 - **Access**: Press `F5` or execute `tasks`, `taskmanager`, or `top` from the prompt.
 
 ### Notification Center & Toast Overlays (`internal/experience/notifications`)
 
-- **Toast Overlays**: Transient popups render directly above the command prompt
-  for process lifecycle milestones (clean exits, backoff restart warnings, and crashes).
-  Toasts count down ticks and expire automatically without stealing prompt focus.
+- **Toast Overlays**: Transient popups for process lifecycle milestones (clean
+  exits, backoff restart warnings, and crashes) are a stacked layer anchored to
+  the bottom-right corner of the body, newest last. The stack is at most 48
+  cells wide and a third of the body tall, keeping the newest toasts. It
+  covers what is beneath it but never resizes or scrolls the body, takes no
+  focus, and leaves the prompt draft alone. `notifications.Manager` alone
+  owns toast lifetime: each toast expires after the manager's tick count
+  (8 by default), and the caps, flood bounding, and DND are the manager's
+  too. Drawing toasts, or opening and closing the palette or a dialog, never
+  advances or restarts a countdown.
 - **Notification Center**: Dedicated full-screen panel listing complete event history,
   timestamps, severities (`INFO`, `WARN`, `ERROR`), and associated PIDs.
   - Unseen vs. Seen distinction: events arrive unread until inspected.
@@ -523,7 +579,13 @@ spell escapes as `\x1b` for readable diffs. `.gitattributes` preserves LF ending
 in golden fixtures, including Windows checkouts with `core.autocrlf=true`.
 Shell goldens cover home, populated shelf, empty shelf, busy/error, app
 presentation views, and accessible views (`monochrome-prompt.golden`,
-`monochrome-home.golden`, `high-contrast-prompt.golden`).
+`monochrome-home.golden`, `high-contrast-prompt.golden`). Overlay goldens in
+`internal/experience/shell/testdata/overlay/` show the command palette and a
+confirmation over Home, Prompt, the Launcher, an app presentation, the Task
+Manager and the Notification Center in every built-in theme at 80×24 (60
+files, `THEME-SCREEN-palette|dialog.golden`). Monochrome renders them in
+`ui.Plain`; the color themes use ANSI256 so the dimmed backdrop is part of
+the snapshot.
 Snapshot comparisons ignore trailing spaces; separate unit tests check exact
 rectangular cell dimensions.
 
@@ -537,5 +599,5 @@ Regenerate goldens deliberately, then inspect their diff:
 
 ```sh
 go test ./internal/experience/ui -run 'Test.*Snapshots' -update
-go test ./internal/experience/shell -run 'TestShell.*Snapshots' -update-visual
+go test ./internal/experience/shell -run 'Test(Shell|Overlay).*Snapshots' -update-visual
 ```

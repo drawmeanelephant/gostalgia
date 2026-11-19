@@ -1,14 +1,17 @@
 package shell
 
 import (
+	"bytes"
 	"fmt"
 	"image/color"
 	"strings"
 
 	"bloomfx.dev/bloom"
+	"bloomfx.dev/bloom/fx"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -24,23 +27,35 @@ const (
 	slotTabs
 	slotBadge
 	slotBody
-	slotToasts
 	slotPrompt
 	slotHelp
 )
 
-// Collapse priorities of the frame's optional rows. When the panel cannot
-// fit every row, the blank spacers go first, then toasts, so tabs, badge,
-// minBodyRows of body and the prompt always stay on screen.
+// layerID names the layers drawn over the frame for Frame.Rect.
+type layerID int
+
 const (
-	prioFrameSpacer = 1
-	prioFrameToasts = 2
+	layerToasts layerID = iota + 1
+	layerPalette
+	layerDialog
 )
 
-// minBodyRows is the body height toasts give way to: enough for a screen's
-// heading and the item its keys act on. The smallest frame, 30×10, leaves
-// exactly this much.
+// prioFrameSpacer is the collapse priority of the frame's blank spacer rows,
+// the only rows that give way when the panel cannot fit every row, so tabs,
+// badge, minBodyRows of body and the prompt always stay on screen.
+const prioFrameSpacer = 1
+
+// minBodyRows is the body height the spacers give way to: enough for a
+// screen's heading and the item its keys act on. The smallest frame, 30×10,
+// leaves exactly this much.
 const minBodyRows = 3
+
+// toastWidth is the widest the toast stack gets; a narrower body bounds it.
+const toastWidth = 48
+
+// backdropDim is how far the backdrop of a modal layer moves the screen
+// beneath it toward the theme's background.
+const backdropDim = 0.45
 
 // The shell renders its frame only from 30×10; below that it shows sizeNote.
 const (
@@ -109,6 +124,7 @@ func (m *Model) View() tea.View {
 	} else {
 		m.syncPresentationWindow()
 		v = m.root().View(m.width, m.height, m.layout())
+		v.Content = m.toProfile(v.Content)
 	}
 	v.AltScreen = true
 	// Ask for kitty event types (key releases and repeat flags) on top of
@@ -119,36 +135,86 @@ func (m *Model) View() tea.View {
 	return v
 }
 
+// toProfile converts composed frame content to the kit's color profile.
+// Kit output is already in that profile, but backdrop blending mixes colors
+// in 24-bit. Only the content is converted: cursor, screen-mode and keyboard
+// requests travel in the View's own fields and never pass through here.
+func (m *Model) toProfile(content string) string {
+	if m.backdrop() == nil || !m.modalOpen() {
+		return content
+	}
+	if m.kit.Mode() != ui.ANSI256 {
+		return content
+	}
+	var buf bytes.Buffer
+	w := colorprofile.Writer{Forward: &buf, Profile: colorprofile.ANSI256}
+	if _, err := w.WriteString(content); err != nil {
+		return content
+	}
+	return buf.String()
+}
+
+// modalOpen reports whether a modal layer owns input.
+func (m *Model) modalOpen() bool { return m.paletteOpen || m.confirm != nil }
+
+// backdrop is the effect a modal layer applies to the screen beneath it: a
+// dim in color themes. Monochrome and ui.Plain get none, as they carry
+// meaning in glyphs and plain contrast rather than in color, and neither
+// does ANSI16, whose sixteen colors would round most dimmed cells back to
+// their own color and leave a scattered few changed.
+func (m *Model) backdrop() []fx.Effect {
+	switch mode := m.kit.Mode(); {
+	case mode != ui.ANSI256 && mode != ui.TrueColor, m.kit.Theme().Name == theme.Monochrome().Name:
+		return nil
+	}
+	return []fx.Effect{fx.Dim{Amount: backdropDim}}
+}
+
 // solve lays the current frame out without drawing it.
 func (m *Model) solve() *bloom.Frame {
 	return bloom.Solve(m.width, m.height, m.layout())
 }
 
 // layout is the shell frame as a bloom tree: a kit Panel around tabs, badge,
-// body and prompt, with the help bar below it. It reads model state and
+// body and prompt, with the help bar below it, and the open palette or
+// confirmation as a modal layer over all of it. It reads model state and
 // never changes it.
 func (m *Model) layout() bloom.Child {
 	if m.width < minFrameWidth || m.height < minFrameHeight {
 		note := ui.Sized(func(b ui.Bounds) string { return m.kit.Text(sizeNote) })
 		return bloom.Column(bloom.Fill(note).ID(slotNote))
 	}
-	return m.frame(m.homeView())
+	frame := m.frame(m.homeView())
+	switch {
+	case m.confirm != nil:
+		return bloom.Overlay(frame, m.dialogLayer())
+	case m.paletteOpen:
+		return bloom.Overlay(frame, m.paletteLayer())
+	}
+	return frame
+}
+
+// dialogLayer is the open confirmation as a modal layer over the screen.
+func (m *Model) dialogLayer() bloom.LayerNode {
+	return m.kit.DialogLayer(m.confirmDialog()).Backdrop(m.backdrop()...).ID(layerDialog)
 }
 
 func (m *Model) frame(home homeView) bloom.Child {
+	body := m.body(home)
+	if m.toastLines() > 0 {
+		base := body
+		body = sizedNode(func(ctx bloom.Context) bloom.Child {
+			return bloom.Overlay(base, m.toastLayer(ctx.Width, ctx.Height))
+		})
+	}
 	rows := []bloom.Child{
 		bloom.Fixed(1, m.kit.TabsLeaf(m.tabs())).ID(slotTabs),
 		bloom.Fixed(1, m.kit.Leaf(m.badge)).ID(slotBadge),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
-		bloom.Fill(m.body(home)).Min(minBodyRows).ID(slotBody),
-	}
-	if n := m.toastLines(); n > 0 {
-		toasts := m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderToasts(m.kit, b.Width) })
-		rows = append(rows, bloom.Fixed(n, toasts).Collapsible(prioFrameToasts).ID(slotToasts))
-	}
-	rows = append(rows,
+		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
-		bloom.Fixed(1, m.promptNode()).ID(slotPrompt))
+		bloom.Fixed(1, m.promptNode()).ID(slotPrompt),
+	}
 	panel := m.kit.PanelNode(ui.Panel{Title: frameTitle}, bloom.Column(rows...))
 	return bloom.Column(
 		bloom.Fill(panel).ID(slotPanel),
@@ -202,6 +268,26 @@ func (m *Model) badge(b ui.Bounds) string {
 	return ui.Truncate(badge, b.Width)
 }
 
+// toastLayer is the toast stack over a w×h body, anchored to its
+// bottom-right corner over whatever the body shows there. The body is laid
+// out the same with or without it: toasts never take rows from the screen
+// beneath. The stack covers at most a third of the body, keeping the newest
+// toasts when they do not all fit, so even the 30×10 frame keeps most of its
+// body readable. The layer only draws the manager's active toasts; their
+// lifetime, caps and DND stay with notifications.Manager and its ticks.
+func (m *Model) toastLayer(w, h int) bloom.LayerNode {
+	width := min(w, toastWidth)
+	lines := strings.Split(m.notifs.RenderToasts(m.kit, width), "\n")
+	if room := max(1, h/3); len(lines) > room {
+		if m.notifs.DroppedToasts() > 0 {
+			lines = lines[:len(lines)-1]
+		}
+		lines = lines[max(0, len(lines)-room):]
+	}
+	stack := m.kit.Leaf(func(ui.Bounds) string { return strings.Join(lines, "\n") })
+	return bloom.Layer(stack).Anchor(bloom.End, bloom.End).Size(width, len(lines)).ID(layerToasts)
+}
+
 func (m *Model) toastLines() int {
 	if m.notifs == nil || m.notifView {
 		return 0
@@ -216,8 +302,6 @@ func (m *Model) toastLines() int {
 // body is the frame's main slot for the current screen.
 func (m *Model) body(home homeView) bloom.Child {
 	switch {
-	case m.paletteOpen:
-		return m.kit.Leaf(func(b ui.Bounds) string { return strings.Join(m.renderPalette(b.Width, b.Height), "\n") })
 	case m.taskView && m.tasks != nil:
 		return m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) })
 	case m.notifView && m.notifs != nil:
@@ -285,7 +369,9 @@ func (m *Model) promptNode() bloom.Child {
 		}
 		line, x, editable := m.promptLine(ctx.Width)
 		text := bloom.Text(m.kit.Text(ui.Fit(line, ui.Bounds{Width: ctx.Width, Height: 1})))
-		if editable {
+		// Under a confirmation the draft stays in view, but the dialog owns
+		// input, so the prompt shows no insertion point.
+		if editable && m.confirm == nil {
 			text = text.Cursor(tea.NewCursor(x, 0))
 		}
 		return text
@@ -348,6 +434,11 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 		exitHelp = "DETACH"
 	}
 	switch {
+	case m.confirm != nil:
+		return []ui.Binding{
+			{Key: "Tab", Help: "NEXT ACTION"}, {Key: "Enter", Help: "CHOOSE"},
+			{Key: "Esc", Help: "CANCEL"}, {Key: "Ctrl-C", Help: exitHelp},
+		}
 	case m.paletteOpen:
 		items := m.filteredPaletteItems()
 		return []ui.Binding{
@@ -392,10 +483,11 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 		}
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
+		sel := min(m.selected, len(filtered)-1)
 		return []ui.Binding{
 			{Key: "Esc", Help: "PROMPT"},
 			{Key: "Enter", Help: "RUN", Disabled: m.busy || len(filtered) == 0},
-			{Key: "F3", Help: "STOP", Disabled: m.busy || len(filtered) == 0},
+			{Key: "F3", Help: "STOP", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
 			{Key: "F4", Help: "VIEW", Disabled: m.busy || len(filtered) == 0},
 			{Key: "F5", Help: "TASKS"},
 			{Key: "↑↓", Help: "SELECT", Disabled: m.busy || len(filtered) == 0},

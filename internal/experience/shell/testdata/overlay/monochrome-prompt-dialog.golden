@@ -1,0 +1,24 @@
++------------------------------------------------------------------------------+
+| G O S T A L G I A  /  PERSONAL COMPUTING                                     |
+|  Home   Apps  [Prompt]  Tasks   Notifications (2)                            |
+| [OK] ONLINE   guest · C: environment drive                                   |
+|                                                                              |
+| transcript line 12                                                           |
+| transcript line 13                                                           |
+| transcript line 14                                                           |
+| transcript lin+----------------------------------------------+               |
+| transcript lin| > Stop Echo?                                 |               |
+| transcript lin| Stops Echo (com.gostalgia.echo), running as  |               |
+| transcript lin| PID 7. Work it has not saved may be lost.    |               |
+| transcript lin|                                              |               |
+| transcript lin| [Cancel]  Stop app                           |               |
+| transcript lin+----------------------------------------------+               |
+| transcript line 22                                                           |
+| transcript line 23                                                           |
+| transcript line 24                                                           |
+| transcript line 25                                                           |
+| transcript line 26                                                           |
+|                                                                              |
+| C:\users\guest> stop com.gostalgia.echo                                      |
++------------------------------------------------------------------------------+
+Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT

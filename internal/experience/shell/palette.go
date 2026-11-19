@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
 )
@@ -36,7 +37,8 @@ func (m *Model) paletteItems() []paletteItem {
 				Title:  "Stop " + name,
 				Detail: fmt.Sprintf("Graceful stop %s (PID %d)", id, app.PID),
 				Action: func(m *Model) tea.Cmd {
-					return m.submit("stop " + app.Manifest.ID)
+					m.openConfirm(stopAppConfirmation(app))
+					return nil
 				},
 			})
 			items = append(items, paletteItem{
@@ -137,7 +139,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Tag:    "CMD",
 			Title:  "shutdown",
 			Detail: "Shut down Gostalgia environment",
-			Action: func(m *Model) tea.Cmd { return m.submit("shutdown") },
+			Action: func(m *Model) tea.Cmd { m.openConfirm(confirmation{kind: confirmShutdown}); return nil },
 		},
 		paletteItem{
 			Tag:    "CMD",
@@ -229,23 +231,39 @@ func (m *Model) closePalette() {
 	m.paletteSelected = 0
 }
 
-func (m *Model) renderPalette(w, bodyHeight int) []string {
-	var lines []string
+// paletteRect is where the palette goes on the w×h screen: centered
+// horizontally, and vertically in the rows between the frame's top border
+// and the prompt, so the prompt row's palette hint stays in view.
+func paletteRect(w, h int) (y, width, height int) {
+	rows := h - 4
+	width, height = min(w-2, 66), min(rows, 14)
+	return 1 + (rows-height)/2, width, height
+}
+
+// paletteLayer is the open palette as a modal layer over the screen.
+func (m *Model) paletteLayer() bloom.LayerNode {
+	y, w, h := paletteRect(m.width, m.height)
+	box := ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) })
+	return bloom.Layer(box).Anchor(bloom.Center, bloom.Start).Offset(0, y).Size(w, h).
+		Modal().Backdrop(m.backdrop()...).ID(layerPalette)
+}
+
+// renderPalette is the palette's box at exactly paletteW×paletteH.
+func (m *Model) renderPalette(paletteW, paletteH int) string {
 	filtered := m.filteredPaletteItems()
 	selected := min(m.paletteSelected, max(0, len(filtered)-1))
 
-	paletteW := min(w-2, 66)
-	paletteH := min(bodyHeight, 14)
-
 	var inner []string
 	inner = append(inner, m.kit.Heading("> ")+m.kit.Text(m.paletteQuery)+m.kit.Selection(" "))
-	inner = append(inner, "")
+	// A short palette spends no row on the spacer under the query.
+	if paletteH-3 >= 4 {
+		inner = append(inner, "")
+	}
 
 	if len(filtered) == 0 {
 		inner = append(inner, m.kit.Muted("  ◇ No matching commands, apps, or documents."))
 	} else {
-		availRows := max(1, paletteH-5)
-		visible := availRows
+		visible := max(1, paletteH-3-len(inner))
 		start := max(0, selected-visible+1)
 		end := min(len(filtered), start+visible)
 
@@ -265,24 +283,11 @@ func (m *Model) renderPalette(w, bodyHeight int) []string {
 		}
 	}
 
-	paletteBox := m.kit.Panel(ui.Panel{
+	return m.kit.Panel(ui.Panel{
 		Title:   "COMMAND PALETTE (Ctrl-P / Esc)",
 		Body:    strings.Join(inner, "\n"),
 		Focused: true,
 	}, ui.Bounds{Width: paletteW, Height: paletteH})
-
-	boxLines := strings.Split(paletteBox, "\n")
-	padTop := max(0, (bodyHeight-len(boxLines))/2)
-	padLeft := max(0, (w-paletteW)/2)
-	leftSpaces := strings.Repeat(" ", padLeft)
-
-	for i := 0; i < padTop; i++ {
-		lines = append(lines, "")
-	}
-	for _, l := range boxLines {
-		lines = append(lines, leftSpaces+l)
-	}
-	return lines
 }
 
 func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

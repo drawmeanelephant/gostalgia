@@ -95,3 +95,55 @@ func TestBarLeavesUseTheirSlotWidth(t *testing.T) {
 		}
 	}
 }
+
+// A DialogLayer draws Dialog's box, centered a cell inside the screen,
+// over what is beneath it, which stays on screen around the box, and draws
+// no canvas of its own.
+func TestDialogLayerDrawsTheDialogOverAScreen(t *testing.T) {
+	d := Dialog{Title: "Stop Clock?", Body: "Stops Clock (com.gostalgia.clock), running as PID 31.",
+		Actions: []Action{{Label: "Cancel"}, {Label: "Stop app", Disabled: true}}}
+	for _, th := range builtinThemes() {
+		for _, size := range [][2]int{{80, 24}, {30, 10}, {12, 6}} {
+			t.Run(fmt.Sprintf("%s/%dx%d", th.Name, size[0], size[1]), func(t *testing.T) {
+				k := New(th, Plain)
+				row := strings.Repeat("#", size[0])
+				base := bloom.Text(strings.TrimSuffix(strings.Repeat(row+"\n", size[1]), "\n"))
+				node := bloom.Overlay(base, k.DialogLayer(d).ID("dialog"))
+				got := bloom.Render(size[0], size[1], node)
+				if strings.Contains(got, "\x1b") {
+					t.Fatalf("plain dialog layer has escapes: %q", got)
+				}
+				r, ok := bloom.Solve(size[0], size[1], node).Rect("dialog")
+				_, box := k.dialogBox(d, Bounds{Width: size[0] - 2, Height: size[1] - 2})
+				if !ok || r.Dx() != box.Width || r.Dy() != box.Height {
+					t.Fatalf("dialog at %v (%v), want a %dx%d box", r, ok, box.Width, box.Height)
+				}
+				if r.Min.X != (size[0]-box.Width)/2 || r.Min.Y < 1 || r.Max.Y > size[1]-1 {
+					t.Fatalf("dialog at %v is not centered inside the screen's margin", r)
+				}
+				lines := strings.Split(got, "\n")
+				drawn, _ := k.dialogBox(d, Bounds{Width: size[0] - 2, Height: size[1] - 2})
+				want := strings.Split(drawn, "\n")
+				for y, line := range lines {
+					cells := []rune(line)
+					for x, c := range cells {
+						in := image.Pt(x, y).In(r)
+						switch {
+						case in && string(c) != string([]rune(want[y-r.Min.Y])[x-r.Min.X]):
+							t.Fatalf("cell %d,%d = %q, not the dialog's", x, y, c)
+						case !in && c != '#':
+							t.Fatalf("cell %d,%d = %q: the layer drew outside its box", x, y, c)
+						}
+					}
+				}
+			})
+		}
+	}
+	// The body wraps at word boundaries.
+	got := ansi.Strip(New(theme.Nostalgia(), Plain).Dialog(Dialog{Title: "T", Body: strings.Repeat("environment ", 6)}, Bounds{48, 12}))
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "environm ") || strings.Contains(line, " ent") {
+			t.Fatalf("dialog split a word: %q", line)
+		}
+	}
+}

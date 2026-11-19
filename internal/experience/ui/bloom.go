@@ -130,3 +130,41 @@ func (n PanelNode) Layout(ctx bloom.Context) bloom.Child {
 func (k Kit) Colors() (fg, bg color.Color) {
 	return k.resolve(k.theme.Palette.Text), k.resolve(k.theme.Palette.Surface)
 }
+
+// DialogNode is Dialog's box as a bloom node: it asks for the box's own size
+// within the space it is offered and draws exactly the box, with no canvas
+// around it, so a layer can put it over a screen.
+type DialogNode struct {
+	kit    Kit
+	dialog Dialog
+}
+
+// DialogNode returns d as a layout node.
+func (k Kit) DialogNode(d Dialog) DialogNode { return DialogNode{kit: k, dialog: d} }
+
+// View implements bloom.Child; the box only draws at a size it is given.
+func (n DialogNode) View() string { return "" }
+
+// Measure implements bloom.Measurer.
+func (n DialogNode) Measure(avail bloom.Size) bloom.Size {
+	_, box := n.kit.dialogBox(n.dialog, Bounds{Width: avail.W, Height: avail.H})
+	return bloom.Size{W: box.Width, H: box.Height}
+}
+
+// Layout implements bloom.Layouter.
+func (n DialogNode) Layout(ctx bloom.Context) bloom.Child {
+	bounds := Bounds{Width: ctx.Width, Height: ctx.Height}
+	panel, _ := n.kit.dialogBox(n.dialog, bounds)
+	if panel == "" {
+		return nil
+	}
+	return bloom.Text(Fit(panel, bounds))
+}
+
+// DialogLayer is d as a centered modal layer a cell inside its overlay's
+// edges. A modal layer takes every mouse event from what it covers and is a
+// bloom focus scope. The kit only draws: the caller decides when the layer
+// is shown, routes keys to it, and performs or cancels its actions.
+func (k Kit) DialogLayer(d Dialog) bloom.LayerNode {
+	return bloom.Layer(k.DialogNode(d)).Margin(1).Modal()
+}

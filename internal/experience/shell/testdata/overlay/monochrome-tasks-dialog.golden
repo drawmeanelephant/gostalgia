@@ -1,0 +1,24 @@
++------------------------------------------------------------------------------+
+| G O S T A L G I A  /  PERSONAL COMPUTING                                     |
+|  Home   Apps   Prompt  [Tasks]  Notifications (2)                            |
+| [OK] ONLINE   guest · C: environment drive                                   |
+|                                                                              |
+| +--------------------------------------------------------------------------+ |
+| | > LIVE TASK MANAGER                                                      | |
+| | PID   NAME                 STATE          RESTARTS CPU      MEMORY       | |
+| | ──────────────────────────────────────────────────────────────────────   | |
+| |   1     envi+----------------------------------------------+  12.0 MB    | |
+| | > 7     com.| > Stop process 7?                            |  12.0 MB    | |
+| |   12    inde| Stops com.gostalgia.echo (PID 7).            |  -          | |
+| |   31    com.|                                              |  -          | |
+| |             | [Cancel]  Stop process                       |             | |
+| |             +----------------------------------------------+             | |
+| |                                                                          | |
+| |                                                                          | |
+| | 4 total processes (3 active)                                             | |
+| |                                                                          | |
+| +--------------------------------------------------------------------------+ |
+|                                                                              |
+| C:\users\guest> Task Manager owns focus. Esc returns to prompt.              |
++------------------------------------------------------------------------------+
+Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT
