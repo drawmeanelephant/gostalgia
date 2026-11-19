@@ -132,6 +132,31 @@ Terminal controls from file/app output are filtered so OSC/ANSI output cannot
 manipulate the terminal. Small layouts display a resize message; normal layouts
 are clipped to the viewport and never require the core to know terminal size.
 
+## Experimental windows, not shell wiring (Issue #215)
+
+The standalone command below demonstrates the draft window service without
+changing this shell's single-presentation model or creating another production
+terminal owner:
+
+```sh
+go run ./internal/experience/experimental/windows/cmd/windowdemo
+```
+
+It opens the existing Screen and Pad presentation fixtures in two bloom layers.
+Drag titles or use Alt-arrows to move them, click to focus and raise, press F6
+to switch focus, Tab/Shift-Tab through the focused window's controls, Enter to
+emit its semantic
+SDK action, Ctrl-W or its border `[X]` to close it, and Ctrl-C to exit. Each
+window retains its own draft. Typed open/focus/move/close events go through the
+existing event bus; drawing publishes no events.
+
+This is an experimental fixture host, not production multiwindow support. Its
+actions remain local, it implements only the presentation elements used by the
+fixtures, and its 30×10 clamped view clips content. See
+[architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred)
+for observed toolkit leaks and the approved, explicitly unverified Gio baseline.
+No Gio dependency or implementation is included.
+
 ## Verification and boundaries
 
 Charm is confined to `internal/experience/` (shell, theme, and component kit).

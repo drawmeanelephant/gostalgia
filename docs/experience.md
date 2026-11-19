@@ -648,6 +648,35 @@ All stay inside experience. The dependency tests allow Charm and bloom under
 `internal/experience/` and still verify stdlib-only runtime/SDK/apps/`gctl`
 closures. Rendering needs no cgo, external binary, host shell, or service.
 
+## Experimental window adapter (Issue #215)
+
+The nonproduction draft under `internal/experience/experimental/windows` keeps
+window identity, titles, logical bounds, focus, z-order, and lifecycle separate
+from its bloom adapter. Two existing SDK fixtures demonstrate dragging, border
+and keyboard close, focus scopes, independent drafts, and semantic action
+requests. Typed open/focus/move/close events use the existing event bus;
+rendering emits no lifecycle events. No production shell or runtime entry point
+registers the experiment, and apps still supply presentation data rather than
+toolkit views.
+
+Run it with:
+
+```sh
+go run ./internal/experience/experimental/windows/cmd/windowdemo
+go test -count=1 ./internal/experience/experimental/windows/...
+```
+
+At 80×24, drag either title or use Alt-arrows to move it, click to focus/raise,
+use F6 to switch windows, Tab/Shift-Tab between controls, Enter to activate,
+Ctrl-W to close, and Ctrl-C
+to exit. At 30×10 the windows are clamped and content is clipped; the demo does
+not replace the shell's responsive presentation renderer. Actions stay local to
+the fixture demonstration. Close requests a full terminal repaint because the
+real alpha.6 differential-repaint path left stale cells after layer removal.
+The complete adapter-leak inventory and the explicitly unverified Gio baseline
+are in [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred);
+empirical Gio comparison is [#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
+
 ## Verification and snapshots
 
 ```sh

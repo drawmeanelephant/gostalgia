@@ -3,37 +3,71 @@
 **Gostalgia** — *Go* + *nostalgia*: a computing environment with the soul of
 the machines we grew up on, built in Go.
 
-A cross-platform pseudo-operating system / portable computing environment.
+A cross-platform pseudo-operating-system / portable computing environment.
 It runs hosted on Windows, macOS, or Linux but presents its own
 abstractions for applications, processes, files, services, IPC, configuration,
 sessions, and permissions. The host OS is substrate, not the application model.
 
 **Status: M1 (runtime vertical slice) complete — live tracker in
 [status.md](status.md).** The environment boots, starts its core services,
-opens a user session, launches and supervises an application, serves a local
-IPC endpoint, and shuts down cleanly — with tests at every layer.
+opens a user session, launches and supervises applications, serves a local IPC
+endpoint, and shuts down cleanly, with tests at every layer.
 
-## Try it
+## Requirements and setup
+
+Install **Go 1.27.3 or newer**. The floor comes from the exactly pinned,
+pre-1.0 `bloomfx.dev/bloom v0.0.0-alpha.6` experience dependency. Download the
+module dependencies and build every package:
 
 ```sh
-go run ./cmd/gostalgia shell --root /tmp/gs     # gorgeous DOS-style Charm shell
-# Or run headless with the existing control client:
-go run ./cmd/gostalgia boot --root /tmp/gs      # terminal 1 — boot the environment
-go run ./cmd/gctl --root /tmp/gs status      # terminal 2 — inspect it
-go run ./cmd/gctl --root /tmp/gs echo hello  # talk to the first application
-go run ./cmd/gctl --root /tmp/gs ps
-go run ./cmd/gctl --root /tmp/gs ls /users/guest
-go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
+go mod download
+go build ./...
 ```
+
+The runtime, core services, app SDK, built-in apps, and `gctl` are
+standard-library-only. The terminal experience uses the approved Charm family
+and bloom, without cgo. All rendering and runtime code is pure Go and builds on
+Windows, macOS, and Linux; host-specific socket and signal code stays under
+`platform/`.
+
+## Run it
+
+Use a real interactive terminal, preferably at least 80×24 (30×10 minimum).
+These relative roots work on all three host operating systems:
+
+```sh
+go run ./cmd/gostalgia shell --root ./.gostalgia-demo
+```
+
+Or boot headless and use the control client from another terminal:
+
+```sh
+go run ./cmd/gostalgia boot --root ./.gostalgia-demo  # terminal 1
+go run ./cmd/gctl --root ./.gostalgia-demo status    # terminal 2
+go run ./cmd/gctl --root ./.gostalgia-demo echo hello
+go run ./cmd/gctl --root ./.gostalgia-demo ps
+go run ./cmd/gctl --root ./.gostalgia-demo ls /users/guest
+go run ./cmd/gctl --root ./.gostalgia-demo shutdown
+```
+
+The shell provides a DOS-style prompt, Home dashboard and FIGlet wordmark,
+searchable launcher, command palette and confirmations, Task Manager and log
+tails, notifications and toasts, bounded searchable transcript history,
+presentation-data app views, themes and accessible color modes, keyboard and
+additive mouse input, policy-controlled host clipboard writes, detachable SSH
+sessions, and bounded per-session motion. Every mouse action retains a keyboard
+route. See [docs/shell.md](docs/shell.md) for commands and keybindings.
 
 ## What is here
 
 - **Runtime** (`internal/runtime`) — boot, wiring, graceful shutdown.
 - **Service framework** (`internal/service`) — dependency-ordered lifecycle,
   failure rollback, reverse-order stop.
-- **Core services** (`internal/services`) — `sys`, `process`, `fs`, `ipc`.
+- **Core services** (`internal/services`) — system, process, filesystem, IPC,
+  notifications, clipboard, configuration, sessions, profiles, packages, and
+  recovery.
 - **Process model** (`internal/process`) — explicit in-proc vs child kinds,
-  states, events, stop timeouts.
+  states, events, stop timeouts, output capture, and supervision.
 - **Packages** (`internal/pkg`) — bounded archive verification, publisher
   provenance, atomic install/update/rollback, and permission inspection through
   `gctl pkg` and shell `pkg`/`package`. See [docs/packages.md](docs/packages.md).
@@ -41,39 +75,96 @@ go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
   token handshake, capability-carrying call contexts.
 - **VFS** (`internal/vfs`) — environment-rooted filesystem with mounts,
   host backend confined via `os.Root`, memfs `/tmp`; `testing/fstest`-verified.
-- **Charm shell** (`internal/experience/shell`) — Bubble Tea + Lip Gloss,
-  DOS-style prompt, app shelf, command history, completion, scrollback, and a
-  bundled FIGlet Home wordmark with narrow-width fallbacks; IPC only.
+- **Experience** (`internal/experience`) — the shell and its theme/component
+  vocabulary. The exactly pinned bloom engine provides solved layout, layers,
+  buffers, additive mouse routing, finite per-session motion, and the Home
+  FIGlet wordmark. Its bundled `big` and `mini` fonts are ASCII and
+  BSD-3-Clause; attribution and fallbacks are documented in
+  [docs/shell.md](docs/shell.md#home-wordmark-and-ascii-chrome-issue-214).
 - **App SDK** (`sdk`, `internal/app`, `apps/`) — embedded JSON manifests,
-  Init/Run/Stop, capability-scoped service calls and routes, single-instance
-  launch, failure cleanup. Echo is the single copyable demo.
+  Init/Run/Stop, capability-scoped calls and routes, single-instance launch,
+  failure cleanup, and data/action presentation contracts. Apps supply data,
+  never terminal or desktop toolkit views.
 - **Events, config, sessions, capabilities** — the small primitives the rest
   builds on.
 
-The runtime core and app SDK are standard-library-only. The terminal experience
-uses the allowed Charm family (and its transitive dependencies), without cgo.
-The exactly pinned bloom engine provides the experience-only layout, overlays,
-buffers, additive mouse support, finite per-session motion, and Home FIGlet
-wordmark. Its bundled `big` and `mini` fonts are ASCII and BSD-3-Clause; their
-attribution and fallback behavior are documented in
-[docs/shell.md](docs/shell.md#home-wordmark-and-ascii-chrome-issue-214).
-See [docs/applications.md](docs/applications.md) for the complete app-writing
-spec, [docs/shell.md](docs/shell.md) for the terminal experience, and
-[docs/architecture.md](docs/architecture.md)
-for the design, decisions, milestone arc, and risks; subsystem details in
-[docs/](docs/); the itemized milestone tracker and current state in
-[status.md](status.md).
+See [docs/applications.md](docs/applications.md) for the app-writing spec,
+[docs/architecture.md](docs/architecture.md) for design decisions and risks,
+and [docs/](docs/) for subsystem guides.
+
+## Experimental, nonproduction window spike
+
+A deliberately unwired draft window service and bloom adapter live under
+`internal/experience/experimental/windows`. Run their standalone demonstration:
+
+```sh
+go run ./internal/experience/experimental/windows/cmd/windowdemo
+```
+
+It hosts the existing Screen and Pad SDK presentation fixtures in two titled
+windows with border `[X]` close controls. Drag a title or use **Alt-arrows** to
+move one window, click a window to raise/focus it, use **F6** to switch focus,
+**Tab/Shift-Tab** to move
+between that window's controls, type in its field, **Enter** to activate an
+action or grid cell, and **Ctrl-W** to close the focused window. **Ctrl-C**
+exits and restores the terminal. The two drafts and semantic action requests
+remain independent, and lifecycle events use the existing typed event bus.
+
+This is not production multiwindow support, is not registered with the normal
+shell or runtime, and adds no Gio implementation or dependency. The demo keeps
+fixture actions local rather than sending app IPC, implements only the
+presentation elements its two fixtures use, and is most useful at 80×24 or
+larger. The toolkit-neutral draft, observed bloom limitations, and the approved
+unverified Gio comparison are in
+[docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred).
+Empirical Gio and cross-toolkit verification remain
+[#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
 
 ## Checks
 
+Run focused experience and experimental tests during development:
+
 ```sh
-go build ./... && go vet ./... && go test -race ./...
-gofmt -l .  # empty output = clean
+go test -count=1 ./internal/experience/... ./test/e2e
+go test -count=1 ./internal/experience/experimental/windows/...
+go test -count=1 ./internal/experience/shell -run '^(TestSteepRuntimeScenarios|TestSteepMotionScenarios)$'
 ```
 
-Requires Go ≥ 1.27.3 (the floor set by the exactly pinned, pre-1.0
-`bloomfx.dev/bloom` layout dependency; see
-[docs/shell.md](docs/shell.md#bloom-layout-and-compositing-issue-207)).
+The steep scenarios boot a real runtime in an emulated terminal and cover
+navigation, launch/stop, palette, echo, resize, bracketed paste, mouse, toast
+geometry, finite motion, and terminal restoration. Snapshot updates are always
+explicit developer actions, never automatic in CI. Real local PTY and OpenSSH
+checks remain separate release validation; see
+[docs/development.md](docs/development.md).
+
+Before submitting a change, run the complete build, vet, race, formatting,
+pure-Go, and Windows/Linux cross-build gate:
+
+```sh
+go build ./... && go vet ./... && go test -race ./... && test -z "$(gofmt -l .)" && CGO_ENABLED=0 go build ./...
+GOOS=windows go build ./... && GOOS=linux go build ./...
+```
+
+CI executes the tests on Ubuntu, macOS, and Windows. Cross-compilation alone is
+not treated as proof of Windows runtime behavior.
+
+## Material limitations and approved deviations
+
+- bloom and steep are pre-1.0, exactly pinned dependencies with expected
+  breaking-change risk; upgrades require deliberate review and three-OS tests.
+- bloom alpha.6 clipboard helpers emit OSC 52 even when their callback denies a
+  copy. Gostalgia therefore uses public selection data plus authenticated,
+  asynchronous `clipboard/write` IPC instead. Host writes obey operator policy,
+  including over SSH, and no OSC 52 fallback is used. The upstream issue remains
+  an unsubmitted draft.
+- The experimental window comparison uses observed bloom behavior against the
+  documented Gio candidate baseline only. No Gio spike ran in this work;
+  empirical Gio results and cross-toolkit neutrality are unverified and tracked
+  by [#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
+- `status.md` remains the canonical milestone tracker. Its stale Charm baseline
+  row is separate tracker maintenance in
+  [#217](https://github.com/drawmeanelephant/gostalgia/issues/217), not part of
+  the experience feature changes.
 
 ## License
 

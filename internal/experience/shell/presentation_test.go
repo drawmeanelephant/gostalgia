@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/events"
+	windowfixtures "gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 	"gostalgia/internal/ipc"
@@ -24,38 +25,12 @@ func (f callerFunc) Call(ctx context.Context, method string, params, out any) er
 	return f(ctx, method, params, out)
 }
 
-func screenData() sdk.View {
-	return sdk.View{
-		Version: 1, Instance: "launch", Title: "Screen", State: sdk.ViewReady,
-		Items:   []sdk.Item{{ID: "one", Label: "One", Detail: "first"}, {ID: "two", Label: "Two", Detail: "second"}},
-		Fields:  []sdk.Field{{ID: "text", Label: "Text", Required: true}},
-		Actions: []sdk.Action{{ID: "send", Label: "Send"}},
-	}
-}
+func screenData() sdk.View { return windowfixtures.ScreenData() }
 
 // padData is a version-2 snapshot exercising every new element: a multi-line
 // art block, meters (one out of range for the clamp), and a grid pad with a
 // cell-declared action, a disabled cell, and a datum cell.
-func padData() sdk.View {
-	return sdk.View{
-		Version: 2, Instance: "launch", Title: "Pad", State: sdk.ViewReady,
-		Items:   []sdk.Item{{ID: "one", Label: "One", Detail: "first"}},
-		Fields:  []sdk.Field{{ID: "text", Label: "Text"}},
-		Actions: []sdk.Action{{ID: "adopt", Label: "Adopt"}},
-		Blocks:  []sdk.Block{{ID: "art", Label: "Mascot", Text: "(\\_/)\n(o.o)\n> ^ <"}},
-		Meters: []sdk.Meter{
-			{ID: "charge", Label: "Charge", Value: 0.5},
-			{ID: "hunger", Label: "Hunger", Value: 1.4},
-		},
-		Grid: &sdk.Grid{Label: "Pad", Columns: 2, Cells: []sdk.Cell{
-			{ID: "nw", Label: "NW", Action: "press"},
-			{ID: "ne", Label: "NE", Action: "press"},
-			{ID: "sw", Label: "SW"},
-			{ID: "se", Label: "SE", Disabled: true},
-		}},
-		Status: "waiting",
-	}
-}
+func padData() sdk.View { return windowfixtures.PadData() }
 
 func screenStatus() appStatus {
 	var a appStatus
