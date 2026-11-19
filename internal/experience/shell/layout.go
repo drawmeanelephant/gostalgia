@@ -67,10 +67,11 @@ const (
 // rootKey is everything a bloom root is built from. A kit change that keeps
 // it equal keeps the root.
 type rootKey struct {
-	theme   string
-	mode    ui.ColorMode
-	reduced bool
-	fg, bg  [4]uint32
+	theme    string
+	mode     ui.ColorMode
+	reduced  bool
+	fg, bg   [4]uint32
+	mouseOff bool
 }
 
 func colorKey(c color.Color) [4]uint32 {
@@ -81,21 +82,28 @@ func colorKey(c color.Color) [4]uint32 {
 	return [4]uint32{r, g, b, a}
 }
 
-func rootKeyOf(k ui.Kit) rootKey {
+func rootKeyOf(k ui.Kit, mouseOff bool) rootKey {
 	fg, bg := k.Colors()
 	return rootKey{theme: k.Theme().Name, mode: k.Mode(), reduced: k.Theme().ReducedMotion,
-		fg: colorKey(fg), bg: colorKey(bg)}
+		fg: colorKey(fg), bg: colorKey(bg), mouseOff: mouseOff}
 }
 
 // root returns the model's own bloom root, built for its current kit and
-// rebuilt only when the kit's effective theme, profile or motion changes,
-// so a config poll that re-applies the same settings keeps it. Its colors
-// come from the theme, never from the terminal: Root.Init, which would
-// query the host's colors, is never called.
+// mouse setting and rebuilt only when the kit's effective theme, profile or
+// motion, or the mouse setting, changes, so a config poll that re-applies
+// the same settings keeps it. Its colors come from the theme, never from
+// the terminal: Root.Init, which would query the host's colors, is never
+// called. It never copies to a clipboard itself: copies go through
+// copyCmd, under the operator's clipboard policy.
 func (m *Model) root() *bloom.Root {
-	if key := rootKeyOf(m.kit); m.ui == nil || m.uiKey != key {
+	if key := rootKeyOf(m.kit, m.mouseOff); m.ui == nil || m.uiKey != key {
 		fg, bg := m.kit.Colors()
-		m.ui = bloom.New(bloom.WithColors(fg, bg), bloom.WithCopyFlash(false))
+		opts := []bloom.Option{bloom.WithColors(fg, bg), bloom.WithCopyFlash(false),
+			bloom.WithSelectionStyle(m.kit.MouseSelectionStyle())}
+		if !m.mouseOff {
+			opts = append(opts, bloom.WithTooltips(bloom.Tooltips{Style: m.kit.TooltipStyle()}))
+		}
+		m.ui = bloom.New(opts...)
 		m.uiKey = key
 	}
 	return m.ui
@@ -124,6 +132,11 @@ func (m *Model) View() tea.View {
 		m.syncPresentationWindow()
 		v = m.root().View(m.width, m.height, m.layout())
 		v.Content = m.toProfile(v.Content)
+		if m.mouseOff {
+			// Selectable text asks for mouse reports by itself; with the
+			// mouse off the terminal keeps them, for its own selection.
+			v.MouseMode, v.OnMouse = tea.MouseModeNone, nil
+		}
 	}
 	v.AltScreen = true
 	// Ask for kitty event types (key releases and repeat flags) on top of
@@ -207,7 +220,7 @@ func (m *Model) frame(home homeView) bloom.Child {
 		})
 	}
 	rows := []bloom.Child{
-		bloom.Fixed(1, m.kit.TabsLeaf(m.tabs())).ID(slotTabs),
+		bloom.Fixed(1, m.tabsNode()).ID(slotTabs),
 		bloom.Fixed(1, m.kit.Leaf(m.badge)).ID(slotBadge),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
 		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
@@ -304,21 +317,22 @@ func (m *Model) body(home homeView) bloom.Child {
 	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
 		return m.tasks.LogsNode(m.kit)
 	case m.taskView && m.tasks != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) })
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) }), m.taskHits, m.taskScroll)
 	case m.notifView && m.notifs != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) })
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
+			m.notificationHits, m.notificationScroll)
 	case m.presentation != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string {
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
 			lines := m.viewLines(b.Height)
 			for i, line := range lines {
 				lines[i] = ui.Truncate(line, b.Width)
 			}
 			return strings.Join(lines, "\n")
-		})
+		}), m.viewHits, nil)
 	}
 	switch m.currentMode() {
 	case modeLauncher:
-		return m.kit.Leaf(func(b ui.Bounds) string { return strings.Join(m.renderLauncher(b.Width, b.Height), "\n") })
+		return m.launcherNode()
 	case modeHome:
 		return m.homeNode(home)
 	}

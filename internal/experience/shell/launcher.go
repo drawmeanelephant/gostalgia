@@ -25,18 +25,54 @@ func (m *Model) filteredApps() []appStatus {
 	return out
 }
 
+// launcherSearch is the launcher's search line.
+func (m *Model) launcherSearch() string {
+	searchBar := m.kit.Heading("SEARCH: ")
+	if m.launcherQuery == "" {
+		return searchBar + m.kit.Muted("type to filter apps...")
+	}
+	return searchBar + m.kit.Text(m.launcherQuery) + m.kit.Selection(" ")
+}
+
+// launcherCards is which of n filtered apps the launcher shows cards for in
+// a body of bodyHeight rows, [start, end), keeping the selected one in
+// view, and how many rows each card takes. The cards from top stay while
+// the selected one is among them, so a click that selects a card does not
+// scroll it from under the pointer before the second click of a double
+// click.
+func launcherCards(selected, n, bodyHeight, top int) (start, end, cardHeight int) {
+	availHeight := max(1, bodyHeight-1)
+	cardHeight = min(5, availHeight)
+	if cardHeight == 3 {
+		cardHeight = 2
+	}
+	visible := max(1, (availHeight-2)/cardHeight)
+	start = max(0, selected-visible+1)
+	if top >= 0 && top <= max(0, n-visible) && selected >= top && selected < top+visible {
+		start = top
+	}
+	return start, min(n, start+visible), cardHeight
+}
+
+// launcherCard is a's card, w cells wide and cardHeight rows tall.
+func (m *Model) launcherCard(a appStatus, focused bool, w, cardHeight int) string {
+	status, state := "READY", theme.Normal
+	if a.Running {
+		status, state = fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success
+	}
+	return m.kit.AppCard(ui.AppCard{
+		Name: a.Manifest.Name, ID: a.Manifest.ID, Version: a.Manifest.Version,
+		Status: status, State: state, Focused: focused,
+	}, ui.Bounds{Width: w, Height: cardHeight})
+}
+
+// renderLauncher is the launcher's lines in a body w cells wide and
+// bodyHeight rows tall; launcherNode lays the same lines out as nodes.
 func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	var lines []string
 	filtered := m.filteredApps()
 	selected := min(m.selected, max(0, len(filtered)-1))
-
-	searchBar := m.kit.Heading("SEARCH: ")
-	if m.launcherQuery == "" {
-		searchBar += m.kit.Muted("type to filter apps...")
-	} else {
-		searchBar += m.kit.Text(m.launcherQuery) + m.kit.Selection(" ")
-	}
-	lines = append(lines, ui.Truncate(searchBar, w))
+	lines = append(lines, ui.Truncate(m.launcherSearch(), w))
 
 	if len(m.apps) == 0 {
 		notice := m.kit.Notice(ui.Notice{
@@ -54,35 +90,34 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 		return lines
 	}
 
-	availHeight := max(1, bodyHeight-1)
-	cardHeight := min(5, availHeight)
-	if cardHeight == 3 {
-		cardHeight = 2
-	}
-	visible := max(1, (availHeight-2)/cardHeight)
-	start := max(0, selected-visible+1)
-	end := min(len(filtered), start+visible)
-
+	start, end, cardHeight := launcherCards(selected, len(filtered), bodyHeight, m.launcherTop)
 	for i := start; i < end; i++ {
-		a := filtered[i]
-		status, state := "READY", theme.Normal
-		if a.Running {
-			status, state = fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success
-		}
-		card := m.kit.AppCard(ui.AppCard{
-			Name: a.Manifest.Name, ID: a.Manifest.ID, Version: a.Manifest.Version,
-			Status: status, State: state, Focused: i == selected,
-		}, ui.Bounds{Width: w, Height: cardHeight})
-		lines = append(lines, strings.Split(card, "\n")...)
+		lines = append(lines, strings.Split(m.launcherCard(filtered[i], i == selected, w, cardHeight), "\n")...)
 	}
-
-	if len(filtered) > 0 {
-		a := filtered[selected]
-		lines = append(lines, m.kit.Muted(ui.Truncate(safe(a.Manifest.Description), w)),
-			m.kit.Muted(ui.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, " · ")), w)))
-	}
-
+	a := filtered[selected]
+	lines = append(lines, m.kit.Muted(ui.Truncate(safe(a.Manifest.Description), w)),
+		m.kit.Muted(ui.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, " · ")), w)))
 	return lines
+}
+
+// selectApp selects the filtered app with ID id, as the arrow keys move to
+// it, and reports whether the launcher lists it.
+func (m *Model) selectApp(id string) bool {
+	for i, a := range m.filteredApps() {
+		if a.Manifest.ID == id {
+			m.selected = i
+			return true
+		}
+	}
+	return false
+}
+
+// launchSelected launches the selected app, as Enter does in the launcher.
+func (m *Model) launchSelected() tea.Cmd {
+	if filtered := m.filteredApps(); len(filtered) > 0 && m.selected < len(filtered) {
+		return m.submit("launch " + filtered[m.selected].Manifest.ID)
+	}
+	return nil
 }
 
 func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -110,11 +145,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// A held key launches once, not per auto-repeat.
 			return m, nil
 		}
-		if len(filtered) > 0 && m.selected < len(filtered) {
-			a := filtered[m.selected]
-			return m, m.submit("launch " + a.Manifest.ID)
-		}
-		return m, nil
+		return m, m.launchSelected()
 	case "f3":
 		if len(filtered) > 0 && m.selected < len(filtered) && !msg.IsRepeat {
 			a := filtered[m.selected]

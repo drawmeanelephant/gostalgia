@@ -218,6 +218,36 @@ func (m *Model) filteredPaletteItems() []paletteItem {
 	return out
 }
 
+// key is what tells the item from the others the palette lists.
+func (it paletteItem) key() string { return it.Tag + "\x00" + it.Title + "\x00" + it.Detail }
+
+// executePaletteItem closes the palette and runs its selected item, as
+// Enter does.
+func (m *Model) executePaletteItem() tea.Cmd {
+	filtered := m.filteredPaletteItems()
+	if len(filtered) > 0 && m.paletteSelected < len(filtered) {
+		item := filtered[m.paletteSelected]
+		m.closePalette()
+		if item.Action != nil {
+			return item.Action(m)
+		}
+	}
+	m.closePalette()
+	return nil
+}
+
+// runPaletteItem selects the listed item with key and runs it, if the
+// palette still lists it.
+func (m *Model) runPaletteItem(key string) tea.Cmd {
+	for i, it := range m.filteredPaletteItems() {
+		if it.key() == key {
+			m.paletteSelected = i
+			return m.executePaletteItem()
+		}
+	}
+	return nil
+}
+
 func (m *Model) openPalette() {
 	m.paletteOpen = true
 	m.paletteQuery = ""
@@ -243,7 +273,8 @@ func paletteRect(w, h int) (y, width, height int) {
 // paletteLayer is the open palette as a modal layer over the screen.
 func (m *Model) paletteLayer() bloom.LayerNode {
 	y, w, h := paletteRect(m.width, m.height)
-	box := ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) })
+	box := m.withMouse(ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) }),
+		m.paletteHits, m.paletteScroll)
 	return bloom.Layer(box).Anchor(bloom.Center, bloom.Start).Offset(0, y).Size(w, h).
 		Modal().Backdrop(m.backdrop()...).ID(layerPalette)
 }
@@ -316,15 +347,7 @@ func (m *Model) handlePaletteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// types flag the repeats; see viewKey for the full rule).
 			return m, nil
 		}
-		if len(filtered) > 0 && m.paletteSelected < len(filtered) {
-			item := filtered[m.paletteSelected]
-			m.closePalette()
-			if item.Action != nil {
-				return m, item.Action(m)
-			}
-		}
-		m.closePalette()
-		return m, nil
+		return m, m.executePaletteItem()
 	case "esc", "ctrl+p":
 		m.closePalette()
 		return m, nil

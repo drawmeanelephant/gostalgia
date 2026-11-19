@@ -451,6 +451,11 @@ and Settings application (`com.gostalgia.settings`):
 - **Live Theme & Motion Switching**: Changes to `theme`, `accessibility.color_mode`,
   and `accessibility.reduced_motion` apply immediately across the running shell without
   rebooting.
+- **Mouse**: On by default. `accessibility.mouse` (missing means on) and the
+  `mouse [on|off]` command turn clicks, the wheel, tooltips and
+  select-to-copy on or off; every mouse action keeps its key, and copies go
+  through `clipboard/write` under the operator's clipboard policy, never
+  OSC 52. See [shell.md](shell.md#mouse-and-clipboard-issue-211).
 - **Interactive Preview & Rollback**: Live theme selections rendered in Settings apply
   in-memory preview overrides via `config/preview`, which can be committed (`save`) or
   reverted (`revert` / `cancel`) safely.

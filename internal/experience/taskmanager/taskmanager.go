@@ -500,11 +500,17 @@ func (m *Model) pidWidth() int {
 	return w
 }
 
+// window is which processes n rows show, [start, end), windowed so the
+// selected row stays visible.
+func (m *Model) window(n int) (start, end int) {
+	start = max(0, min(m.selected-n+1, max(0, len(m.procs)-n)))
+	return start, min(len(m.procs), start+n)
+}
+
 // processLines renders up to n process rows, windowed so the selected row
 // stays visible.
 func (m *Model) processLines(kit ui.Kit, cols []column, w, n int) []string {
-	start := max(0, min(m.selected-n+1, max(0, len(m.procs)-n)))
-	end := min(len(m.procs), start+n)
+	start, end := m.window(n)
 	var lines []string
 	for i := start; i < end; i++ {
 		p := m.procs[i]
@@ -516,6 +522,84 @@ func (m *Model) processLines(kit ui.Kit, cols []column, w, n int) []string {
 		}
 	}
 	return lines
+}
+
+// RowSpan is where the table shows a process's row in the bounds it was
+// rendered in: the row's PID, its line and the cells across it.
+type RowSpan struct {
+	PID         int32
+	X, Y, Width int
+}
+
+// TableRows reports the process rows Render shows in bounds, top to
+// bottom, as it lays them out. Only the table has rows; the log tail and a
+// receipt have none.
+func (m *Model) TableRows(kit ui.Kit, bounds ui.Bounds) []RowSpan {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if bounds.Width <= 0 || bounds.Height <= 0 || len(m.procs) == 0 ||
+		m.mode == ModeLogs || (m.mode == ModeReceipt && m.receipt != nil) {
+		return nil
+	}
+	x, y, w, n, bottom := 0, 0, bounds.Width, bounds.Height, bounds.Height
+	if bounds.Height < compactTableHeight {
+		if n >= 2 {
+			y, n = 1, n-1
+		}
+	} else {
+		cx, cy, content := kit.PanelContentRect(bounds)
+		// The header and its rule sit above the rows, the status and help
+		// lines below them, as renderTable lays them out.
+		x, y, w, n, bottom = cx, cy+2, content.Width, max(1, content.Height-4), cy+content.Height
+	}
+	start, end := m.window(n)
+	spans := make([]RowSpan, 0, end-start)
+	for i := start; i < end && y+i-start < bottom; i++ {
+		spans = append(spans, RowSpan{PID: m.procs[i].ID, X: x, Y: y + i - start, Width: w})
+	}
+	return spans
+}
+
+// SelectPID selects the row of process pid in the table and reports
+// whether the table has it.
+func (m *Model) SelectPID(pid int32) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.mode != ModeTable {
+		return false
+	}
+	for i, p := range m.procs {
+		if p.ID == pid {
+			m.selected = i
+			return true
+		}
+	}
+	return false
+}
+
+// SetLogsPos scrolls the open log tail to pos, as ScrollLogs does, such as
+// for the mouse wheel. A tail that is not following stays where it is
+// scrolled to, its end included, until ToggleFollow.
+func (m *Model) SetLogsPos(pos bloom.ViewportPos) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if l := m.openLog(); l != nil {
+		l.pos = pos
+	}
+}
+
+// LogsInView is the text of the open log tail's lines that f, a frame
+// solved with it, shows, a line each and without styles, or "" while none
+// is open.
+func (m *Model) LogsInView(f *bloom.Frame) string {
+	v, ok := f.Viewport(LogsViewport)
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	l := m.openLog()
+	if !ok || l == nil || v.Rows <= 0 || l.buf.Len() == 0 {
+		return ""
+	}
+	return ui.ViewportText(v, l.buf)
 }
 
 // renderCompactTable keeps the table usable in a body too short for its

@@ -38,6 +38,36 @@ type homeItem struct {
 	doc  docShortcut
 }
 
+// key is what tells the item from the others of its kind: an app's ID, a
+// document's path.
+func (it homeItem) key() string {
+	if it.kind == homeItemApp {
+		return it.app.Manifest.ID
+	}
+	return it.doc.Path
+}
+
+// openHome opens it, as Enter does on it: an app's view, or the document.
+func (m *Model) openHome(it homeItem) tea.Cmd {
+	if it.kind == homeItemApp {
+		return m.openView(it.app)
+	}
+	return m.submit("open " + it.doc.Path)
+}
+
+// openHomeItem selects the visible Home item of kind with key and opens it,
+// if Home still shows it.
+func (m *Model) openHomeItem(kind homeItemType, key string) tea.Cmd {
+	hv := m.homeView()
+	for i, it := range hv.items[:max(0, hv.visible)] {
+		if it.kind == kind && it.key() == key {
+			m.homeSelected = i
+			return m.openHome(it)
+		}
+	}
+	return nil
+}
+
 func formatUptime(seconds float64) string {
 	if seconds <= 0 {
 		return "just booted"
@@ -133,16 +163,18 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 		return m.kit.Heading("SYSTEM ACTIVITY") + "\n" + m.kit.Muted(ui.Truncate(sysLine, b.Width))
 	})
 	appsRows := 1 + max(1, running)
-	apps := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeApps(b, hv) }).Natural(0, appsRows)
+	apps := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeApps(b, hv) }).Natural(0, appsRows),
+		func(b ui.Bounds) []hit { return m.homeAppHits(b, hv) }, nil)
 	docsRows := 1 + max(1, len(m.homeData.Documents))
-	docs := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows)
-	return ui.SizedNode(func(ctx bloom.Context) bloom.Child {
+	docs := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows),
+		func(b ui.Bounds) []hit { return m.homeDocHits(b, hv, running) }, nil)
+	return m.withMouse(ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 		return bloom.Column(
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
 			bloom.Auto(apps).Min(min(appsRows, ctx.Height)).ID(homeAppsID),
 			bloom.Auto(docs).Min(min(2, docsRows)).Collapsible(prioHomeDocuments).ID(homeDocsID),
 		).Gap(1)
-	})
+	}), nil, m.homeScroll)
 }
 
 func (m *Model) homeRow(selected bool, name, rest string) string {
@@ -222,11 +254,7 @@ func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if hv.selected >= 0 {
-			it := hv.items[hv.selected]
-			if it.kind == homeItemApp {
-				return m, m.openView(it.app)
-			}
-			return m, m.submit("open " + it.doc.Path)
+			return m, m.openHome(hv.items[hv.selected])
 		}
 		return m, nil
 	case "f4":

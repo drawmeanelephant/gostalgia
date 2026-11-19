@@ -46,6 +46,10 @@ Default settings are declared in `internal/config/defaults.go`:
 | `shortcuts.settings` | `string` | `"f7"` | Shell shortcut for settings application. |
 | `shortcuts.palette` | `string` | `"ctrl+p"`| Shell shortcut for quick command palette. |
 
+The shell also reads `accessibility.mouse` (`bool`), which has no built-in default:
+missing means mouse input is on, `false` turns it off for new shells. See
+[shell.md](shell.md#mouse-and-clipboard-issue-211).
+
 Shortcut values are matched case-insensitively against Bubble Tea **v2** keystroke
 names (e.g. `f1`, `ctrl+p`, `shift+tab`, `pgdown`, `enter`). Names saved while the
 shell ran on Charm v1 that used v1-only spellings are not normalized or rewritten;

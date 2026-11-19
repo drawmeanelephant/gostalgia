@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"bloomfx.dev/bloom"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
 )
 
@@ -442,7 +443,11 @@ func (m *Model) logText(kit ui.Kit, l *processLog) bloom.Child {
 	}
 	marker := kit.Theme().Focus.Marker + " "
 	current, matched := l.match.Line, l.matched
-	vp := bloom.Viewport(l.buf).At(l.pos).Style(kit.TextStyle()).ID(LogsViewport).
+	// The wheel moves the tail as the arrow keys do: scrolling it stops it
+	// following, and only f starts it again. The mouse selects text in it
+	// to copy.
+	vp := bloom.Viewport(l.buf).At(l.pos).Style(kit.TextStyle()).ID(LogsViewport).Selectable().
+		OnScroll(func(pos bloom.ViewportPos) tea.Cmd { m.SetLogsPos(pos); return nil }).
 		Gutter(markerWidth, func(row bloom.GutterRow) string {
 			if matched && row.Line == current && !row.Continued {
 				return kit.Text(marker)

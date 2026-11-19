@@ -33,6 +33,7 @@ runtime (`gostalgia boot --root /tmp/gs`). Shell attachment is not implemented.
 | `backup [export|inspect|preview|restore]` | Export portable backup, preview conflicts, or restore workspace |
 | `ps`, `status` | Process table with capability grants / runtime status |
 | `cls`, `clear` | Clear transcript |
+| `mouse [on\|off]` | Show, or turn on or off, mouse input for this shell; see [Mouse and clipboard](#mouse-and-clipboard-issue-211) |
 | `exit`, `quit` | Leave shell and shut down owned runtime |
 | `shutdown` | Request runtime shutdown over IPC |
 
@@ -116,6 +117,10 @@ JSON is preserved, not passed through path/quote parsing.
     or another view opened from it, leaves it to finish when you come
     back. A response for a process you have since left never replaces the
     tail on screen.
+- **Ctrl-Y**: copy to the host clipboard, under the operator's clipboard
+  policy: the text selected with the mouse, or else the transcript or log
+  tail lines on screen. See
+  [Mouse and clipboard](#mouse-and-clipboard-issue-211).
 - **Ctrl-C/D**: exit. A pending IPC command doesn't block the event loop;
   while it runs, command editing is disabled (exit/resize/scroll still work).
 
@@ -254,7 +259,8 @@ exact pin:
 6. **No bloom clipboard at alpha.6.** `WithClipboard`/`CopySelection` always
    emit OSC 52, even when the callback denies the copy. Copy goes through the
    shell's `clipboard/write` IPC instead
-   ([#206 planning note](https://github.com/drawmeanelephant/gostalgia/issues/206#issuecomment-6990850564)).
+   ([#206 planning note](https://github.com/drawmeanelephant/gostalgia/issues/206#issuecomment-6990850564);
+   see [Mouse and clipboard](#mouse-and-clipboard-issue-211)).
 
 Run the proofs with:
 
@@ -350,11 +356,108 @@ event-type request on the returned `tea.View`.
   input. A busy prompt, any other mode, an open palette or confirmation, and the
   size notice show no cursor; closing the layer restores it.
 - **Root lifecycle.** Each shell model owns one root, built with
-  `bloom.WithColors` from its kit's text and surface colors and
-  `bloom.WithCopyFlash(false)`. The root is rebuilt lazily, on the next
-  render after the effective theme, color mode or reduced-motion setting
-  changes, so a config poll that re-applies the same settings keeps it.
+  `bloom.WithColors` from its kit's text and surface colors,
+  `bloom.WithCopyFlash(false)`, the kit's selection style and, while the
+  mouse is on, the kit's tooltip style. The root is rebuilt lazily, on the
+  next render after the effective theme, color mode, reduced-motion or mouse
+  setting changes, so a config poll that re-applies the same settings keeps
+  it.
   `Root.Init` is never called, and the terminal's `ForegroundColorMsg`,
   `BackgroundColorMsg` and `ColorProfileMsg` replies never reach the root.
   Separate models, such as concurrent SSH attaches in one process, never
   share a root.
+
+### Mouse and clipboard (Issue #211)
+
+Mouse input is additive: every click, wheel step and copy has a keyboard
+equivalent, and the shell stays complete without a mouse.
+
+- **On by default.** A new shell asks the terminal for mouse reports through
+  the `tea.View` it returns (Bubble Tea stays the only terminal owner). The
+  default is on because nothing is lost by it: every action keeps its key,
+  and clicks, the wheel, tooltips and select-to-copy make the shell easier
+  to discover. Many terminals still select natively with a modifier held
+  while the shell has the mouse (Shift in xterm-like terminals, Option in
+  iTerm2).
+- **Turning it off.** `mouse off` stops mouse reporting at once, so the
+  terminal's own selection and copy work; `mouse on` turns it back on and
+  `mouse` shows the setting. Turning it off drops any press, double click,
+  hover, tooltip or selection in progress: a click before `mouse off` and
+  one after `mouse on` are never a double click. A report the terminal sent
+  before it saw the change does nothing.
+- **Configuration.** `accessibility.mouse` (boolean) sets the default:
+  missing means on, `false` means off. Set it with
+  `call config/set {"path":"accessibility.mouse","value":false}` or any
+  `config/set` client. It has no built-in default in
+  `internal/config/defaults.go`, so config validation does not check it; a
+  value that is not a boolean is ignored, which leaves the mouse on. The
+  shell reads it at start and with each config poll, and applies it only
+  when the effective value changes: `mouse on|off` lasts for this shell,
+  is not saved, and holds until the configured value next changes. Each
+  shell, including each SSH attach, has its own setting, root and gestures.
+- **Mouse modes.** While on, the shell asks for cell-motion reports
+  (clicks, the wheel and drags); while a cut line with a tooltip is on
+  screen, bloom asks for all motion, for hover. Off asks for none. On exit
+  or detach the terminal is restored as before, mouse tracking included
+  (`ESC[?1000l`, `ESC[?1002l`, `ESC[?1003l`, `ESC[?1006l`).
+
+Each click runs the same function as its key, which checks the state when
+the click arrives, not when the frame was drawn: a busy shell, an action in
+flight, a disabled action or cell, a loading or unnegotiated app view, and an
+open palette or confirmation stop a click as they stop the key. A click only
+selects or opens; stopping, reaping and shutdown stay behind their keys and
+confirmations. Borders, headings, blank cells and the active tab do nothing.
+
+| Mouse | Keyboard equivalent |
+|---|---|
+| Click a tab | F1 Home, F2 Apps, Esc Prompt, F5 Tasks, F6 Notifications (or their `shortcuts.*` keys). The click always shows the tab's screen, where a key pressed on its own screen goes back to the prompt or the screen beneath. |
+| Click a launcher card | ↑/↓ to select it |
+| Double-click a launcher card | Select it and Enter: launches it once. The cards stay in place while the clicked one is in view, so the second click lands on the same card. |
+| Click a palette item | ↑/↓ to it, Enter |
+| Click a running app or document on Home | ↑/↓ to it, Enter |
+| Click a Task Manager row | ↑/↓ to it, Enter: its crash receipt if one is recorded, else its log tail |
+| Click a notification | ↑/↓ to it, Enter: marks it seen, and opens its crash receipt if it has one |
+| Click an app view's action or grid cell | Tab and the arrows to it, Enter |
+| Wheel over the transcript | PgUp/PgDown. Scrolled up, it stays put as output arrives; back at the end it follows again. |
+| Wheel over a log tail | ↑/↓ and PgUp/PgDown. Wheeling never starts following; press **f**. |
+| Wheel over the launcher, palette, Home, Task Manager table or Notification Center | ↑/↓, one row a step, stopping at the ends; the wheel never opens anything |
+| Hover a cut app description or `GRANT` line in the launcher | A wider terminal shows it uncut; `apps` lists every app's grants |
+| Drag over transcript or log tail text | Ctrl-Y copies the lines on screen |
+
+**Selection and copy.** Dragging over the transcript or a log tail selects
+text with bloom's public selection (`bloom.SelectionMsg`). When the drag
+ends, the shell copies the selection; Ctrl-Y copies it again, or with no
+selection, the transcript or log tail lines on screen, and says "Nothing to
+copy" elsewhere. A copy is an asynchronous command calling the runtime's
+authenticated `clipboard/write` with `{"text": …, "target": "host"}`; its
+answer comes back as a toast, and a slow answer never holds up keys, resize
+or exit.
+
+- **Policy.** The runtime's clipboard service decides. The host clipboard is
+  off by default: a copy then fails with `policy_denied` and changes no
+  clipboard, and the "Copy blocked" toast says an operator can turn on
+  `clipboard.enabled` and `clipboard.allow_host_write` with
+  `sys/policy/update` (only `clipboard.allow_host_write` when the integration
+  is on but writes are off). The shell cannot grant either. "Copied"
+  reports a write the service accepted, and "Copy failed" a host without a
+  clipboard or any other error.
+- **Host, not auto.** The shell asks for `target: "host"` because `auto`
+  falls back to the environment's internal clipboard when policy denies the
+  host, and reports success: a denied copy would look like a host copy. A
+  host write also becomes the internal clipboard's content. The shell has
+  no internal-only copy; `call clipboard/write {"text":"…","target":"internal"}`
+  writes the internal clipboard explicitly.
+- **SSH.** The host clipboard is the clipboard of the machine running the
+  runtime. An SSH-attached shell copies there, under that machine's
+  operator policy, never to the SSH client's clipboard. To copy into the
+  client's clipboard, use `mouse off` and the client terminal's own
+  selection.
+- **Approved deviation: no OSC 52.** At alpha.6, bloom's
+  `WithClipboard`/`CopySelection` send the text to the terminal's
+  clipboard with OSC 52 whatever the clipboard function answers
+  (`select.go`: the write's error is recorded, then `tea.SetClipboard` runs
+  regardless), which over SSH is the client's clipboard and outside
+  operator policy. The shell never installs `WithClipboard`, never calls
+  `CopySelection` or `tea.SetClipboard`, and writes no OSC 52 on any
+  outcome; `TestNoTerminalClipboardWrites` keeps those names out of
+  `internal/experience`.
