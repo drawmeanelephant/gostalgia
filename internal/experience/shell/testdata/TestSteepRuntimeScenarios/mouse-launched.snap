@@ -3,14 +3,14 @@
 ┃  Home  [Apps]  Prompt   Tasks   Notifications                                ┃
 ┃ ✓ ONLINE   guest · C: environment drive                                      ┃
 ┃                                                                              ┃
-┃ SEARCH: echo                                                                 ┃
+┃ SEARCH: steepnotifier                                                        ┃
 ┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
-┃ ┃ › Echo                                                                   ┃ ┃
+┃ ┃ › Steep Notifier                                                         ┃ ┃
 ┃ ┃ ✓ LIVE / PID N                                                           ┃ ┃
-┃ ┃ com.gostalgia.echo  v0.1.0                                               ┃ ┃
+┃ ┃ com.test.steepnotifier  v1.0.0                                           ┃ ┃
 ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
-┃ Your words, reflected back. A tiny app with a tiny permission grant.         ┃
-┃ GRANT  ipc                                                                   ┃
+┃                                                                              ┃
+┃ GRANT  ipc · notify                                                          ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
@@ -19,6 +19,6 @@
 ┃                                                                              ┃
 ┃                                                                              ┃
 ┃                                                                              ┃
-┃ C:\users\guest> Echo is LIVE (PID N). Enter relaunch, F3 stop, F4 view.      ┃
+┃ C:\users\guest> Steep Notifier is LIVE (PID N). Enter relaunch, F3 stop, F4… ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 Esc PROMPT · Enter RUN · F3 STOP · F4 VIEW · F5 TASKS · ↑↓ SELECT · Ctrl-P PALET

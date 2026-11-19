@@ -322,15 +322,17 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 
 	t.Run("mouse", func(t *testing.T) {
 		h, client := newSteepRuntime(t)
-		// Stop the boot-time Echo through the keyboard, then perform the same
-		// launcher activation through actual decoded mouse reports.
+		// Filter the external app with the keyboard, then navigate and launch
+		// through actual decoded mouse reports. An app that was not running
+		// keeps unrelated process-exit notifications out of this static frame;
+		// launcher_launch_stop owns Echo stop/relaunch coverage.
 		h.Key("f2").Wait("SEARCH: type to filter apps...")
-		h.Type("echo").Wait("com.gostalgia.echo")
-		steepStopSelectedEcho(t, h, client)
+		h.Type("steepnotifier").Wait("com.test.steepnotifier")
+		steepAppRunning(t, client, steepNotifierID, false)
 		h.Locate(reel.Contains("Home")).LeftClick().Wait("SYSTEM ACTIVITY")
-		h.Locate(reel.Contains("Apps")).LeftClick().Wait("SEARCH: echo")
-		h.Locate(reel.Contains("Echo")).LeftClick(reel.Repeat(2)).Wait("LIVE / PID")
-		steepAppRunning(t, client, "com.gostalgia.echo", true)
+		h.Locate(reel.Contains("Apps")).LeftClick().Wait("SEARCH: steepnotifier")
+		h.Locate(reel.Contains("Steep Notifier")).LeftClick(reel.Repeat(2)).Wait("LIVE / PID")
+		steepAppRunning(t, client, steepNotifierID, true)
 		steepSnapshot(h, "launched")
 	})
 
