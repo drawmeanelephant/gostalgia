@@ -142,6 +142,10 @@ type Model struct {
 	client        Caller
 	closed        <-chan struct{}
 	width, height int
+	// geometryKnown distinguishes the constructor's placeholder size from a
+	// size the terminal actually delivered, so startup motion waits for
+	// usable geometry instead of revealing before the terminal reports it.
+	geometryKnown bool
 	cwd           string
 	input         []rune
 	cursor        int
@@ -223,8 +227,12 @@ type Model struct {
 
 	shortcuts           map[string]string
 	initialConfigLoaded bool
-	pendingTheme        string // user theme name with an in-flight theme/get; only the latest resolves
-	unresolvedTheme     string // config theme name that failed user-theme resolution; not retried
+	// initialPolicyKnown marks an effective config read, not a partial live
+	// update. The startup reveal waits for it so the first policy, including
+	// a configured ReducedMotion value, is the one it honors.
+	initialPolicyKnown bool
+	pendingTheme       string // user theme name with an in-flight theme/get; only the latest resolves
+	unresolvedTheme    string // config theme name that failed user-theme resolution; not retried
 
 	attached     bool
 	sessionID    string
@@ -1158,7 +1166,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// shell consumes a new identity on its next message. No command is
 	// scheduled for an identity it has already seen.
 	toastCmd := m.syncToastMotion()
-	return model, tea.Batch(rootCmd, cmd, toastCmd, m.updateMotion(msg))
+	startupCmd := m.syncStartupMotion()
+	return model, tea.Batch(rootCmd, cmd, toastCmd, startupCmd, m.updateMotion(msg))
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1200,6 +1209,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case configUpdateMsg:
 		var themeCmd tea.Cmd
+		if msg.loaded {
+			m.initialPolicyKnown = true
+		}
 		if msg.theme != "" {
 			if m.SetThemeByName(msg.theme) {
 				m.pendingTheme = ""
@@ -1316,6 +1328,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.geometryKnown = true
 		// Rows and cells moved; the pointer's old target identity no longer
 		// describes what is under it.
 		m.clearHoverAll()

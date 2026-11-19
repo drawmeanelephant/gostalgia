@@ -47,6 +47,7 @@ suite:
 ```sh
 go test -count=1 -v ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
 go test -count=1 -v ./internal/experience/shell -run '^TestSteepMotionScenarios$'
+go test -count=1 -v ./internal/experience/shell -run '^TestSteepStartup'
 go test -count=1 -v ./test/e2e -run '^(TestCharmRestrictedToExperience|TestSteepImportFence|TestApprovedCharmBaseline)$'
 ```
 
@@ -57,7 +58,10 @@ recovery, bracketed paste, decoded mouse input, toast geometry, and Ctrl-C
 terminal restoration. The motion scenarios additionally advance both injected
 clocks through a real failed launch, capturing 0/20/160 ms frames, and drive the
 palette/dialog opening reveal and a new toast entrance to a settled snapshot
-without wall-clock sleeps. Checked-in snapshots are
+without wall-clock sleeps. The startup scenarios freeze the clock for the
+once-per-model CRT reveal, record its blank first eligible frame and endpoint,
+and boot an initial ReducedMotion settings file to prove no frame is scheduled.
+Checked-in snapshots are
 compared read-only by default; see
 [experience.md](experience.md#verification-and-snapshots) for deliberate updates.
 

@@ -200,7 +200,7 @@ autodetection or host environment heuristics:
     and schedules zero animation-frame commands. Turning it on during an effect also
     cancels subsequent animation updates without changing the static frame.
 
-### Finite per-session motion (Issues #213, #239)
+### Finite per-session motion (Issues #213, #239, #240)
 
 The contract permits only event-triggered transitions of **200 ms or less**, with frame
 commands scheduled only while an effect is active. Three event-owned effects implement it:
@@ -218,6 +218,17 @@ commands scheduled only while an effect is active. Three event-owned effects imp
   identity. Only the incoming toast animates; older toasts already in the stack render
   settled. The shell observes the shared manager's active toasts on its next message, so a
   service-written notification starts its entrance then, not from a background loop.
+
+A shell model also performs **one 180 ms `fx.Unfold` CRT-style startup reveal**, drawn
+around the whole frame. It starts only after the terminal has delivered usable geometry
+(30×10 or larger) and the effective initial motion policy has arrived through the initial
+configuration read, in either order. `motion on` means ReducedMotion, so a model whose
+effective policy is reduced starts and stays settled; it consumes the once-only event
+without attaching an effect or returning an animation command. The event is consumed when
+it starts or skips, and cancellation during the reveal consumes it too: configuration
+polls, theme changes, resizes, rebuilt roots, stale frames, and switching back from
+ReducedMotion never replay it. Rebuilding the bloom root is not a startup trigger; the
+transition is derived from the model's finite value on each render.
 
 Each effect starts at progress zero, renders its final static frame at progress one, and
 then removes the transition node. No decorative follow-up is scheduled. An unchanged
@@ -238,10 +249,11 @@ applies. The built-in `false` config default therefore cannot re-enable motion
 in Monochrome, HighContrast, or HighContrastLight.
 
 ReducedMotion attaches no transition, returns no animation-frame command, and renders every
-effect at its settled state. Enabling it during a palette, dialog, toast, or shake effect
-snap-cancels that effect; the `Set` that cancels it also invalidates the outstanding
+effect at its settled state. Enabling it during a palette, dialog, toast, shake, or startup
+reveal snap-cancels that effect; the `Set` that cancels it also invalidates the outstanding
 generation, so an already-scheduled frame can neither revive the effect nor schedule
-another. Re-enabling motion later does not replay an effect that was only being rendered.
+another. Re-enabling motion later does not replay an effect that was only being rendered,
+and a canceled startup reveal is consumed for that model.
 
 An idle shell starts no decorative goroutine, clock, spinner, permanent animation loop, or
 new frame command. The existing 500 ms process/configuration/log refresh and notification
@@ -269,7 +281,8 @@ Symbols and words communicate states without relying on color alone. These
 components render state, not behavior: the caller must enforce disabled actions.
 There are no decorative goroutines, spinners, or permanently running animation
 loops. The only finite transition clocks are the event-owned failed-launch shake,
-palette/dialog opening reveal, and new-toast entrance described above.
+palette/dialog opening reveal, new-toast entrance, and the once-per-model startup
+reveal described above.
 
 The current prompt/home and app shelf share panel/title, tabs, status badge,
 focus, and help vocabulary. Shelf app cards expose running PID vs. ready status;
@@ -819,7 +832,14 @@ captured frame messages and explicit clock advances replace wall-clock sleeps. I
 overlay scenario opens the palette with Ctrl-P and the dialog with a typed command,
 checks a midpoint frame, and compares the settled reveal with routed Down/Esc and
 Cancel input; its toast scenario records a notification, advances the entrance, and
-checks the settled stack plus an idle functional tick. Static
+checks the settled stack plus an idle functional tick. `TestSteepStartupReveal`
+delivers the real runtime configuration and terminal geometry to a frozen clock,
+records the blank first eligible frame and a visible midpoint, then settles the
+once-per-model reveal at its endpoint; `TestSteepStartupReducedInitialConfig` boots
+with an initial ReducedMotion settings file and proves no animation frame or
+transient effect occurs. The `TestStartup*` regressions cover both delivery orders,
+initial reduced policy, `motion on`, cancellation, completed/canceled no-replay
+triggers, and two attached models over one runtime. Static
 failed-launch goldens in `testdata/motion/` preserve pre-#213 output for Nostalgia with
 ReducedMotion and the three default-reduced themes. ANSI styling is removed for
 reviewable steep text. Only runtime-assigned PID digits and elapsed uptime are
@@ -834,6 +854,8 @@ go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
 UPDATE_SNAPSHOTS=true go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
 go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
 go test -count=1 ./internal/experience/shell -run '^TestSteepMotionScenarios$'
+UPDATE_SNAPSHOTS=true go test -count=1 ./internal/experience/shell -run '^TestSteepStartup'
+go test -count=1 ./internal/experience/shell -run '^TestSteepStartup'
 ```
 
 Regenerate component goldens deliberately, then inspect their diff:

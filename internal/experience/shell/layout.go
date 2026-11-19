@@ -212,13 +212,25 @@ func (m *Model) layout() bloom.Child {
 		return bloom.Column(bloom.Fill(note).ID(slotNote))
 	}
 	frame := m.frame(m.homeView())
+	var child bloom.Child = frame
 	switch {
 	case m.confirm != nil:
-		return bloom.Overlay(frame, m.dialogLayer())
+		child = bloom.Overlay(frame, m.dialogLayer())
 	case m.paletteOpen:
-		return bloom.Overlay(frame, m.paletteLayer())
+		child = bloom.Overlay(frame, m.paletteLayer())
 	}
-	return frame
+	return m.startupRevealNode(child)
+}
+
+// startupRevealNode draws the shell through the once-per-model CRT-style
+// startup reveal while its finite value is active. A consumed or reduced
+// startup attaches no transition at all, and the node disappears at progress
+// one, so no render keeps an effect of its own.
+func (m *Model) startupRevealNode(child bloom.Child) bloom.Child {
+	if progress, ok := m.startupProgress(); ok {
+		return bloom.Transition(progress, child, fx.Unfold{})
+	}
+	return child
 }
 
 // dialogLayer is the open confirmation as a modal layer over the screen.

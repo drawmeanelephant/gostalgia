@@ -30,6 +30,7 @@ func newSteepMotionRuntime(t *testing.T, th theme.Theme) (*steep.Harness, *fakeM
 	clock := newFakeMotionClock()
 	m.motion.now = clock.Now
 	m.motion.ready = false
+	m.motion.startupPhase = startupConsumed // these scenarios own only their event effects
 	m.syncMotion()
 	m.setMode(modePrompt)
 	h := steep.NewHarness(t, m,
