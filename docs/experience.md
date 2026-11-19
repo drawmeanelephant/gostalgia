@@ -744,11 +744,14 @@ Each demo window is an opaque surface: its title, body, blank cells, and border
 glyphs all carry the theme's surface background, so canvas text cannot show
 through. A static shadow band behind each window tints the cells it overlaps
 while leaving their text in place, giving visible depth without an animation
-timer or idle scheduling. Titles reserve fixed space for the complete `[X]`
-control and truncate to the remaining display cells, including wide and hostile
-text. Depth is color-only: Plain and Monochrome attach no shadow effect, and
-ANSI256 output is converted to the kit's profile because bloom blending mixes
-in 24-bit.
+timer or idle scheduling. The top border allocates the complete `[X]` control
+first, from the right edge at its actual decorated width, and the title takes
+whatever display cells remain, down to none. The close control sheds its focus
+decoration before the `[X]` itself would clip, so a 10-cell window keeps the
+control intact. Titles truncate within their allocation, including wide and
+hostile text. Depth is color-only: Plain and Monochrome attach no shadow effect,
+and ANSI256 output is converted to the kit's profile because bloom blending
+mixes in 24-bit.
 
 Run it with:
 

@@ -19,10 +19,10 @@ import (
 
 const (
 	closeLabel = "[X]"
-	// titleReserve is the border space the title must leave for both corners,
-	// the margins inside them, the border cell between title and close, and
-	// the full close control.
-	titleReserve = 8
+	// topBorderSpan is the border space both corners and the margins inside
+	// them take from a window's top edge before the title and close controls
+	// can share the rest.
+	topBorderSpan = 4
 	// shadowTint is how far the shadow band's background moves toward the
 	// theme's muted tone.
 	shadowTint = 0.35
@@ -102,11 +102,17 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 	closeControl := controlID{window: id, kind: "close"}
 	focused, _ := m.service.Focused()
 
+	// The close control is placed first, from the right edge, at its actual
+	// decorated width, because it must survive every valid window width. The
+	// title then takes whatever cells remain, including none.
+	closeText := m.closeControlText(b.Width, m.focus.Is(closeControl))
+	titleWidth := max(0, b.Width-topBorderSpan-lipgloss.Width(closeText)-1)
+
 	titleText := w.Title
 	if focused == id {
 		titleText = m.kit.Theme().Focus.Marker + " " + titleText
 	}
-	titleText = m.kit.Truncate(ui.Sanitize(titleText), max(1, b.Width-titleReserve))
+	titleText = m.kit.Truncate(ui.Sanitize(titleText), titleWidth)
 	title := bloom.Text(m.kit.Heading(titleText)).ID(titleControl).Truncate().On(
 		on.Drag(func(e on.Event) tea.Cmd {
 			m.drag(id, e)
@@ -119,7 +125,7 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 			return nil
 		}),
 	)
-	closeButton := m.controlText(closeLabel, m.focus.Is(closeControl)).ID(closeControl).Focusable().On(
+	closeButton := bloom.Text(closeText).ID(closeControl).Truncate().Focusable().On(
 		controlMouse(id, closeControl, m),
 		on.Press(func() tea.Cmd {
 			m.close(id)
@@ -128,8 +134,8 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 	)
 	body := m.presentationBody(id)
 	box := bloom.Box(m.windowStyle(), body).
-		Edge(bloom.Top, bloom.Start, title).
-		Edge(bloom.Top, bloom.End, closeButton)
+		Edge(bloom.Top, bloom.End, closeButton).
+		Edge(bloom.Top, bloom.Start, title)
 	scoped := bloom.Auto(box).ID(scopeID{window: id}).Scope()
 	return bloom.Layer(scoped).
 		ID(layerID{window: id}).
@@ -143,6 +149,20 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 			}
 			return nil
 		}))
+}
+
+// closeControlText is the text the top-border close control renders. That
+// control is allocated from the right edge before the title, so its focus
+// decoration is shed before the [X] itself could be clipped.
+func (m *Model) closeControlText(width int, focused bool) string {
+	label := ui.Sanitize(closeLabel)
+	if focused {
+		decorated := m.kit.FocusText(label)
+		if lipgloss.Width(decorated) <= max(0, width-topBorderSpan) {
+			return decorated
+		}
+	}
+	return m.kit.Text(label)
 }
 
 func controlMouse(id windows.ID, control controlID, m *Model) on.Handler {

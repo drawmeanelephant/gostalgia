@@ -496,9 +496,11 @@ none is hidden behind a claim of universal neutrality:
   rectangle with the theme surface, including border glyphs and blank body
   cells, so canvas text cannot bleed through. A static two-column/one-row
   shadow tint behind the window gives it visible depth without animation or
-  idle work; Plain and Monochrome omit the color-only effect. Titles reserve the
-  corners, margins, and complete `[X]` control, then truncate to the remaining
-  display cells for narrow, wide-glyph, or hostile text.
+  idle work; Plain and Monochrome omit the color-only effect. The top border
+  places the complete `[X]` control from the right edge before the title, at
+  its actual decorated width. The title takes the remaining cells, down to
+  none, and truncates for narrow, wide-glyph, or hostile text. At very narrow
+  widths the close control sheds its focus decoration before `[X]` would clip.
 - **Presentation rendering is deliberately an adapter subset.** The adapter
   maps SDK items, single-line fields, actions, blocks, meters, and grid cells to
   bloom text controls and owns selection/draft state. It does not reuse the

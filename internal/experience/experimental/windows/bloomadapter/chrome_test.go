@@ -169,8 +169,8 @@ func TestWindowTitlesTruncateWithinBorderAndKeepCloseControl(t *testing.T) {
 			if title.Max.X > close.Min.X || title.Min.X < layer.Min.X || title.Max.X > layer.Max.X {
 				t.Fatalf("title %v collides with close %v inside %v", title, close, layer)
 			}
-			if title.Dx() > tc.width-titleReserve || title.Dx() < 1 {
-				t.Fatalf("title width %d exceeds allocation %d", title.Dx(), tc.width-titleReserve)
+			if budget := tc.width - topBorderSpan - close.Dx() - 1; title.Dx() > budget || title.Dx() < 1 {
+				t.Fatalf("title width %d exceeds allocation %d", title.Dx(), budget)
 			}
 			cells := styledCells(t, content)
 			var rendered strings.Builder
@@ -190,6 +190,92 @@ func TestWindowTitlesTruncateWithinBorderAndKeepCloseControl(t *testing.T) {
 			}
 			if !strings.Contains(content, "One") {
 				t.Fatalf("body is not readable:\n%s", content)
+			}
+		})
+	}
+}
+
+// TestNarrowWindowsAllocateCloseBeforeTitle locks the demo's narrowest valid
+// geometry: the close control is placed from the right edge before the title,
+// so all three cells of [X] stay visible, and its focus decoration is shed
+// before the control itself would clip.
+func TestNarrowWindowsAllocateCloseBeforeTitle(t *testing.T) {
+	cases := []struct {
+		name         string
+		width        int
+		closeFocused bool
+		closeWidth   int
+		titleWidth   int
+	}{
+		{name: "focused ten", width: 10, closeFocused: true, closeWidth: 5, titleWidth: 0},
+		{name: "focused nine", width: 9, closeFocused: true, closeWidth: 5, titleWidth: 0},
+		{name: "focused eight sheds decoration", width: 8, closeFocused: true, closeWidth: 3, titleWidth: 0},
+		{name: "focused seven sheds decoration", width: 7, closeFocused: true, closeWidth: 3, titleWidth: 0},
+		{name: "focused eleven keeps a title remnant", width: 11, closeFocused: true, closeWidth: 5, titleWidth: 1},
+		{name: "unfocused ten", width: 10, closeWidth: 3, titleWidth: 2},
+		{name: "unfocused nine", width: 9, closeWidth: 3, titleWidth: 1},
+		{name: "unfocused seven", width: 7, closeWidth: 3, titleWidth: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			model, service, _, _ := newFixtureModel(t, ui.ANSI256)
+			model.close(padID)
+			service.Move(screenID, windows.Bounds{X: 0, Y: 0, Width: tc.width, Height: 8})
+			control := controlID{window: screenID, kind: "field", id: "text"}
+			if tc.closeFocused {
+				control = controlID{window: screenID, kind: "close"}
+			}
+			model.activate(screenID, control)
+			content := model.View().Content
+			layer, ok := model.LayerRect(screenID)
+			if !ok {
+				t.Fatal("no solved layer rect")
+			}
+			if layer.Dx() != tc.width {
+				t.Fatalf("layer width = %d, want %d", layer.Dx(), tc.width)
+			}
+			closeRect, ok := model.Frame().Rect(controlID{window: screenID, kind: "close"})
+			if !ok {
+				t.Fatal("close control is missing")
+			}
+			if closeRect.Dx() != tc.closeWidth || closeRect.Dy() != 1 || closeRect.Min.Y != layer.Min.Y {
+				t.Fatalf("close geometry = %v, want a %d-cell top-border control", closeRect, tc.closeWidth)
+			}
+			if closeRect.Max.X > layer.Max.X-1 {
+				t.Fatalf("close control %v overwrites the box corner inside %v", closeRect, layer)
+			}
+			cells := styledCells(t, content)
+			var closeText strings.Builder
+			for x := closeRect.Min.X; x < closeRect.Max.X; x++ {
+				closeText.WriteString(cellAt(t, cells, x, closeRect.Min.Y).content)
+			}
+			if !strings.HasSuffix(closeText.String(), closeLabel) {
+				t.Fatalf("close control %q is clipped, want %q intact", closeText.String(), closeLabel)
+			}
+			if tc.closeWidth == len(closeLabel) && closeText.String() != closeLabel {
+				t.Fatalf("narrow close kept decoration %q, want bare %q", closeText.String(), closeLabel)
+			}
+			if tc.closeWidth > len(closeLabel) && !strings.HasPrefix(closeText.String(), model.kit.Theme().Focus.Marker) {
+				t.Fatalf("focused close %q lacks the focus decoration", closeText.String())
+			}
+			titleRect, hasTitle := model.Frame().Rect(controlID{window: screenID, kind: "title"})
+			if tc.titleWidth == 0 {
+				if hasTitle {
+					t.Fatalf("title %v was allocated cells while the close control needs them", titleRect)
+				}
+			} else {
+				if !hasTitle {
+					t.Fatal("title is missing despite spare cells")
+				}
+				if titleRect.Dx() > tc.titleWidth {
+					t.Fatalf("title width = %d, want at most %d", titleRect.Dx(), tc.titleWidth)
+				}
+				if titleRect.Max.X >= closeRect.Min.X {
+					t.Fatalf("title %v collides with close %v", titleRect, closeRect)
+				}
+			}
+			if !strings.Contains(content, "On") {
+				t.Fatalf("body is not readable at width %d:\n%s", tc.width, content)
 			}
 		})
 	}
