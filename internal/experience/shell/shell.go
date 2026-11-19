@@ -117,6 +117,10 @@ type configUpdateMsg struct {
 	startupView   string
 	dnd           *bool
 	shortcuts     map[string]string
+	// loaded is set for a refresh that read the configuration. mouse is
+	// accessibility.mouse in it, nil when it is unset.
+	loaded bool
+	mouse  *bool
 }
 
 // Model owns UI state; tea.Cmd does IO off the event-loop goroutine.
@@ -140,6 +144,7 @@ type Model struct {
 	draft           string
 	apps            []appStatus
 	selected        int
+	launcherTop     int // the first card a click left in view; see launcherCards
 	shelf           bool
 	busy            bool
 	scroll          int
@@ -196,6 +201,12 @@ type Model struct {
 	attachClientType string
 	attachClientID   string
 	attachSessionID  string
+
+	// mouseOff is set while this shell takes no mouse input; see mouse.go.
+	// mouseConfig is the accessibility.mouse setting last read, nil while
+	// it is unset.
+	mouseOff    bool
+	mouseConfig *bool
 
 	// keyEnh records the keyboard enhancement flags the terminal actually
 	// negotiated (KeyboardEnhancementsMsg). It is observational: every
@@ -511,6 +522,7 @@ func (m *Model) parseConfigMsg(eff map[string]any) configUpdateMsg {
 	if eff == nil {
 		return msg
 	}
+	msg.loaded = true
 	if t, ok := eff["theme"].(string); ok {
 		msg.theme = t
 	}
@@ -520,6 +532,9 @@ func (m *Model) parseConfigMsg(eff map[string]any) configUpdateMsg {
 		}
 		if rm, ok := acc["reduced_motion"].(bool); ok {
 			msg.reducedMotion = &rm
+		}
+		if mo, ok := acc[mouseConfigKey].(bool); ok {
+			msg.mouse = &mo
 		}
 	}
 	if st, ok := eff["startup"].(map[string]any); ok {
@@ -540,6 +555,34 @@ func (m *Model) parseConfigMsg(eff map[string]any) configUpdateMsg {
 		}
 	}
 	return msg
+}
+
+// openSelectedTask opens the process selected in the Task Manager's table,
+// as Enter does: its crash receipt if it has one, or else its log tail.
+func (m *Model) openSelectedTask() tea.Cmd {
+	sel := m.tasks.SelectedProcess()
+	if sel == nil {
+		return nil
+	}
+	if r, ok := m.receipts.GetByPID(sel.ID); ok {
+		m.tasks.ShowReceipt(&r)
+		return nil
+	}
+	return m.fetchLogsCmd(sel.ID, sel.Name, true)
+}
+
+// openSelectedNotification marks the selected notification seen and opens
+// its crash receipt, if it has one, as Enter does.
+func (m *Model) openSelectedNotification() tea.Cmd {
+	if sel := m.notifs.Selected(); sel != nil {
+		m.notifs.MarkSeen(sel.ID)
+		if sel.Receipt != nil {
+			m.taskView = true
+			m.notifView = false
+			m.tasks.ShowReceipt(sel.Receipt)
+		}
+	}
+	return nil
 }
 
 func (m *Model) openAppByID(id string) tea.Cmd {
@@ -822,6 +865,10 @@ func (m *Model) submit(line string) tea.Cmd {
 // Update passes msg to the bloom root, except the terminal's own colors and
 // profile, then to the shell.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tea.MouseMsg); ok && m.mouseOff {
+		// A report sent before the terminal saw the mouse turned off.
+		return m, nil
+	}
 	var rootCmd tea.Cmd
 	if forwardToRoot(msg) {
 		rootCmd = m.root().Update(msg)
@@ -849,6 +896,24 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case openAppMsg:
 		return m, m.openView(msg.app)
+	case bloom.SelectionMsg:
+		// Text selected with the mouse is copied as the selection ends.
+		// The release or delayed double-click completion may belong to a
+		// frame drawn before a modal opened.
+		if !m.baseMouseAllowed() {
+			return m, nil
+		}
+		return m, m.copyCmd(msg.Text)
+	case copyMsg:
+		m.initExperience()
+		if msg.err == nil {
+			// Routine success needs no history entry; a failure stays
+			// there for whoever was away, or under Do-Not-Disturb.
+			m.flash(copyNotice(msg))
+		} else {
+			m.notifs.Record(copyNotice(msg))
+		}
+		return m, nil
 	case configUpdateMsg:
 		var themeCmd tea.Cmd
 		if msg.theme != "" {
@@ -871,6 +936,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.dnd != nil && m.notifs != nil {
 			m.notifs.SetDND(*msg.dnd)
+		}
+		if msg.loaded {
+			m.applyMouseConfig(msg.mouse)
 		}
 		if len(msg.shortcuts) > 0 {
 			if m.shortcuts == nil {
@@ -1056,6 +1124,12 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.append(entry{fmt.Sprintf("Reduced motion is now %s", state), "accent"})
 		}
+		if msg.setMouse != nil {
+			m.setMouse(*msg.setMouse)
+		}
+		if msg.setMouse != nil || msg.showMouse {
+			m.append(entry{m.mouseState(), "accent"})
+		}
 		if msg.sessionID != "" {
 			m.sessionID = msg.sessionID
 			m.attachmentID = msg.attachmentID
@@ -1179,50 +1253,16 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleLogSearchKey(msg)
 		}
 		if m.isShortcut("home", keyStr) {
-			cancel := m.dismissView()
-			m.taskView = false
-			m.notifView = false
-			if m.currentMode() == modeHome {
-				m.setMode(modePrompt)
-			} else {
-				m.setMode(modeHome)
-			}
-			m.resetScroll()
-			return m, cancel
+			return m, m.switchScreen(screenHome, true)
 		}
 		if m.isShortcut("launcher", keyStr) {
-			cancel := m.dismissView()
-			m.taskView = false
-			m.notifView = false
-			if m.currentMode() == modeLauncher {
-				m.setMode(modePrompt)
-			} else {
-				m.setMode(modeLauncher)
-			}
-			m.resetScroll()
-			return m, cancel
+			return m, m.switchScreen(screenApps, true)
 		}
 		if m.isShortcut("tasks", keyStr) {
-			cancel := m.dismissView()
-			m.taskView = !m.taskView
-			if m.taskView {
-				m.shelf = false
-				m.notifView = false
-				m.setMode(modePrompt)
-			}
-			m.resetScroll()
-			return m, cancel
+			return m, m.switchScreen(screenTasks, true)
 		}
 		if m.isShortcut("notifications", keyStr) {
-			cancel := m.dismissView()
-			m.notifView = !m.notifView
-			if m.notifView {
-				m.shelf = false
-				m.taskView = false
-				m.setMode(modePrompt)
-			}
-			m.resetScroll()
-			return m, cancel
+			return m, m.switchScreen(screenNotifications, true)
 		}
 		if m.isShortcut("settings", keyStr) {
 			if m.presentation != nil && m.presentation.id == "com.gostalgia.settings" {
@@ -1241,6 +1281,17 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.selectedView()
 			}
 			return m, nil
+		}
+		if keyStr == "ctrl+y" {
+			// Copy, the keyboard's way to what selecting with the mouse
+			// copies. It only reads the screen, so it works while a
+			// command runs. A shortcut configured on Ctrl-Y wins, above.
+			cmd, ok := m.copyInView()
+			if !ok {
+				m.initExperience()
+				m.flash(nothingToCopy)
+			}
+			return m, cmd
 		}
 
 		switch keyStr {
@@ -1312,12 +1363,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				if m.tasks.Mode() != taskmanager.ModeTable {
 					m.tasks.CloseModal()
-				} else if sel := m.tasks.SelectedProcess(); sel != nil {
-					if r, ok := m.receipts.GetByPID(sel.ID); ok {
-						m.tasks.ShowReceipt(&r)
-					} else {
-						return m, m.fetchLogsCmd(sel.ID, sel.Name, true)
-					}
+				} else {
+					return m, m.openSelectedTask()
 				}
 			case "l":
 				if m.tasks.Mode() == taskmanager.ModeTable {
@@ -1355,14 +1402,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j":
 				m.notifs.SelectNext()
 			case "enter":
-				if sel := m.notifs.Selected(); sel != nil {
-					m.notifs.MarkSeen(sel.ID)
-					if sel.Receipt != nil {
-						m.taskView = true
-						m.notifView = false
-						m.tasks.ShowReceipt(sel.Receipt)
-					}
-				}
+				return m, m.openSelectedNotification()
 			case "d":
 				m.notifs.DismissSelected()
 			case "c":
@@ -1638,9 +1678,9 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) complete() {
 	prefix := string(m.input)
-	choices := []string{"help", "apps", "pkg", "package", "backup", "launch", "run", "stop", "echo", "call", "dir", "ls", "cd", "type", "cat", "ps", "logs", "log", "status", "cls", "exit", "shutdown", "home", "palette", "tasks", "taskmanager", "notifications", "alerts", "receipt", "reap", "dnd", "theme", "motion", "settings", "preferences", "profile", "profiles"}
+	choices := []string{"help", "apps", "pkg", "package", "backup", "launch", "run", "stop", "echo", "call", "dir", "ls", "cd", "type", "cat", "ps", "logs", "log", "status", "cls", "exit", "shutdown", "home", "palette", "tasks", "taskmanager", "notifications", "alerts", "receipt", "reap", "dnd", "theme", "motion", "mouse", "settings", "preferences", "profile", "profiles"}
 	if verb, partial, ok := strings.Cut(prefix, " "); ok {
-		if verb != "launch" && verb != "run" && verb != "stop" && verb != "theme" && verb != "motion" && verb != "profile" && verb != "backup" {
+		if verb != "launch" && verb != "run" && verb != "stop" && verb != "theme" && verb != "motion" && verb != "mouse" && verb != "profile" && verb != "backup" {
 			return
 		}
 		if verb == "theme" {
@@ -1656,6 +1696,8 @@ func (m *Model) complete() {
 			}
 		} else if verb == "motion" {
 			choices = []string{"motion on", "motion off"}
+		} else if verb == "mouse" {
+			choices = []string{"mouse on", "mouse off"}
 		} else if verb == "profile" {
 			choices = []string{"profile list", "profile switch", "profile create", "profile delete"}
 		} else if verb == "backup" {

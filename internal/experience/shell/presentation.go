@@ -671,29 +671,9 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if v.gridFocused() {
-			c := v.grid().Cells[v.cell]
-			if c.Disabled || c.Action == "" || v.topActionDisabled(c.Action) {
-				return nil
-			}
-			return m.viewRun(sdk.ActionRequest{Action: c.Action, CellID: c.ID})
+			return m.runViewCell()
 		}
-		index := v.focus - len(fields)
-		if index < 0 {
-			index = 0
-		}
-		if index >= len(actions) || actions[index].Disabled {
-			return nil
-		}
-		p := sdk.ActionRequest{Action: actions[index].ID}
-		if len(v.data.Items) > 0 {
-			p.ItemID = v.data.Items[v.item].ID
-		}
-		// A disabled cell's id is meaningless input the SDK rejects; omit it
-		// so list actions keep working while one is selected.
-		if g := v.grid(); g != nil && !g.Cells[v.cell].Disabled {
-			p.CellID = g.Cells[v.cell].ID
-		}
-		return m.viewRun(p)
+		return m.runViewAction(max(0, v.focus-len(fields)))
 	default:
 		if !fieldFocused {
 			return nil
@@ -732,6 +712,82 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			value = nil
 		}
 		v.values[id] = string(value)
+	}
+	return nil
+}
+
+// runViewCell runs the selected grid cell's action, as Enter does on it.
+func (m *Model) runViewCell() tea.Cmd {
+	v := m.presentation
+	c := v.grid().Cells[v.cell]
+	if c.Disabled || c.Action == "" || v.topActionDisabled(c.Action) {
+		return nil
+	}
+	return m.viewRun(sdk.ActionRequest{Action: c.Action, CellID: c.ID})
+}
+
+// runViewAction runs action index, as Enter does on it, for the selected
+// item and grid cell.
+func (m *Model) runViewAction(index int) tea.Cmd {
+	v := m.presentation
+	actions := v.data.Actions
+	if index >= len(actions) || actions[index].Disabled {
+		return nil
+	}
+	p := sdk.ActionRequest{Action: actions[index].ID}
+	if len(v.data.Items) > 0 {
+		p.ItemID = v.data.Items[v.item].ID
+	}
+	// A disabled cell's id is meaningless input the SDK rejects; omit it
+	// so list actions keep working while one is selected.
+	if g := v.grid(); g != nil && !g.Cells[v.cell].Disabled {
+		p.CellID = g.Cells[v.cell].ID
+	}
+	return m.viewRun(p)
+}
+
+// viewTargetKind is what a click target in an app view is.
+type viewTargetKind int
+
+const (
+	viewTargetAction viewTargetKind = iota + 1
+	viewTargetCell
+)
+
+// viewTarget is an action or grid cell where viewLayout shows it: its line
+// of the body and the cells across it it takes, with its index and ID in
+// the view's snapshot.
+type viewTarget struct {
+	kind    viewTargetKind
+	index   int
+	id      string
+	line, x int
+	w       int
+}
+
+// activateViewTarget focuses t in v and runs it, as Tab to it and Enter
+// do, if v is still the view open and t still in it. The gates Enter
+// checks apply here too: nothing runs while an action is in flight or the
+// view is loading, or for a disabled action or cell.
+func (m *Model) activateViewTarget(v *appView, t viewTarget) tea.Cmd {
+	if m.presentation != v || v.busy || v.instance == "" || v.data.State == sdk.ViewLoading {
+		return nil
+	}
+	fields, actions := v.data.Fields, v.data.Actions
+	switch t.kind {
+	case viewTargetAction:
+		if t.index >= len(actions) || actions[t.index].ID != t.id {
+			return nil
+		}
+		v.focus, v.itemFocus, m.scroll = len(fields)+t.index, false, 0
+		return m.runViewAction(t.index)
+	case viewTargetCell:
+		g := v.grid()
+		if g == nil || t.index >= len(g.Cells) || g.Cells[t.index].ID != t.id {
+			return nil
+		}
+		v.focus, v.cell, v.itemFocus, m.scroll = len(fields)+len(actions), t.index, false, 0
+		return m.runViewCell()
 	}
 	return nil
 }
@@ -803,9 +859,18 @@ func (m *Model) syncPresentationWindow() {
 }
 
 func (m *Model) viewLines(height int) []string {
+	lines, _ := m.viewLayout(height)
+	return lines
+}
+
+// viewLayout is the app view's lines in a body of height rows, and where
+// they show its actions and grid cells.
+func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 	v := m.presentation
 	lines := m.viewHeader()
 	var rows []string
+	// rowTargets holds the targets on each row, by its index in rows.
+	rowTargets := map[int][]viewTarget{}
 	for _, block := range v.data.Blocks {
 		if block.Label != "" {
 			rows = append(rows, m.kit.Muted(viewText(block.Label)))
@@ -868,6 +933,7 @@ func (m *Model) viewLines(height int) []string {
 		} else {
 			text = m.kit.Text(text)
 		}
+		rowTargets[len(rows)] = []viewTarget{{kind: viewTargetAction, index: i, id: action.ID, w: lipgloss.Width(text)}}
 		rows = append(rows, text)
 	}
 	gridBase, gridRow := -1, 0
@@ -879,6 +945,8 @@ func (m *Model) viewLines(height int) []string {
 		focused := v.gridFocused()
 		for row := 0; row*g.Columns < len(g.Cells); row++ {
 			var cells []string
+			var targets []viewTarget
+			x := 0
 			for col := 0; col < g.Columns; col++ {
 				i := row*g.Columns + col
 				if i >= len(g.Cells) {
@@ -907,7 +975,11 @@ func (m *Model) viewLines(height int) []string {
 					text = m.kit.Text(text)
 				}
 				cells = append(cells, text)
+				w := lipgloss.Width(text)
+				targets = append(targets, viewTarget{kind: viewTargetCell, index: i, id: c.ID, x: x, w: w})
+				x += w + 1
 			}
+			rowTargets[len(rows)] = targets
 			rows = append(rows, strings.Join(cells, " "))
 		}
 	}
@@ -940,9 +1012,16 @@ func (m *Model) viewLines(height int) []string {
 		focus = gridBase + gridRow
 	}
 	start := max(0, min(focus-visible+1, max(0, len(rows)-visible))-m.scroll)
+	var targets []viewTarget
+	for r := start; r < min(len(rows), start+visible); r++ {
+		for _, t := range rowTargets[r] {
+			t.line = len(lines) + r - start
+			targets = append(targets, t)
+		}
+	}
 	lines = append(lines, rows[start:min(len(rows), start+visible)]...)
 	lines = append(lines, m.kit.Muted(viewText(v.data.Status)))
-	return lines
+	return lines, targets
 }
 
 func (m *Model) selectedView() tea.Cmd {

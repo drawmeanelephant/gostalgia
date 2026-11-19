@@ -215,11 +215,11 @@ const logW, logH = 60, 20
 
 // logScreen is the open log tail drawn at logW\u00D7logH.
 func logScreen(tm *Model, kit ui.Kit) string {
-	return bloom.Render(logW, logH, tm.LogsNode(kit))
+	return bloom.Render(logW, logH, tm.LogsNode(kit, func() bool { return true }))
 }
 
 func logFrame(tm *Model, kit ui.Kit) *bloom.Frame {
-	return bloom.Solve(logW, logH, tm.LogsNode(kit))
+	return bloom.Solve(logW, logH, tm.LogsNode(kit, func() bool { return true }))
 }
 
 // logTop is the line at the top of the open log tail.
@@ -802,7 +802,7 @@ func TestCompactLogsShowAndScrollText(t *testing.T) {
 			t.Fatalf("height %d: heading missing:\n%s", h, out)
 		}
 	}
-	tm.ScrollLogs(bloom.Solve(26, 3, tm.LogsNode(kit)), func(v bloom.ViewportView) bloom.ViewportPos { return v.Down(2) })
+	tm.ScrollLogs(bloom.Solve(26, 3, tm.LogsNode(kit, func() bool { return true })), func(v bloom.ViewportView) bloom.ViewportPos { return v.Down(2) })
 	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "three") || !strings.Contains(out, "four") || strings.Contains(out, "two") {
 		t.Fatalf("scrolled compact logs:\n%s", out)
 	}

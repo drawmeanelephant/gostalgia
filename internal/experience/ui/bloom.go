@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"image"
 	"image/color"
 	"strings"
 
@@ -73,6 +74,21 @@ func (SizedNode) Measure(bloom.Size) bloom.Size { return bloom.Size{} }
 
 // Layout implements bloom.Layouter.
 func (n SizedNode) Layout(ctx bloom.Context) bloom.Child { return n(ctx) }
+
+// ViewportText is the text of the lines of buf that v, a viewport of it in
+// a solved frame, shows, a line each and without styles.
+func ViewportText(v bloom.ViewportView, buf *bloom.Buffer) string {
+	if v.Rows <= 0 || buf == nil || buf.Len() == 0 {
+		return ""
+	}
+	first := min(max(0, v.First), buf.Len()-1)
+	last := min(max(first, v.PosAt(image.Pt(0, v.Rows-1)).Line), buf.Len()-1)
+	lines := make([]string, 0, last-first+1)
+	for i := first; i <= last; i++ {
+		lines = append(lines, buf.Text(i))
+	}
+	return strings.Join(lines, "\n")
+}
 
 // TabsLeaf is Tabs sized by the layout.
 func (k Kit) TabsLeaf(tabs []Tab, active int) Leaf {

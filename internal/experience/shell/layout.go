@@ -67,10 +67,11 @@ const (
 // rootKey is everything a bloom root is built from. A kit change that keeps
 // it equal keeps the root.
 type rootKey struct {
-	theme   string
-	mode    ui.ColorMode
-	reduced bool
-	fg, bg  [4]uint32
+	theme    string
+	mode     ui.ColorMode
+	reduced  bool
+	fg, bg   [4]uint32
+	mouseOff bool
 }
 
 func colorKey(c color.Color) [4]uint32 {
@@ -81,21 +82,28 @@ func colorKey(c color.Color) [4]uint32 {
 	return [4]uint32{r, g, b, a}
 }
 
-func rootKeyOf(k ui.Kit) rootKey {
+func rootKeyOf(k ui.Kit, mouseOff bool) rootKey {
 	fg, bg := k.Colors()
 	return rootKey{theme: k.Theme().Name, mode: k.Mode(), reduced: k.Theme().ReducedMotion,
-		fg: colorKey(fg), bg: colorKey(bg)}
+		fg: colorKey(fg), bg: colorKey(bg), mouseOff: mouseOff}
 }
 
 // root returns the model's own bloom root, built for its current kit and
-// rebuilt only when the kit's effective theme, profile or motion changes,
-// so a config poll that re-applies the same settings keeps it. Its colors
-// come from the theme, never from the terminal: Root.Init, which would
-// query the host's colors, is never called.
+// mouse setting and rebuilt only when the kit's effective theme, profile or
+// motion, or the mouse setting, changes, so a config poll that re-applies
+// the same settings keeps it. Its colors come from the theme, never from
+// the terminal: Root.Init, which would query the host's colors, is never
+// called. It never copies to a clipboard itself: copies go through
+// copyCmd, under the operator's clipboard policy.
 func (m *Model) root() *bloom.Root {
-	if key := rootKeyOf(m.kit); m.ui == nil || m.uiKey != key {
+	if key := rootKeyOf(m.kit, m.mouseOff); m.ui == nil || m.uiKey != key {
 		fg, bg := m.kit.Colors()
-		m.ui = bloom.New(bloom.WithColors(fg, bg), bloom.WithCopyFlash(false))
+		opts := []bloom.Option{bloom.WithColors(fg, bg), bloom.WithCopyFlash(false),
+			bloom.WithSelectionStyle(m.kit.MouseSelectionStyle())}
+		if !m.mouseOff {
+			opts = append(opts, bloom.WithTooltips(bloom.Tooltips{Style: m.kit.TooltipStyle()}))
+		}
+		m.ui = bloom.New(opts...)
 		m.uiKey = key
 	}
 	return m.ui
@@ -124,6 +132,21 @@ func (m *Model) View() tea.View {
 		m.syncPresentationWindow()
 		v = m.root().View(m.width, m.height, m.layout())
 		v.Content = m.toProfile(v.Content)
+		if m.mouseOff {
+			// Selectable text asks for mouse reports by itself; with the
+			// mouse off the terminal keeps them, for its own selection.
+			v.MouseMode, v.OnMouse = tea.MouseModeNone, nil
+		} else if route := v.OnMouse; route != nil {
+			// Bubble Tea runs the OnMouse of the last frame drawn, before
+			// Update, so a report that arrives after mouse off but before
+			// the next frame would still reach a wheel or click handler.
+			v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
+				if m.mouseOff {
+					return nil
+				}
+				return route(msg)
+			}
+		}
 	}
 	v.AltScreen = true
 	// Ask for kitty event types (key releases and repeat flags) on top of
@@ -207,7 +230,7 @@ func (m *Model) frame(home homeView) bloom.Child {
 		})
 	}
 	rows := []bloom.Child{
-		bloom.Fixed(1, m.kit.TabsLeaf(m.tabs())).ID(slotTabs),
+		bloom.Fixed(1, m.tabsNode()).ID(slotTabs),
 		bloom.Fixed(1, m.kit.Leaf(m.badge)).ID(slotBadge),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
 		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
@@ -271,17 +294,30 @@ func (m *Model) badge(b ui.Bounds) string {
 // bottom-right corner over whatever the body shows there. The body is laid
 // out the same with or without it: toasts never take rows from the screen
 // beneath. The stack covers at most a third of the body, keeping the newest
-// toasts when they do not all fit, so even the 30×10 frame keeps most of its
-// body readable. The layer only draws the manager's active toasts; their
-// lifetime, caps and DND stay with notifications.Manager and its ticks.
+// whole toasts when they do not all fit, so even the 30×10 frame keeps most
+// of its body readable. The newest toast is never cut to fit that third: a
+// wrapped one, such as how to allow a blocked copy, is only useful whole,
+// so it may cover all but a row of the body until it expires. The layer only
+// draws the manager's active toasts; their lifetime, caps and DND stay with
+// notifications.Manager and its ticks.
 func (m *Model) toastLayer(w, h int) bloom.LayerNode {
 	width := min(w, toastWidth)
-	lines := strings.Split(m.notifs.RenderToasts(m.kit, width), "\n")
-	if room := max(1, h/3); len(lines) > room {
-		if m.notifs.DroppedToasts() > 0 {
-			lines = lines[:len(lines)-1]
+	toasts, notice := m.notifs.ToastRows(m.kit, width)
+	room := max(1, h/3)
+	var lines []string
+	if n := len(toasts); n > 0 {
+		newest := toasts[n-1]
+		lines = newest[:min(len(newest), max(room, h-1))]
+		if len(lines) < len(newest) {
+			lines[len(lines)-1] = ui.Truncate(lines[len(lines)-1]+"…", width)
 		}
-		lines = lines[max(0, len(lines)-room):]
+		kept := 1
+		for ; kept < n && len(lines)+len(toasts[n-1-kept]) <= room; kept++ {
+			lines = append(append([]string(nil), toasts[n-1-kept]...), lines...)
+		}
+		if notice != "" && kept == n && len(lines) < room {
+			lines = append(lines, notice)
+		}
 	}
 	stack := m.kit.Leaf(func(ui.Bounds) string { return strings.Join(lines, "\n") })
 	return bloom.Layer(stack).Anchor(bloom.End, bloom.End).Size(width, len(lines)).ID(layerToasts)
@@ -302,23 +338,24 @@ func (m *Model) toastLines() int {
 func (m *Model) body(home homeView) bloom.Child {
 	switch {
 	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
-		return m.tasks.LogsNode(m.kit)
+		return m.tasks.LogsNode(m.kit, m.baseMouseAllowed)
 	case m.taskView && m.tasks != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) })
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) }), m.taskHits, m.taskScroll)
 	case m.notifView && m.notifs != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) })
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
+			m.notificationHits, m.notificationScroll)
 	case m.presentation != nil:
-		return m.kit.Leaf(func(b ui.Bounds) string {
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
 			lines := m.viewLines(b.Height)
 			for i, line := range lines {
 				lines[i] = ui.Truncate(line, b.Width)
 			}
 			return strings.Join(lines, "\n")
-		})
+		}), m.viewHits, nil)
 	}
 	switch m.currentMode() {
 	case modeLauncher:
-		return m.kit.Leaf(func(b ui.Bounds) string { return strings.Join(m.renderLauncher(b.Width, b.Height), "\n") })
+		return m.launcherNode()
 	case modeHome:
 		return m.homeNode(home)
 	}

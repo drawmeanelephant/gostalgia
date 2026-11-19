@@ -85,11 +85,29 @@ type Tab struct {
 	Disabled bool
 }
 
+// TabSpan is where Tabs draws one tab on its row: the tab's index in the
+// tabs given and the cells it takes.
+type TabSpan struct {
+	Index, X, Width int
+}
+
 // Tabs keeps the active tab visible by dropping leading tabs when necessary.
 // Invalid active indices select nothing; a disabled tab is never highlighted.
 func (k Kit) Tabs(tabs []Tab, active, width int) string {
+	row, _ := k.tabs(tabs, active, width)
+	return row
+}
+
+// TabSpans reports where Tabs draws each tab it shows in width cells, left
+// to right. Tabs it drops to keep the active one visible have no span.
+func (k Kit) TabSpans(tabs []Tab, active, width int) []TabSpan {
+	_, spans := k.tabs(tabs, active, width)
+	return spans
+}
+
+func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 	if width <= 0 {
-		return ""
+		return "", nil
 	}
 	gap := strings.Repeat(" ", max(0, k.theme.Spacing.Gap))
 	parts := make([]string, len(tabs))
@@ -115,20 +133,24 @@ func (k Kit) Tabs(tabs []Tab, active, width int) string {
 		}
 	}
 	var visible []string
+	var spans []TabSpan
 	used := 0
-	for _, part := range parts[start:] {
+	for i, part := range parts[start:] {
 		cells := ansi.StringWidth(part)
+		x := used
 		if len(visible) > 0 {
+			x += len(gap)
 			cells += len(gap)
 			if used+cells > width {
 				break
 			}
 		}
 		visible = append(visible, part)
+		spans = append(spans, TabSpan{Index: start + i, X: x, Width: min(ansi.StringWidth(part), width-x)})
 		used += cells
 	}
 	return k.paint(Fit(strings.Join(visible, gap), Bounds{width, 1}),
-		k.theme.Palette.Text, k.theme.Palette.Header, false)
+		k.theme.Palette.Text, k.theme.Palette.Header, false), spans
 }
 
 // Badge uses an explicit symbol and label so state isn't communicated by color

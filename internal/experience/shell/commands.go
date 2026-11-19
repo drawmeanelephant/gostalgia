@@ -61,6 +61,8 @@ type resultMsg struct {
 	showTheme        bool
 	setMotion        *bool
 	toggleMotion     bool
+	setMouse         *bool
+	showMouse        bool
 	detach           bool
 	executedLine     string
 	clearHistory     bool
@@ -93,6 +95,7 @@ const helpText = `COMMAND CENTER
   dnd [on|off]              toggle or set Do-Not-Disturb
   theme [NAME]              switch theme (built-ins or user themes in /config/themes)
   motion [on|off]           toggle or set reduced-motion mode
+  mouse [on|off]            show or set mouse input for this shell
   settings / preferences    interactive system preferences and themes
   history [clear]           view or clear command history
   profile [list|switch|create|delete] manage workspace profiles and switch active user
@@ -105,7 +108,7 @@ const helpText = `COMMAND CENTER
   shutdown                  shut down the environment
 
 F1 home · F2 apps · F5 tasks · F6 alerts · F7 settings · Ctrl+P / / palette · F3 stop · F4 view
-Tab complete · ↑↓ history · Paths accept /users/guest or C:\users\guest.`
+Tab complete · ↑↓ history · Ctrl+Y copy · Paths accept /users/guest or C:\users\guest.`
 
 // words handles quoted paths and messages. Backslashes remain literal for DOS
 // paths. Raw call JSON is parsed separately so JSON escaping is unchanged.
@@ -206,6 +209,13 @@ func execute(ctx context.Context, c Caller, cwd, line string) resultMsg {
 		result.text = ""
 	} else if result.text == "__TOGGLE_MOTION__" {
 		result.toggleMotion = true
+		result.text = ""
+	} else if strings.HasPrefix(result.text, "__SET_MOUSE__:") {
+		on := strings.TrimPrefix(result.text, "__SET_MOUSE__:") == "on"
+		result.setMouse = &on
+		result.text = ""
+	} else if result.text == "__SHOW_MOUSE__" {
+		result.showMouse = true
 		result.text = ""
 	} else if strings.HasPrefix(result.text, "__SWITCH_PROFILE__:") {
 		targetID := strings.TrimPrefix(result.text, "__SWITCH_PROFILE__:")
@@ -883,6 +893,19 @@ func command(ctx context.Context, c Caller, cwd, line string) (string, string, b
 			return ok("__SET_MOTION__:off")
 		}
 		return fail(fmt.Errorf("usage: motion [on|off|reduce|normal]"))
+	case "mouse":
+		if len(args) == 0 {
+			return ok("__SHOW_MOUSE__")
+		}
+		if len(args) == 1 {
+			switch strings.ToLower(args[0]) {
+			case "on":
+				return ok("__SET_MOUSE__:on")
+			case "off":
+				return ok("__SET_MOUSE__:off")
+			}
+		}
+		return fail(fmt.Errorf("usage: mouse [on|off]"))
 	case "status":
 		if len(args) != 0 {
 			return fail(fmt.Errorf("usage: status"))

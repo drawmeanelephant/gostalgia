@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"bloomfx.dev/bloom"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -153,10 +154,18 @@ func (m *Model) setKit(k ui.Kit) {
 }
 
 // transcriptNode is the transcript viewport. It follows new output while
-// it is at its end, and wraps lines at the cell.
+// it is at its end, and wraps lines at the cell. The wheel scrolls it as
+// PgUp and PgDn do, following again once it reaches the end, and the mouse
+// selects text in it to copy.
 func (m *Model) transcriptNode() bloom.Child {
 	return bloom.Viewport(m.transcriptBuf).At(m.transcriptPos).Follow().
-		Wrap(bloom.WrapChars).Style(m.kit.TextStyle()).ID(viewTranscript)
+		Wrap(bloom.WrapChars).Style(m.kit.TextStyle()).ID(viewTranscript).Selectable().
+		OnScroll(func(pos bloom.ViewportPos) tea.Cmd {
+			return m.baseAct(func() tea.Cmd {
+				m.transcriptPos = pos
+				return nil
+			})
+		})
 }
 
 // pageTranscript scrolls the transcript a page up or down, when it is on

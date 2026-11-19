@@ -165,6 +165,30 @@ func (k Kit) SelectionStyle() lipgloss.Style {
 	return k.style(f.Text, f.Fill, k.theme.Typography.HeadingBold)
 }
 
+// MutedStyle is the style Muted paints, for a bloom node that draws muted
+// text itself. It is empty in Plain.
+func (k Kit) MutedStyle() lipgloss.Style {
+	p := k.theme.Palette
+	return k.style(p.Muted, p.Surface, false)
+}
+
+// TooltipStyle is the chip a bloom tooltip is drawn in: the focus colors
+// with a cell of padding on either side. In Plain it is the padding alone,
+// so a tooltip adds no color there.
+func (k Kit) TooltipStyle() lipgloss.Style {
+	f := k.theme.Focus
+	return k.style(f.Text, f.Fill, false).Padding(0, 1)
+}
+
+// MouseSelectionStyle is how text selected with the mouse is drawn: the
+// focus colors, or in Plain, which has no colors, reverse video.
+func (k Kit) MouseSelectionStyle() lipgloss.Style {
+	if k.mode == Plain {
+		return lipgloss.NewStyle().Reverse(true)
+	}
+	return k.SelectionStyle()
+}
+
 func (k Kit) FocusText(text string) string {
 	return k.Selection(k.theme.Focus.Marker + " " + text)
 }

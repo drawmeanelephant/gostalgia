@@ -345,7 +345,10 @@ with explicit theme colors, and kit output enters the tree through the
 `internal/experience/ui` adapters (`Leaf`, `PanelNode`), so the kit still owns
 panel geometry. The usage rules are in
 [shell.md](shell.md#bloom-layout-and-compositing-issue-207) and the frame in
-[shell.md](shell.md#shell-frame-layout-issue-208).
+[shell.md](shell.md#shell-frame-layout-issue-208). Since #211 bloom also routes
+the shell's additive mouse input; copies bypass bloom's clipboard, which
+would also send OSC 52, and go through the runtime's `clipboard/write` under
+operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)).
 
 `go list -deps gostalgia/internal/runtime gostalgia/sdk` contains only Gostalgia
 and standard-library packages. Automated tests in `test/e2e/dependencies_test.go`

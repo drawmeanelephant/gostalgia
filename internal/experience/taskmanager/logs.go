@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"bloomfx.dev/bloom"
+	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
 )
 
@@ -380,17 +381,18 @@ func (m *Model) SeekMatch(f *bloom.Frame, forward bool) {
 
 // LogsNode is the open log tail as a bloom node sized by its slot: a
 // bordered panel, or below compactLogsHeight rows just a heading over the
-// log text.
-func (m *Model) LogsNode(kit ui.Kit) bloom.Child {
+// log text. scrollAllowed rechecks the shell's current mouse/modal ownership
+// when a viewport callback runs, which may be after its frame went stale.
+func (m *Model) LogsNode(kit ui.Kit, scrollAllowed func() bool) bloom.Child {
 	return ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 		m.mu.RLock()
 		defer m.mu.RUnlock()
-		return m.logsNode(kit, ui.Bounds{Width: ctx.Width, Height: ctx.Height})
+		return m.logsNode(kit, ui.Bounds{Width: ctx.Width, Height: ctx.Height}, scrollAllowed)
 	})
 }
 
 // logsNode is LogsNode in bounds, read under m.mu.
-func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds) bloom.Child {
+func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds, scrollAllowed func() bool) bloom.Child {
 	if bounds.Width <= 0 || bounds.Height <= 0 {
 		return nil
 	}
@@ -419,7 +421,7 @@ func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds) bloom.Child {
 		case bounds.Height >= 2:
 			rows = append(rows, line(kit.Heading, fmt.Sprintf("LOGS · PID %d · %s%s", m.logsPID, m.logsName, follow)))
 		}
-		return bloom.Column(append(rows, bloom.Fill(m.logText(kit, l)))...)
+		return bloom.Column(append(rows, bloom.Fill(m.logText(kit, l, scrollAllowed)))...)
 	}
 	help := status
 	if help == "" {
@@ -429,20 +431,30 @@ func (m *Model) logsNode(kit ui.Kit, bounds ui.Bounds) bloom.Child {
 		line(kit.Heading, fmt.Sprintf("CHILD LOG TAIL: %s (PID %d)%s", m.logsName, m.logsPID, follow)),
 		line(kit.Muted, help),
 		bloom.Fixed(1, nil),
-		bloom.Fill(m.logText(kit, l)),
+		bloom.Fill(m.logText(kit, l, scrollAllowed)),
 	)
 	return kit.PanelNode(ui.Panel{Title: fmt.Sprintf("LOGS · PID %d", m.logsPID), Focused: true}, bloom.Column(rows...))
 }
 
 // logText is the log's lines in a viewport, the current match's line
 // marked in the gutter, or a notice while there are none.
-func (m *Model) logText(kit ui.Kit, l *processLog) bloom.Child {
+func (m *Model) logText(kit ui.Kit, l *processLog, scrollAllowed func() bool) bloom.Child {
 	if l.buf.Len() == 0 {
 		return kit.Leaf(func(b ui.Bounds) string { return kit.Muted(ui.Truncate("(no output captured yet)", b.Width)) })
 	}
 	marker := kit.Theme().Focus.Marker + " "
 	current, matched := l.match.Line, l.matched
-	vp := bloom.Viewport(l.buf).At(l.pos).Style(kit.TextStyle()).ID(LogsViewport).
+	// The wheel moves the tail as the arrow keys do: scrolling it stops it
+	// following, and only f starts it again. The mouse selects text in it
+	// to copy.
+	vp := bloom.Viewport(l.buf).At(l.pos).Style(kit.TextStyle()).ID(LogsViewport).Selectable().
+		OnScroll(func(pos bloom.ViewportPos) tea.Cmd {
+			if !scrollAllowed() {
+				return nil
+			}
+			m.SetLogsPos(pos)
+			return nil
+		}).
 		Gutter(markerWidth, func(row bloom.GutterRow) string {
 			if matched && row.Line == current && !row.Continued {
 				return kit.Text(marker)

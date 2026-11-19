@@ -280,3 +280,36 @@ func TestRenderPanelCompactKeepsSelectedEntry(t *testing.T) {
 		t.Fatalf("bordered panel did not return at height %d:\n%s", compactPanelHeight, out)
 	}
 }
+
+func TestFlashShowsAToastWithoutHistory(t *testing.T) {
+	mgr := NewManager(10, 3, 5)
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	if !mgr.Flash(Notification{Title: "Copied \x1b]52;c;eA==\a", Message: "5 characters", Badge: "COPY"}) {
+		t.Fatal("Flash showed nothing")
+	}
+	if len(mgr.History()) != 0 || mgr.UnseenCount() != 0 {
+		t.Fatalf("Flash recorded %+v", mgr.History())
+	}
+	toast := mgr.RenderToasts(kit, 80)
+	if !strings.Contains(toast, "COPY") || strings.Contains(toast, "INFO") || strings.Contains(toast, "\x1b]52") {
+		t.Fatalf("flash toast %q", toast)
+	}
+	mgr.SetDND(true)
+	if mgr.Flash(Notification{Title: "Copied"}) || len(mgr.ActiveToasts()) != 0 {
+		t.Fatal("Flash interrupted under DND")
+	}
+}
+
+func TestBadgeNamesTheNotificationInPlaceOfItsLevel(t *testing.T) {
+	mgr := NewManager(10, 3, 5)
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	mgr.Record(Notification{Title: "Copy blocked", Message: "by policy", Level: LevelWarning, Badge: "COPY"})
+	mgr.Record(Notification{Title: "indexer", Message: "restarting", Level: LevelWarning})
+	panel := mgr.RenderPanel(kit, ui.Bounds{Width: 80, Height: 20})
+	if !strings.Contains(panel, "COPY") || strings.Count(panel, "BACKOFF") != 1 {
+		t.Fatalf("panel:\n%s", panel)
+	}
+	if toasts := mgr.RenderToasts(kit, 80); !strings.Contains(toasts, "COPY Copy blocked") || strings.Count(toasts, "BACKOFF") != 1 {
+		t.Fatalf("toasts:\n%s", toasts)
+	}
+}
