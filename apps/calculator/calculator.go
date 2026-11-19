@@ -1,5 +1,7 @@
-// Package calculator is the pack's simplest utility: real arithmetic inside
-// the version-1 presentation contract, proving the pack pattern end to end.
+// Package calculator is the pack's simplest utility: real arithmetic behind a
+// version-aware presentation. Version 1 keeps the original sixteen flat
+// actions; version 2 and later expose the same operations on a four-column
+// grid pad that also affords decimal and sign keys.
 package calculator
 
 import (
@@ -26,7 +28,55 @@ const (
 	// result. It matches maxDigits so the display does not silently round
 	// non-zero digits away.
 	displayPrec = 16
+
+	// padColumns lays the pad out four keys wide like a desktop calculator.
+	padColumns = 4
+
+	// pressAction is the shared action every grid cell declares; cell_id
+	// carries which key was pressed.
+	pressAction = "press"
 )
+
+// keyLabels pairs each semantic key id with its plain arithmetic label.
+var keyLabels = map[string]string{
+	"digit_0": "0",
+	"digit_1": "1",
+	"digit_2": "2",
+	"digit_3": "3",
+	"digit_4": "4",
+	"digit_5": "5",
+	"digit_6": "6",
+	"digit_7": "7",
+	"digit_8": "8",
+	"digit_9": "9",
+	"add":     "+",
+	"sub":     "-",
+	"mul":     "x",
+	"div":     "/",
+	"eq":      "=",
+	"clear":   "C",
+	"dot":     ".",
+	"neg":     "±",
+}
+
+// padOrder is the row-major key order of the grid pad, four columns wide:
+// utility keys up top, digits in calculator order, equals at the right edge,
+// and a short final row of zero and decimal.
+var padOrder = []string{
+	"clear", "neg", "div", "mul",
+	"digit_7", "digit_8", "digit_9", "sub",
+	"digit_4", "digit_5", "digit_6", "add",
+	"digit_1", "digit_2", "digit_3", "eq",
+	"digit_0", "dot",
+}
+
+// v1Order lists keys for the contract-v1 action fallback, bounded by the
+// 16-action limit — exactly the original Calculator key set.
+var v1Order = []string{
+	"digit_0", "digit_1", "digit_2", "digit_3", "digit_4",
+	"digit_5", "digit_6", "digit_7", "digit_8", "digit_9",
+	"add", "sub", "mul", "div", "eq", "clear",
+}
 
 //go:embed manifest.json
 var manifestJSON []byte
@@ -580,16 +630,22 @@ func (c *Calc) Stop(context.Context) error { return nil }
 func (c *Calc) view(ctx context.Context) (sdk.View, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.viewLocked(), nil
+	return c.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
-func (c *Calc) viewLocked() sdk.View {
+// viewLocked renders the pad the negotiated version can express: a modern
+// grid, or the original flat sixteen actions for version 1.
+func (c *Calc) viewLocked(version int) sdk.View {
 	v := sdk.View{
-		Title:   "Calculator",
-		State:   sdk.ViewReady,
-		Items:   []sdk.Item{{ID: "display", Label: "Display", Detail: c.pad.Display()}},
-		Actions: c.actionsLocked(),
-		Status:  "Enter a calculation",
+		Title:  "Calculator",
+		State:  sdk.ViewReady,
+		Items:  []sdk.Item{{ID: "display", Label: "Display", Detail: c.pad.Display()}},
+		Status: "Enter a calculation",
+	}
+	if version >= 2 {
+		v.Grid = c.gridLocked()
+	} else {
+		v.Actions = v1Actions()
 	}
 	if err := c.pad.Err(); err != "" {
 		v.State = sdk.ViewError
@@ -599,55 +655,67 @@ func (c *Calc) viewLocked() sdk.View {
 	return v
 }
 
-func (c *Calc) actionsLocked() []sdk.Action {
-	return []sdk.Action{
-		{ID: "digit_0", Label: "0"},
-		{ID: "digit_1", Label: "1"},
-		{ID: "digit_2", Label: "2"},
-		{ID: "digit_3", Label: "3"},
-		{ID: "digit_4", Label: "4"},
-		{ID: "digit_5", Label: "5"},
-		{ID: "digit_6", Label: "6"},
-		{ID: "digit_7", Label: "7"},
-		{ID: "digit_8", Label: "8"},
-		{ID: "digit_9", Label: "9"},
-		{ID: "add", Label: "+"},
-		{ID: "sub", Label: "-"},
-		{ID: "mul", Label: "x"},
-		{ID: "div", Label: "/"},
-		{ID: "eq", Label: "="},
-		{ID: "clear", Label: "C"},
+// gridLocked builds the pad snapshot, dimming the decimal key once the operand
+// being edited already has its point.
+func (c *Calc) gridLocked() *sdk.Grid {
+	cells := make([]sdk.Cell, 0, len(padOrder))
+	for _, id := range padOrder {
+		cells = append(cells, sdk.Cell{
+			ID:       id,
+			Label:    keyLabels[id],
+			Action:   pressAction,
+			Disabled: id == "dot" && c.pad.HasDot(),
+		})
 	}
+	return &sdk.Grid{Label: "Keypad", Columns: padColumns, Cells: cells}
+}
+
+// v1Actions builds the sixteen-key fallback the version-1 contract bounds.
+func v1Actions() []sdk.Action {
+	actions := make([]sdk.Action, 0, len(v1Order))
+	for _, id := range v1Order {
+		actions = append(actions, sdk.Action{ID: id, Label: keyLabels[id]})
+	}
+	return actions
 }
 
 func (c *Calc) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	key := p.Action
+	if p.CellID != "" {
+		// A grid press names its key in cell_id.
+		key = p.CellID
+	}
 	switch {
-	case strings.HasPrefix(p.Action, "digit_"):
-		n, err := strconv.Atoi(strings.TrimPrefix(p.Action, "digit_"))
+	case strings.HasPrefix(key, "digit_"):
+		n, err := strconv.Atoi(strings.TrimPrefix(key, "digit_"))
 		if err != nil || n < 0 || n > 9 {
 			return sdk.View{}, fmt.Errorf("unknown action %q", p.Action)
 		}
 		c.pad.Digit(n)
-	case p.Action == "add":
+	case key == "add":
 		c.pad.Op("+")
-	case p.Action == "sub":
+	case key == "sub":
 		c.pad.Op("-")
-	case p.Action == "mul":
+	case key == "mul":
 		c.pad.Op("*")
-	case p.Action == "div":
+	case key == "div":
 		c.pad.Op("/")
-	case p.Action == "eq":
+	case key == "eq":
 		c.pad.Eq()
-	case p.Action == "clear":
+	case key == "clear":
 		c.pad.Clear()
+	case key == "dot":
+		c.pad.Dot()
+	case key == "neg":
+		c.pad.Neg()
 	default:
 		return sdk.View{}, fmt.Errorf("unknown action %q", p.Action)
 	}
 
-	return c.viewLocked(), nil
+	return c.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
 }
 
 // calc is the headless route that evaluates a full expression string.

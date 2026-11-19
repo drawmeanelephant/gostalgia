@@ -1331,7 +1331,7 @@ routes under `app/com.gostalgia.petwatch/`: `state`, `add`, `complete`,
 `apps/dogcalc` (display name **Dogcalc**, ID `com.gostalgia.dogcalc`) is the
 pack's calculator rendered as a real pad: digit keys are named breeds and the
 operator keys are dog verbs, laid out through the contract-v2 `grid` element.
-It shares the v1 Calculator's arithmetic core — the same `Evaluate` route math
+It shares the Calculator's arithmetic core — the same `Evaluate` route math
 and the same exported `Pad` key-press state machine — so chained left-to-right
 operations, decimals, overflow, and divide-by-zero behave identically.
 
@@ -1363,7 +1363,8 @@ Labels keep the arithmetic symbol visible next to the dog so the math still
 reads plainly. The `PAW .` cell disables itself while the operand being edited
 already has a decimal point, and `ROLL ±` flips the sign of the entry or of a
 computed result. The version-2 grid frees the pad from the 16-action bound, so
-the `.` and `±` keys that the v1 Calculator could not afford ship here.
+the `.` and `±` keys that the sixteen-action v1 contract cannot carry ship
+here.
 
 A version-1 snapshot gets the fallback instead: the original sixteen keys
 (`digit_0`–`digit_9`, `add`, `sub`, `mul`, `div`, `eq`, `clear`) as labeled
@@ -1393,6 +1394,16 @@ the pack's arithmetic story continues through Dogcalc. The app stays compiled
 and registered — Dogcalc imports its `Evaluate` core and `Pad` state machine —
 so existing headless `calc` calls and v1 views keep working, but it is no
 longer the face of arithmetic on the shelf.
+
+Retirement does not freeze its presentation contract. A negotiated version-2
+or version-3 snapshot carries the same plain four-column `Grid` ("Keypad") of
+18 cells as Dogcalc, with the shared `press` action routed by `cell_id`: clear,
+sign, divide, multiply on the first row, digits in calculator order, equals at
+the right edge, and zero plus decimal on the short final row. The decimal cell
+disables itself while the current operand already has its point. A version-1
+snapshot and every v1 action response keep exactly the original sixteen
+labeled actions (`digit_0`–`digit_9`, `add`, `sub`, `mul`, `div`, `eq`,
+`clear`) with no grid, `dot`, or `neg`, so older clients lose nothing.
 
 ## 15. Todo: a persistent task list (`com.gostalgia.todo`)
 
