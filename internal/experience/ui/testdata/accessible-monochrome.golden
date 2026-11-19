@@ -46,7 +46,7 @@ BUSY PROGRESS (REDUCED MOTION)
 Discover [----------------] BUSY
 
 HELP
-Esc back · Enter open · (F3) stop
+Esc back | Enter open | (F3) stop
 
 NORMAL
 [READY]
@@ -70,7 +70,7 @@ BUSY
 [BUSY]
 +----------------------------------+
 | [BUSY] BUSY                      |
-| Working on your request…         |
+| Working on your request...       |
 |                                  |
 |                                  |
 +----------------------------------+

@@ -1,7 +1,7 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home  [Apps]  Prompt   Tasks   Notifications (2)                            |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | SEARCH: o                                                                    |
 | +--------------------------------------------------------------------------+ |
@@ -15,10 +15,10 @@
 | | com.gostalgi+----------------------------------------------+             | |
 | +--------------------------------------------------------------------------+ |
 | Fixture app Clock with a description long enough to clip.                    |
-| GRANT  ipc · files                                                           |
+| GRANT  ipc | files                                                           |
 |                                                                              |
 |                                                                              |
 |                                                                              |
 | C:\users\guest> Clock is LIVE (PID 31). Enter relaunch, F3 stop, F4 view.    |
 +------------------------------------------------------------------------------+
-Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT
+Tab NEXT ACTION | Enter CHOOSE | Esc CANCEL | Ctrl-C EXIT

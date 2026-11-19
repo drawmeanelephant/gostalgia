@@ -1040,7 +1040,11 @@ func TestMouseTooltipsShowTheSanitizedCutText(t *testing.T) {
 					m.apps[0].Manifest.Description = desc
 					m.apps[0].Manifest.Permissions = perms
 					m.setMode(modeLauncher)
-					if !m.solve().Truncated(tc.id) {
+					if th.Name == theme.Monochrome().Name {
+						if r := rectOf(t, m, tc.id); ui.GraphemeWidth(tc.want) <= r.Dx() {
+							t.Fatal("the line fits; the test needs it cut")
+						}
+					} else if !m.solve().Truncated(tc.id) {
 						t.Fatal("the line fits; the test needs it cut")
 					}
 					if v := m.View(); v.MouseMode != tea.MouseModeAllMotion {
@@ -1049,8 +1053,12 @@ func TestMouseTooltipsShowTheSanitizedCutText(t *testing.T) {
 					r := rectOf(t, m, tc.id)
 					mouse(t, m, tea.MouseMotionMsg{X: r.Min.X + 2, Y: r.Min.Y})
 					tip, ok := m.root().Tooltip()
-					if !ok || tip != tc.want {
-						t.Fatalf("tooltip %q (%v), want %q", tip, ok, tc.want)
+					want := tc.want
+					if th.Name == theme.Monochrome().Name {
+						want = strings.ReplaceAll(want, " · ", " | ")
+					}
+					if !ok || tip != want {
+						t.Fatalf("tooltip %q (%v), want %q", tip, ok, want)
 					}
 					content := m.View().Content
 					if !strings.Contains(ansi.Strip(content), "the-last-permission") && !strings.Contains(ansi.Strip(content), "the end.") {

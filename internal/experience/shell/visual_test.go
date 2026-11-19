@@ -113,7 +113,7 @@ func TestPresentationV2Snapshots(t *testing.T) {
 		// Art wider than the viewport clips honestly with an ellipsis.
 		{"app-v2-clip", theme.Monochrome(), 40, 24, func(v *sdk.View) {
 			v.Blocks[0].Text = strings.Repeat("=", 60) + "\n" + v.Blocks[0].Text
-		}, nil, "=====…"},
+		}, nil, "=====..."},
 		// A focused grid keeps its selection marker on a small screen.
 		{"app-v2-grid-small", theme.Nostalgia(), 40, 18, nil, nil, "› [NE]"},
 	} {

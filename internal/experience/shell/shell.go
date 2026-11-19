@@ -1149,7 +1149,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.kit.Theme().ReducedMotion {
 				rm = "enabled"
 			}
-			m.append(entry{fmt.Sprintf("Active theme: %s · Mode: %v · Reduced motion: %s", m.kit.Theme().Name, m.kit.Mode(), rm), "accent"})
+			m.append(entry{fmt.Sprintf("Active theme: %s%sMode: %v%sReduced motion: %s", m.kit.Theme().Name, m.kit.Separator(), m.kit.Mode(), m.kit.Separator(), rm), "accent"})
 			m.append(entry{"Available themes: " + strings.Join(msg.themeNames, ", "), "muted"})
 		}
 		if msg.toggleMotion {

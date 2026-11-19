@@ -183,7 +183,8 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 	timeStr := r.Timestamp.Format("2006-01-02 15:04:05")
 	var headerLines []string
 	headerLines = append(headerLines, kit.Heading(heading))
-	headerLines = append(headerLines, kit.Muted(fmt.Sprintf("Time: %s · Exit code: %d · State: %s", timeStr, r.ExitCode, r.State)))
+	separator := kit.Separator()
+	headerLines = append(headerLines, kit.Muted(fmt.Sprintf("Time: %s%sExit code: %d%sState: %s", timeStr, separator, r.ExitCode, separator, r.State)))
 	if r.RestartCount > 0 {
 		headerLines = append(headerLines, kit.Muted(fmt.Sprintf("Restarts within window: %d", r.RestartCount)))
 	}
@@ -204,7 +205,7 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 
 	var formattedLogs []string
 	for _, l := range excerptLines {
-		formattedLogs = append(formattedLogs, kit.Text("  "+ui.Truncate(l, max(1, w-2))))
+		formattedLogs = append(formattedLogs, kit.Text("  "+kit.Truncate(l, max(1, w-2))))
 	}
 	if r.Truncated {
 		formattedLogs = append(formattedLogs, kit.Muted("  [... prior output truncated ...]"))
@@ -238,21 +239,22 @@ func identityRows(r CrashReceipt) int {
 // the end of the log excerpt as far as room allows.
 func renderCompact(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 	w := bounds.Width
-	status := fmt.Sprintf("Exit code: %d · State: %s", r.ExitCode, r.State)
+	separator := kit.Separator()
+	status := fmt.Sprintf("Exit code: %d%sState: %s", r.ExitCode, separator, r.State)
 	if r.RestartCount > 0 {
-		status += fmt.Sprintf(" · Restarts: %d", r.RestartCount)
+		status += fmt.Sprintf("%sRestarts: %d", separator, r.RestartCount)
 	}
-	lines := []string{kit.Heading(ui.Truncate(fmt.Sprintf("%s (PID %d) · CRASH RECEIPT", r.Name, r.PID), w))}
+	lines := []string{kit.Heading(kit.Truncate(fmt.Sprintf("%s (PID %d)%sCRASH RECEIPT", r.Name, r.PID, separator), w))}
 	if r.Reason != "" {
-		lines = append(lines, kit.StatusText(ui.Truncate("Reason: "+r.Reason, w), theme.Error))
+		lines = append(lines, kit.StatusText(kit.Truncate("Reason: "+r.Reason, w), theme.Error))
 	}
 	lines = append(lines,
-		kit.Muted(ui.Truncate(status, w)),
-		kit.Muted(ui.Truncate(fmt.Sprintf("#%s · %s", r.ID, r.Timestamp.Format("2006-01-02 15:04:05")), w)))
+		kit.Muted(kit.Truncate(status, w)),
+		kit.Muted(kit.Truncate(fmt.Sprintf("#%s%s%s", r.ID, separator, r.Timestamp.Format("2006-01-02 15:04:05")), w)))
 	if room := bounds.Height - len(lines); room > 0 {
 		excerpt := strings.Split(r.LogExcerpt, "\n")
 		for _, l := range excerpt[max(0, len(excerpt)-room):] {
-			lines = append(lines, kit.Text(ui.Truncate("  "+l, w)))
+			lines = append(lines, kit.Text(kit.Truncate("  "+l, w)))
 		}
 	}
 	return ui.Fit(strings.Join(lines, "\n"), bounds)

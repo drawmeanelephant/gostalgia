@@ -1,12 +1,12 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home   Apps   Prompt  [Tasks]  Notifications                                |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | +--------------------------------------------------------------------------+ |
-| | > LOGS · PID 7                                                           | |
+| | > LOGS | PID 7                                                           | |
 | | CHILD LOG TAIL: com.gostalgia.echo (PID 7)                               | |
-| | Match 2 of 10 for "line 01" · n next · N previous                        | |
+| | Match 2 of 10 for "line 01" | n next | N previous                        | |
 | |                                                                          | |
 | |   echo line 003                                                          | |
 | |   echo line 004                                                          | |
@@ -21,4 +21,4 @@
 |                                                                              |
 | C:\users\guest> Task Manager owns focus. Esc returns to prompt.              |
 +------------------------------------------------------------------------------+
-Esc BACK · ↑↓ SCROLL · f FOLLOW · / SEARCH · n/N MATCH · Ctrl-C EXIT
+Esc BACK | Up/Down SCROLL | f FOLLOW | / SEARCH | n/N MATCH | Ctrl-C EXIT

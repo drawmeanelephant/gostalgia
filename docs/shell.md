@@ -380,6 +380,48 @@ event-type request on the returned `tea.View`.
   built-in `false` default cannot enable motion in a default-reduced theme.
   Existing process/config/log polling and notification expiry remain functional work.
 
+### Home wordmark and ASCII chrome (Issue #214)
+
+Home draws `GOSTALGIA` through `bloomfx.dev/bloom/fig` with the bundled `big`
+font and two tracking cells between glyphs. When that figure does not fit the
+solved body content width, Home uses bundled `mini`; when `mini` does not fit,
+it uses the existing `G O S T A L G I A` spaced title. A short body also chooses
+the spaced title when a FIGlet figure would leave less than one gap and one
+actionable running-application row. These are cell-based thresholds, not raw
+terminal-width checks, so panel borders and theme padding are already excluded.
+The running-application section can shrink to its selected row at 30×10 without
+covering the prompt or help.
+
+Both FIGlet fonts emit ASCII, including under Monochrome and effective Plain.
+The kit's heading tokens supply the accent/surface styling in color modes;
+effective Plain emits no color escapes. The wordmark is static: it attaches no
+effect, clock, animation frame command, or idle redraw work, regardless of the
+model's motion setting.
+
+The pinned bloom `fig/fonts/LICENSES.md` lists both `big` and `mini` under
+**BSD-3-Clause**, from figlet. Their copyright notices are:
+
+```text
+Copyright (C) 1991, 1993, 1994 Glenn Chappell and Ian Chai
+Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001 John Cowan
+Copyright (C) 2002 Christiaan Keet
+Copyright (C) 2011 Claudio Matsuoka
+All rights reserved.
+```
+
+Monochrome also applies bounded ASCII fallbacks to shell-owned help and hint
+arrows, middle-dot separators, header rules, truncation suffixes, and empty
+markers. The conversion happens at those owned literals and suffixes, including
+`ui.HelpBar`, presentation hints, and task-log headings; it is not a global
+Unicode filter. External and application text, including CJK, combining
+characters, and emoji, remains unchanged after `ui.Sanitize`. Non-Monochrome
+Plain keeps its existing chrome Unicode; its wordmark is ASCII because the
+bundled fonts and spaced title already are.
+
+Home goldens cover all five built-in themes at 30×10, 80×24, and 200×60 in
+`internal/experience/shell/testdata/home-wordmark/`, with focused tests around
+the actual big/mini/spaced thresholds and short-height fallback.
+
 ### Mouse and clipboard (Issue #211)
 
 Mouse input is additive: every click, wheel step and copy has a keyboard

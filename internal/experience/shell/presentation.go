@@ -814,9 +814,9 @@ func (m *Model) viewHeader() []string {
 			break
 		}
 	}
-	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(hints)}
+	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(m.kit.Hint(hints))}
 	if v.busy || v.data.State == sdk.ViewLoading {
-		lines = append(lines, m.kit.Badge("Loading…", theme.Busy, max(0, m.width-4)))
+		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, m.width-4)))
 	}
 	if v.banner != "" {
 		lines = append(lines, m.kit.StatusText(viewText(v.banner), theme.Error))
@@ -990,7 +990,7 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 		window, top := m.regionWindow(height)
 		label := viewText(r.Label)
 		if len(all) > window {
-			label += " " + m.kit.Muted(fmt.Sprintf("– %d/%d", top+1, len(all)))
+			label += " " + m.kit.Muted(m.kit.Hint(fmt.Sprintf("– %d/%d", top+1, len(all))))
 		}
 		if v.regionFocused() {
 			rows = append(rows, m.kit.FocusText(label))

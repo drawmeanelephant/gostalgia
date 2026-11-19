@@ -306,7 +306,7 @@ func (m *Model) launcherNode() bloom.Child {
 			return m.kit.Leaf(func(b ui.Bounds) string { return strings.Join(m.renderLauncher(b.Width, b.Height), "\n") })
 		}
 		selected := min(m.selected, len(filtered)-1)
-		rows := []bloom.Child{bloom.Fixed(1, m.kit.Leaf(func(b ui.Bounds) string { return ui.Truncate(m.launcherSearch(), b.Width) }))}
+		rows := []bloom.Child{bloom.Fixed(1, m.kit.Leaf(func(b ui.Bounds) string { return m.kit.Truncate(m.launcherSearch(), b.Width) }))}
 		used := 1
 		start, end, cardHeight := launcherCards(selected, len(filtered), h, m.launcherTop)
 		for i := start; i < end && used < h; i++ {
@@ -344,12 +344,19 @@ func (m *Model) launcherNode() bloom.Child {
 			text string
 		}{
 			{launcherDescription, safe(a.Manifest.Description)},
-			{launcherGrants, "GRANT  " + safe(strings.Join(a.Manifest.Permissions, " · "))},
+			{launcherGrants, "GRANT  " + safe(strings.Join(a.Manifest.Permissions, m.kit.Separator()))},
 		} {
 			if used >= h {
 				break
 			}
-			rows = append(rows, bloom.Fixed(1, bloom.Text(line.text).Style(m.kit.MutedStyle()).Truncate().ID(line.id)))
+			text := bloom.Text(line.text).Style(m.kit.MutedStyle()).Truncate().ID(line.id)
+			if m.kit.ASCIIChrome() {
+				text = bloom.Text(m.kit.Truncate(line.text, w)).Style(m.kit.MutedStyle()).ID(line.id)
+				if ui.GraphemeWidth(line.text) > w {
+					text = text.Tooltip(line.text)
+				}
+			}
+			rows = append(rows, bloom.Fixed(1, text))
 			used++
 		}
 		return bloom.Column(rows...)

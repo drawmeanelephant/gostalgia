@@ -351,11 +351,11 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 	// marker, and its self-sizing columns fight the fixed DOS column
 	// budget below.
 	cols := solveColumns(w-markerWidth, m.pidWidth())
-	headerRow := columnLine(cols, func(c column) string { return c.title })
+	headerRow := columnLine(kit, cols, func(c column) string { return c.title })
 
 	var rows []string
-	rows = append(rows, kit.Heading(ui.Truncate(headerRow, w)))
-	rows = append(rows, kit.Muted(strings.Repeat("─", min(w, ui.GraphemeWidth(headerRow)))))
+	rows = append(rows, kit.Heading(kit.Truncate(headerRow, w)))
+	rows = append(rows, kit.Muted(kit.Rule(min(w, ui.GraphemeWidth(headerRow)))))
 
 	headerCount := len(rows)
 	footerReserve := 2 // status and help lines
@@ -374,13 +374,13 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 		if sym != "" {
 			sym += " "
 		}
-		rows = append(rows, kit.StatusText(ui.Truncate(sym+m.errorMsg, w), theme.Error))
+		rows = append(rows, kit.StatusText(kit.Truncate(sym+m.errorMsg, w), theme.Error))
 	} else if m.statusMsg != "" {
 		sym := kit.Theme().Status(theme.Success).Symbol
 		if sym != "" {
 			sym += " "
 		}
-		rows = append(rows, kit.StatusText(ui.Truncate(sym+m.statusMsg, w), theme.Success))
+		rows = append(rows, kit.StatusText(kit.Truncate(sym+m.statusMsg, w), theme.Success))
 	} else {
 		liveCount := 0
 		for _, p := range m.procs {
@@ -388,7 +388,7 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 				liveCount++
 			}
 		}
-		rows = append(rows, kit.Muted(ui.Truncate(fmt.Sprintf("%d total processes (%d active)", len(m.procs), liveCount), w)))
+		rows = append(rows, kit.Muted(kit.Truncate(fmt.Sprintf("%d total processes (%d active)", len(m.procs), liveCount), w)))
 	}
 
 	return kit.Panel(ui.Panel{
@@ -482,10 +482,10 @@ func VisibleColumns(width int) []string {
 	return titles
 }
 
-func columnLine(cols []column, text func(column) string) string {
+func columnLine(kit ui.Kit, cols []column, text func(column) string) string {
 	cells := make([]string, len(cols))
 	for i, c := range cols {
-		s := ui.Truncate(text(c), c.width)
+		s := kit.Truncate(text(c), c.width)
 		cells[i] = s + strings.Repeat(" ", max(0, c.width-ui.GraphemeWidth(s)))
 	}
 	return strings.Join(cells, " ")
@@ -514,11 +514,11 @@ func (m *Model) processLines(kit ui.Kit, cols []column, w, n int) []string {
 	var lines []string
 	for i := start; i < end; i++ {
 		p := m.procs[i]
-		line := columnLine(cols, func(c column) string { return c.cell(p) })
+		line := columnLine(kit, cols, func(c column) string { return c.cell(p) })
 		if i == m.selected {
-			lines = append(lines, kit.Selection(ui.Truncate(kit.Theme().Focus.Marker+" "+line, w)))
+			lines = append(lines, kit.Selection(kit.Truncate(kit.Theme().Focus.Marker+" "+line, w)))
 		} else {
-			lines = append(lines, kit.Text(ui.Truncate("  "+line, w)))
+			lines = append(lines, kit.Text(kit.Truncate("  "+line, w)))
 		}
 	}
 	return lines
@@ -613,7 +613,7 @@ func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
 	var lines []string
 	n := bounds.Height
 	if n >= 2 {
-		lines = append(lines, kit.Heading(ui.Truncate(columnLine(cols, func(c column) string { return c.title }), w)))
+		lines = append(lines, kit.Heading(kit.Truncate(columnLine(kit, cols, func(c column) string { return c.title }), w)))
 		n--
 	}
 	lines = append(lines, m.processLines(kit, cols, w, n)...)

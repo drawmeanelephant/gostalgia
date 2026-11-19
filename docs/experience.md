@@ -157,6 +157,11 @@ autodetection or host environment heuristics:
     limited-font terminals.
   - The focus cursor uses standard ASCII `> ` instead of Unicode symbols.
   - Unread indicators use `* ` instead of colored dots.
+  - Shell-owned help arrows, separators, truncation suffixes, horizontal rules,
+    and empty markers use bounded ASCII fallbacks. Application, document,
+    notification, log, and other external Unicode remains verbatim after
+    `ui.Sanitize`. Plain with a non-Monochrome theme keeps its existing chrome;
+    only its wordmark is required to be ASCII.
 - **High-contrast tokens**:
   - `theme.HighContrast()`: pure black `#000000` canvas with pure white `#FFFFFF`
     primary text and high-visibility `#FFFF00` yellow accents and focus highlights.
@@ -285,6 +290,38 @@ presents three discoverable activity sections:
    `C:\users\guest\documents` (`/users/guest/documents`), discovered via `fs/list`.
    Selecting a document and pressing `Enter` automatically opens and prints it
    via `type <path>`.
+
+### Home FIGlet wordmark (Issue #214)
+
+The dashboard renders `GOSTALGIA` with `bloomfx.dev/bloom/fig`, using the
+bundled `big` font with two tracking cells, then bundled `mini`, then the
+existing `G O S T A L G I A` title as solved content width decreases. The
+threshold tests use the figures' actual cell widths. A short-height guard also
+selects the spaced title when necessary to retain a gap and an actionable
+running-application row. Both bundled fonts are ASCII, so the wordmark satisfies
+Monochrome and effective Plain without changing external text or making all
+non-Monochrome Plain chrome ASCII. Kit heading tokens provide its theme styling;
+Plain remains color-free. It is static under every motion policy and schedules
+no animation or idle work.
+
+The pinned bloom `fig/fonts/LICENSES.md` attributes `big` and `mini` to figlet
+under **BSD-3-Clause**, not merely bloom's MIT license. The applicable copyright
+notice is:
+
+```text
+Copyright (C) 1991, 1993, 1994 Glenn Chappell and Ian Chai
+Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001 John Cowan
+Copyright (C) 2002 Christiaan Keet
+Copyright (C) 2011 Claudio Matsuoka
+All rights reserved.
+```
+
+Reviewed Home goldens cover `nostalgia`, `midnight`, `monochrome`,
+`high-contrast`, and `high-contrast-light` at 30×10, 80×24, and 200×60 (15 files
+under `internal/experience/shell/testdata/home-wordmark/`). Separate rendering
+tests cover Monochrome shell-owned arrows, separators, rules, truncation, empty
+markers, complete help rows, and preservation of external CJK, combining, and
+ZWJ-emoji content.
 
 ### Searchable friendly-name app launcher
 
@@ -631,7 +668,9 @@ in golden and steep snapshot fixtures, including Windows checkouts with
 `core.autocrlf=true`.
 Shell goldens cover home, populated shelf, empty shelf, busy/error, app
 presentation views, and accessible views (`monochrome-prompt.golden`,
-`monochrome-home.golden`, `high-contrast-prompt.golden`). Overlay goldens in
+`monochrome-home.golden`, `high-contrast-prompt.golden`). The 15 wordmark goldens
+in `internal/experience/shell/testdata/home-wordmark/` cover every built-in
+theme at 30×10, 80×24, and 200×60. Overlay goldens in
 `internal/experience/shell/testdata/overlay/` show the command palette and a
 confirmation over Home, Prompt, the Launcher, an app presentation, the Task
 Manager and the Notification Center in every built-in theme at 80×24 (60

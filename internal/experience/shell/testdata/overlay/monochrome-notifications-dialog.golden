@@ -1,11 +1,11 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
 |  Home   Apps   Prompt   Tasks  [Notifications (2)]                           |
-| [OK] ONLINE   guest · C: environment drive                                   |
+| [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | +--------------------------------------------------------------------------+ |
 | | > NOTIFICATION CENTER                                                    | |
-| | NOTIFICATIONS: 2 total · 2 unread · DND OFF                              | |
+| | NOTIFICATIONS: 2 total | 2 unread | DND OFF                              | |
 | |             +----------------------------------------------+             | |
 | |   * [BUSY] B| > Shut down Gostalgia?                       |             | |
 | |     PID 12 b| Stops every app and service and ends every   |             | |
@@ -21,4 +21,4 @@
 |                                                                              |
 | C:\users\guest> Notification Center owns focus. Esc returns to prompt.       |
 +------------------------------------------------------------------------------+
-Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT
+Tab NEXT ACTION | Enter CHOOSE | Esc CANCEL | Ctrl-C EXIT

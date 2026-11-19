@@ -42,7 +42,8 @@ go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
 - **VFS** (`internal/vfs`) — environment-rooted filesystem with mounts,
   host backend confined via `os.Root`, memfs `/tmp`; `testing/fstest`-verified.
 - **Charm shell** (`internal/experience/shell`) — Bubble Tea + Lip Gloss,
-  DOS-style prompt, app shelf, command history, completion, scrollback; IPC only.
+  DOS-style prompt, app shelf, command history, completion, scrollback, and a
+  bundled FIGlet Home wordmark with narrow-width fallbacks; IPC only.
 - **App SDK** (`sdk`, `internal/app`, `apps/`) — embedded JSON manifests,
   Init/Run/Stop, capability-scoped service calls and routes, single-instance
   launch, failure cleanup. Echo is the single copyable demo.
@@ -51,8 +52,11 @@ go run ./cmd/gctl --root /tmp/gs shutdown    # clean shutdown
 
 The runtime core and app SDK are standard-library-only. The terminal experience
 uses the allowed Charm family (and its transitive dependencies), without cgo.
-The exactly pinned bloom layout engine is approved for the experience layer;
-so far only a proof test imports it.
+The exactly pinned bloom engine provides the experience-only layout, overlays,
+buffers, additive mouse support, finite per-session motion, and Home FIGlet
+wordmark. Its bundled `big` and `mini` fonts are ASCII and BSD-3-Clause; their
+attribution and fallback behavior are documented in
+[docs/shell.md](docs/shell.md#home-wordmark-and-ascii-chrome-issue-214).
 See [docs/applications.md](docs/applications.md) for the complete app-writing
 spec, [docs/shell.md](docs/shell.md) for the terminal experience, and
 [docs/architecture.md](docs/architecture.md)
@@ -74,4 +78,6 @@ Requires Go ≥ 1.27.3 (the floor set by the exactly pinned, pre-1.0
 ## License
 
 MIT — see [LICENSE](LICENSE), which also credits the Charm ecosystem and other
-dependencies that power the terminal experience.
+dependencies that power the terminal experience. The bundled FIGlet `big` and
+`mini` fonts used by Home are BSD-3-Clause; see the
+[font attribution](docs/shell.md#home-wordmark-and-ascii-chrome-issue-214).

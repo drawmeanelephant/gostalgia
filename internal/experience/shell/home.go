@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"bloomfx.dev/bloom"
+	"bloomfx.dev/bloom/fig"
+	"bloomfx.dev/bloom/fig/fonts"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -99,10 +101,51 @@ func (m *Model) homeItems() []homeItem {
 type homeSection int
 
 const (
-	homeSystemID homeSection = iota + 1
+	homeWordmarkID homeSection = iota + 1
+	homeSystemID
 	homeAppsID
 	homeDocsID
 )
+
+const homeSpacedTitle = "G O S T A L G I A"
+
+type homeWordmark struct {
+	text          string
+	font          string
+	width, height int
+}
+
+// selectHomeWordmark uses the available content cells, not the raw terminal
+// width. Both bundled fonts are ASCII; the final fallback is the pre-FIGlet
+// spaced title. Rendering is static and attaches no animation commands.
+func selectHomeWordmark(width int) homeWordmark {
+	for _, candidate := range []struct {
+		name    string
+		font    *fig.Font
+		options fig.Options
+	}{{"big", fonts.Big(), fig.Options{Tracking: 2}}, {"mini", fonts.Mini(), fig.Options{}}} {
+		figure := candidate.font.Figure("GOSTALGIA", candidate.options)
+		w, h := figure.Size()
+		if w <= width {
+			return homeWordmark{text: figure.String(), font: candidate.name, width: w, height: h}
+		}
+	}
+	return spacedHomeWordmark()
+}
+
+func spacedHomeWordmark() homeWordmark {
+	return homeWordmark{text: homeSpacedTitle, font: "spaced-title", width: ui.GraphemeWidth(homeSpacedTitle), height: 1}
+}
+
+// selectHomeWordmarkForBounds also preserves one gap and one actionable app
+// row on short screens. Width thresholds remain the large/mini/spaced order.
+func selectHomeWordmarkForBounds(width, height int) homeWordmark {
+	mark := selectHomeWordmark(width)
+	if height > 0 && mark.height+2 > height {
+		return spacedHomeWordmark()
+	}
+	return mark
+}
 
 // Collapse priorities of Home's secondary sections, lowest dropped first.
 // Running applications are primary and never collapse; they shrink to the
@@ -158,9 +201,10 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 		if user == "" {
 			user = "guest"
 		}
-		sysLine := fmt.Sprintf("Uptime: %s · Processes: %d · Services: %d · User: %s · Drive: C:",
-			up, m.homeData.ProcessCount, m.homeData.ServicesCount, user)
-		return m.kit.Heading("SYSTEM ACTIVITY") + "\n" + m.kit.Muted(ui.Truncate(sysLine, b.Width))
+		separator := m.kit.Separator()
+		sysLine := fmt.Sprintf("Uptime: %s%sProcesses: %d%sServices: %d%sUser: %s%sDrive: C:",
+			up, separator, m.homeData.ProcessCount, separator, m.homeData.ServicesCount, separator, user, separator)
+		return m.kit.Heading("SYSTEM ACTIVITY") + "\n" + m.kit.Muted(m.kit.Truncate(sysLine, b.Width))
 	})
 	appsRows := 1 + max(1, running)
 	apps := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeApps(b, hv) }).Natural(0, appsRows),
@@ -169,9 +213,12 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	docs := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows),
 		func(b ui.Bounds) []hit { return m.homeDocHits(b, hv, running) }, nil)
 	return m.withMouse(ui.SizedNode(func(ctx bloom.Context) bloom.Child {
+		mark := selectHomeWordmarkForBounds(ctx.Width, ctx.Height)
+		wordmark := m.kit.Leaf(func(ui.Bounds) string { return m.kit.Heading(mark.text) })
 		return bloom.Column(
+			bloom.Fixed(mark.height, wordmark).ID(homeWordmarkID),
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
-			bloom.Auto(apps).Min(min(appsRows, ctx.Height)).ID(homeAppsID),
+			bloom.Auto(apps).Min(1).ID(homeAppsID),
 			bloom.Auto(docs).Min(min(2, docsRows)).Collapsible(prioHomeDocuments).ID(homeDocsID),
 		).Gap(1)
 	}), nil, m.homeScroll)
@@ -199,11 +246,11 @@ func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 			selectedRow = idx
 		}
 		badge := m.kit.Badge(fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success, 20)
-		rows = append(rows, ui.Truncate(m.homeRow(idx == hv.selected, viewText(a.Manifest.Name),
+		rows = append(rows, m.kit.Truncate(m.homeRow(idx == hv.selected, viewText(a.Manifest.Name),
 			"  "+badge+"  "+m.kit.Muted(viewText(a.Manifest.ID))), b.Width))
 	}
 	if len(rows) == 0 {
-		rows = append(rows, m.kit.Muted(ui.Truncate("  ◇ No applications running (press F2 for App Launcher)", b.Width)))
+		rows = append(rows, m.kit.Muted(m.kit.Truncate("  "+m.kit.EmptyMarker()+" No applications running (press F2 for App Launcher)", b.Width)))
 	}
 	heading := m.kit.Heading("RUNNING APPLICATIONS")
 	n := b.Height - 1
@@ -224,12 +271,12 @@ func (m *Model) renderHomeDocs(b ui.Bounds, hv homeView, base int) string {
 	lines := []string{m.kit.Heading("DOCUMENT SHORTCUTS") + " " + m.kit.Muted("(C:\\users\\guest\\documents)")}
 	docs := m.homeData.Documents
 	if len(docs) == 0 {
-		lines = append(lines, m.kit.Muted(ui.Truncate("  ◇ No documents found in C:\\users\\guest\\documents", b.Width)))
+		lines = append(lines, m.kit.Muted(m.kit.Truncate("  "+m.kit.EmptyMarker()+" No documents found in C:\\users\\guest\\documents", b.Width)))
 	}
 	n := max(1, b.Height-1)
 	start := max(0, min(hv.selected-base-n+1, len(docs)-n))
 	for i := start; i < min(len(docs), start+n); i++ {
-		lines = append(lines, ui.Truncate(m.homeRow(base+i == hv.selected, viewText(docs[i].Name),
+		lines = append(lines, m.kit.Truncate(m.homeRow(base+i == hv.selected, viewText(docs[i].Name),
 			"  "+m.kit.Muted(fmt.Sprintf("%d B", docs[i].Size))), b.Width))
 	}
 	return strings.Join(lines, "\n")
