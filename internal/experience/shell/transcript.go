@@ -140,6 +140,7 @@ func (l transcriptLook) style(e entry) string {
 // new kit's styles, from their kept text and kind, without moving.
 func (m *Model) setKit(k ui.Kit) {
 	m.kit = k
+	m.syncMotion()
 	look := transcriptLookOf(k)
 	same := look.id == m.transcriptLook.id
 	m.transcriptLook = look

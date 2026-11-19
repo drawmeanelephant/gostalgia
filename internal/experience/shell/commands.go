@@ -43,6 +43,7 @@ type sysStatusData struct {
 type resultMsg struct {
 	text             string
 	err              error
+	failedLaunch     bool
 	cwd              string
 	apps             []appStatus
 	status           sysStatusData

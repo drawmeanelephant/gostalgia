@@ -46,6 +46,7 @@ suite:
 
 ```sh
 go test -count=1 -v ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+go test -count=1 -v ./internal/experience/shell -run '^TestSteepMotionScenarios$'
 go test -count=1 -v ./test/e2e -run '^(TestCharmRestrictedToExperience|TestSteepImportFence|TestApprovedCharmBaseline)$'
 ```
 
@@ -53,9 +54,11 @@ The scenarios boot a disposable real runtime, authenticate an IPC client, and
 drive the production shell through an emulated terminal. They cover Home,
 launcher launch/stop, the palette, prompt echo, below-minimum resize and
 recovery, bracketed paste, decoded mouse input, toast geometry, and Ctrl-C
-terminal restoration. Checked-in snapshots are compared read-only by default;
-see [experience.md](experience.md#verification-and-snapshots) for deliberate
-updates.
+terminal restoration. The motion scenarios additionally advance both injected
+clocks through a real failed launch, capturing 0/20/160 ms frames and immediate
+ReducedMotion output without wall-clock sleeps. Checked-in snapshots are
+compared read-only by default; see
+[experience.md](experience.md#verification-and-snapshots) for deliberate updates.
 
 Terminal emulation does not replace host integration checks. When changing
 terminal ownership, detach, or SSH transport, also run the SSH integration tests
@@ -63,7 +66,7 @@ and exercise a real local PTY and the real OpenSSH client against `boot --ssh`
 with a disposable root and keys:
 
 ```sh
-go test -count=1 -v ./internal/experience/sshx -run '^TestSSHSessionAttachesShell$'
+go test -count=1 -v ./internal/experience/sshx -run '^(TestSSHSessionAttachesShell|TestConcurrentSSHMotionPolicies)$'
 ```
 
 Record resize/recovery, paste, mouse, toast invariance, detach survival, and

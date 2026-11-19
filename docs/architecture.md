@@ -348,7 +348,13 @@ panel geometry. The usage rules are in
 [shell.md](shell.md#shell-frame-layout-issue-208). Since #211 bloom also routes
 the shell's additive mouse input; copies bypass bloom's clipboard, which
 would also send OSC 52, and go through the runtime's `clipboard/write` under
-operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)).
+operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)). Since #213
+finite motion is also model-local: the only attached effect is a 160 ms
+failed-launch badge shake, with the same per-model clock injected into
+`bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or copy
+flash and schedules no animation frames; `anim.SetMotion` is never used, and
+idle shells retain only their existing functional polling
+([experience.md](experience.md#finite-per-session-motion-issue-213)).
 
 **steep (Issue #212).** `getsteep.dev/steep` and its separate
 `getsteep.dev/steep/reel` module are direct **test-only** dependencies, both

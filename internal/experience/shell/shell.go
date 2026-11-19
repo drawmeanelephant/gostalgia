@@ -111,12 +111,13 @@ type openAppMsg struct {
 }
 
 type configUpdateMsg struct {
-	theme         string
-	colorMode     string
-	reducedMotion *bool
-	startupView   string
-	dnd           *bool
-	shortcuts     map[string]string
+	theme            string
+	colorMode        string
+	reducedMotion    *bool
+	motionConfigured bool
+	startupView      string
+	dnd              *bool
+	shortcuts        map[string]string
 	// loaded is set for a refresh that read the configuration. mouse is
 	// accessibility.mouse in it, nil when it is unset.
 	loaded bool
@@ -135,33 +136,37 @@ type Model struct {
 	// transcript is the semantic history behind transcriptBuf: one entry
 	// per logical line, oldest first, kept to restyle the lines when the
 	// kit changes. See transcript.go.
-	transcript      []entry
-	transcriptBuf   *bloom.Buffer
-	transcriptLook  transcriptLook
-	transcriptPos   bloom.ViewportPos
-	history         []string
-	historyPos      int
-	draft           string
-	apps            []appStatus
-	selected        int
-	launcherTop     int // the first card a click left in view; see launcherCards
-	shelf           bool
-	busy            bool
-	scroll          int
-	kit             ui.Kit
-	ui              *bloom.Root // this model's own root; see root()
-	uiKey           rootKey
-	presentation    *appView
-	viewEpoch       uint64
-	viewSub         *ipc.ClientSubscription
-	mode            viewMode
-	homeData        homeData
-	homeSelected    int
-	launcherQuery   string
-	paletteOpen     bool
-	paletteQuery    string
-	paletteSelected int
-	previousMode    viewMode
+	transcript         []entry
+	transcriptBuf      *bloom.Buffer
+	transcriptLook     transcriptLook
+	transcriptPos      bloom.ViewportPos
+	history            []string
+	historyPos         int
+	draft              string
+	apps               []appStatus
+	selected           int
+	launcherTop        int // the first card a click left in view; see launcherCards
+	shelf              bool
+	busy               bool
+	scroll             int
+	kit                ui.Kit
+	ui                 *bloom.Root // this model's own root; see root()
+	uiKey              rootKey
+	motion             motionState // this model's own clocks and finite effects
+	themeMotionDefault bool        // active user or built-in theme's own ReducedMotion token
+	configuredMotion   *bool       // last explicit non-default config value; nil uses the theme default
+	motionOverride     *bool       // session-local motion command; outranks later config refreshes
+	presentation       *appView
+	viewEpoch          uint64
+	viewSub            *ipc.ClientSubscription
+	mode               viewMode
+	homeData           homeData
+	homeSelected       int
+	launcherQuery      string
+	paletteOpen        bool
+	paletteQuery       string
+	paletteSelected    int
+	previousMode       viewMode
 	// confirm is the open confirmation dialog, if any; see confirm.go.
 	confirm *confirmation
 	// procPending is set while a confirmed process stop or reap is in
@@ -335,7 +340,8 @@ func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}
 		lastProcs:     make(map[int32]procTracking),
 		user:          "guest",
 	}
-	m.setKit(ui.New(t, mode))
+	m.motion.now = time.Now
+	m.SetTheme(t, mode)
 	m.append(entry{"Welcome home. A familiar prompt. A whole new environment.", "accent"})
 	m.append(entry{"Type help to explore, or F2 to open your app shelf.", "muted"})
 	return m
@@ -459,11 +465,14 @@ func (m *Model) fetchConfigCmd() tea.Cmd {
 		defer cancel()
 		var out struct {
 			Effective map[string]any `json:"effective"`
+			Layers    map[string]any `json:"layers"`
 		}
 		if err := client.Call(c, "config/list", nil, &out); err != nil {
 			return nil
 		}
-		return m.parseConfigMsg(out.Effective)
+		msg := m.parseConfigMsg(out.Effective)
+		msg.motionConfigured = hasConfiguredMotion(out.Layers)
+		return msg
 	}
 }
 
@@ -557,6 +566,26 @@ func (m *Model) parseConfigMsg(eff map[string]any) configUpdateMsg {
 	return msg
 }
 
+// hasConfiguredMotion distinguishes an operator's explicit preference from
+// the built-in accessibility.reduced_motion=false default. Theme defaults
+// remain authoritative when no higher layer sets the preference.
+func hasConfiguredMotion(layers map[string]any) bool {
+	for _, name := range []string{"preview", "app", "user", "system"} {
+		layer, ok := layers[name].(map[string]any)
+		if !ok {
+			continue
+		}
+		accessibility, ok := layer["accessibility"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := accessibility["reduced_motion"].(bool); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // openSelectedTask opens the process selected in the Task Manager's table,
 // as Enter does: its crash receipt if it has one, or else its log tail.
 func (m *Model) openSelectedTask() tea.Cmd {
@@ -602,7 +631,7 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 				defer cancel()
 				var out json.RawMessage
 				if err := client.Call(c, "app/launch", map[string]string{"id": id}, &out); err != nil {
-					return resultMsg{err: err}
+					return resultMsg{err: err, failedLaunch: true}
 				}
 				var apps []appStatus
 				_ = client.Call(c, "app/list", nil, &apps)
@@ -616,7 +645,7 @@ func (m *Model) openAppByID(id string) tea.Cmd {
 		}
 	}
 	return func() tea.Msg {
-		return resultMsg{err: fmt.Errorf("app %s not found", id)}
+		return resultMsg{err: fmt.Errorf("app %s not found", id), failedLaunch: true}
 	}
 }
 
@@ -863,7 +892,9 @@ func (m *Model) submit(line string) tea.Cmd {
 }
 
 // Update passes msg to the bloom root, except the terminal's own colors and
-// profile, then to the shell.
+// profile, then to the shell and this model's finite effects. Motion is
+// updated after the shell so turning ReducedMotion on cannot schedule another
+// frame from an effect that was active when the message arrived.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.MouseMsg); ok && m.mouseOff {
 		// A report sent before the terminal saw the mouse turned off.
@@ -874,7 +905,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rootCmd = m.root().Update(msg)
 	}
 	model, cmd := m.update(msg)
-	return model, tea.Batch(rootCmd, cmd)
+	return model, tea.Batch(rootCmd, cmd, m.updateMotion(msg))
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -931,8 +962,18 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.colorMode != "" {
 			m.SetColorModeByName(msg.colorMode)
 		}
-		if msg.reducedMotion != nil {
-			m.SetReducedMotion(*msg.reducedMotion)
+		if msg.loaded {
+			m.configuredMotion = nil
+			if msg.motionConfigured {
+				m.configuredMotion = msg.reducedMotion
+			}
+		} else if msg.reducedMotion != nil {
+			// Direct configUpdateMsg values in integration tests and internal
+			// callers represent explicit changes, not an effective-config poll.
+			m.configuredMotion = msg.reducedMotion
+		}
+		if msg.loaded || msg.reducedMotion != nil || msg.theme != "" {
+			m.applyMotionPolicy()
 		}
 		if msg.dnd != nil && m.notifs != nil {
 			m.notifs.SetDND(*msg.dnd)
@@ -967,6 +1008,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingTheme = ""
 		if msg.theme != nil {
 			m.SetTheme(*msg.theme, m.kit.Mode())
+			m.applyMotionPolicy()
 		} else {
 			m.unresolvedTheme = msg.name
 		}
@@ -1090,11 +1132,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.setTheme != "" {
 			if m.SetThemeByName(msg.setTheme) {
 				m.pendingTheme = ""
+				m.applyMotionPolicy()
 				m.append(entry{fmt.Sprintf("Theme changed to %s", m.kit.Theme().Name), "accent"})
 				cmd = m.persistThemeCmd(msg.setTheme)
 			} else if msg.userTheme != nil {
 				m.pendingTheme = ""
 				m.SetTheme(*msg.userTheme, m.kit.Mode())
+				m.applyMotionPolicy()
 				m.append(entry{fmt.Sprintf("Theme changed to %s", m.kit.Theme().Name), "accent"})
 				cmd = m.persistThemeCmd(m.kit.Theme().Name)
 			} else {
@@ -1110,14 +1154,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.toggleMotion {
 			newMotion := !m.kit.Theme().ReducedMotion
-			m.SetReducedMotion(newMotion)
+			m.setSessionReducedMotion(newMotion)
 			state := "disabled"
 			if newMotion {
 				state = "enabled"
 			}
 			m.append(entry{fmt.Sprintf("Reduced motion is now %s", state), "accent"})
 		} else if msg.setMotion != nil {
-			m.SetReducedMotion(*msg.setMotion)
+			m.setSessionReducedMotion(*msg.setMotion)
 			state := "disabled"
 			if *msg.setMotion {
 				state = "enabled"
@@ -1164,6 +1208,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.append(entry{msg.err.Error(), "error"})
+			if failedLaunchResult(msg) {
+				cmd = tea.Batch(cmd, m.startFailedLaunch())
+			}
 		}
 		if msg.detach {
 			if m.attached {
@@ -1775,6 +1822,7 @@ func (m *Model) Theme() theme.Theme {
 
 // SetTheme updates the shell's active theme and color capability mode.
 func (m *Model) SetTheme(t theme.Theme, mode ui.ColorMode) {
+	m.themeMotionDefault = t.ReducedMotion
 	m.setKit(ui.New(t, mode))
 }
 
@@ -1782,6 +1830,26 @@ func (m *Model) SetTheme(t theme.Theme, mode ui.ColorMode) {
 func (m *Model) SetReducedMotion(enabled bool) {
 	th := m.kit.Theme().WithReducedMotion(enabled)
 	m.setKit(ui.New(th, m.kit.Mode()))
+}
+
+// applyMotionPolicy reapplies this session's preference after a theme or
+// config refresh. With neither an override nor explicit config, it restores
+// the recorded user or built-in theme default.
+func (m *Model) applyMotionPolicy() {
+	if m.motionOverride != nil {
+		m.SetReducedMotion(*m.motionOverride)
+		return
+	}
+	if m.configuredMotion != nil {
+		m.SetReducedMotion(*m.configuredMotion)
+		return
+	}
+	m.SetReducedMotion(m.themeMotionDefault)
+}
+
+func (m *Model) setSessionReducedMotion(enabled bool) {
+	m.motionOverride = &enabled
+	m.applyMotionPolicy()
 }
 
 // SetThemeByName switches the active theme by case-insensitive built-in

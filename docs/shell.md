@@ -33,6 +33,7 @@ runtime (`gostalgia boot --root /tmp/gs`). Shell attachment is not implemented.
 | `backup [export|inspect|preview|restore]` | Export portable backup, preview conflicts, or restore workspace |
 | `ps`, `status` | Process table with capability grants / runtime status |
 | `cls`, `clear` | Clear transcript |
+| `motion [on\|off]` | Enable (`on`) or disable (`off`) ReducedMotion for this shell; see [Finite per-session motion](experience.md#finite-per-session-motion-issue-213) |
 | `mouse [on\|off]` | Show, or turn on or off, mouse input for this shell; see [Mouse and clipboard](#mouse-and-clipboard-issue-211) |
 | `exit`, `quit` | Leave shell and shut down owned runtime |
 | `shutdown` | Request runtime shutdown over IPC |
@@ -356,9 +357,9 @@ event-type request on the returned `tea.View`.
   input. A busy prompt, any other mode, an open palette or confirmation, and the
   size notice show no cursor; closing the layer restores it.
 - **Root lifecycle.** Each shell model owns one root, built with
-  `bloom.WithColors` from its kit's text and surface colors,
-  `bloom.WithCopyFlash(false)`, the kit's selection style and, while the
-  mouse is on, the kit's tooltip style. The root is rebuilt lazily, on the
+  `bloom.WithColors` from its kit's text and surface colors, that model's
+  `bloom.WithClock`, `bloom.WithCopyFlash(false)`, the kit's selection style
+  and, while the mouse is on, the kit's tooltip style. The root is rebuilt lazily, on the
   next render after the effective theme, color mode, reduced-motion or mouse
   setting changes, so a config poll that re-applies the same settings keeps
   it.
@@ -366,6 +367,18 @@ event-type request on the returned `tea.View`.
   `BackgroundColorMsg` and `ColorProfileMsg` replies never reach the root.
   Separate models, such as concurrent SSH attaches in one process, never
   share a root.
+- **Finite failed-launch feedback (Issue #213).** The only attached transition
+  is a 160 ms badge `fx.Shake` after a failed app launch. Its `anim.Value` and
+  the root receive the same per-model clock through `anim.Clock` and
+  `bloom.WithClock`; tests advance both without wall-clock sleeps. No
+  `anim.SetMotion`, palette/dialog/toast/layout transition, or idle animation
+  is attached. ReducedMotion removes the value and transition, returns no
+  animation-frame command even when enabled during an active shake, keeps
+  `WithCopyFlash(false)`, and preserves the pre-#213 static goldens. Session
+  `motion` overrides survive later polls and theme changes. Without one,
+  explicit non-default config wins; otherwise the theme default wins, so the
+  built-in `false` default cannot enable motion in a default-reduced theme.
+  Existing process/config/log polling and notification expiry remain functional work.
 
 ### Mouse and clipboard (Issue #211)
 
