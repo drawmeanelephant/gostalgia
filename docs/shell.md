@@ -82,8 +82,9 @@ JSON is preserved, not passed through path/quote parsing.
   the newest 10,000 lines, and each result is capped at 12,000 runes. Long
   lines wrap; a resize keeps the line at the top of the transcript in place.
   At the end the transcript follows new output; paged back, it stays put
-  while output arrives, and paging down to the end follows again. `cls` and
-  `clear` empty it and return it to the end. Long input stays
+  while output arrives, and paging down to the end follows again. Running a
+  command or switching views returns it to the end, and `cls` and `clear`
+  empty it and return it there. Long input stays
   cursor-centered.
 - **Task Manager log tail** (`l` on a process): **↑/↓** (or **k/j**) scroll a
   line, **PgUp/PgDown** a page, **Home/End** (or **g/G**) jump to the first or
