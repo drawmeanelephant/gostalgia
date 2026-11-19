@@ -259,7 +259,7 @@ func TestRenderPanelCompactKeepsSelectedEntry(t *testing.T) {
 		if lines := strings.Split(out, "\n"); len(lines) != h || lipgloss.Width(out) != 26 {
 			t.Fatalf("height %d: rendered %dx%d", h, lipgloss.Width(out), len(lines))
 		}
-		if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, marker+" * "+sel.Title) {
+		if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, marker+" * [ERROR] "+sel.Title) {
 			t.Fatalf("height %d: selected entry not shown compactly:\n%s", h, out)
 		}
 		if h >= 2 && !strings.Contains(out, sel.Message) {
@@ -272,7 +272,7 @@ func TestRenderPanelCompactKeepsSelectedEntry(t *testing.T) {
 	// A tall but narrow panel has no room for a title beside the badge and
 	// timestamp, so it stays compact and shows more entries.
 	out := mgr.RenderPanel(kit, ui.Bounds{Width: 26, Height: 20})
-	if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, "Event 0") || !strings.Contains(out, marker+" * "+sel.Title) {
+	if strings.Contains(out, "NOTIFICATION CENTER") || !strings.Contains(out, "Event 0") || !strings.Contains(out, marker+" * [ERROR] "+sel.Title) {
 		t.Fatalf("narrow panel not compact:\n%s", out)
 	}
 	out = mgr.RenderPanel(kit, ui.Bounds{Width: 60, Height: compactPanelHeight})
@@ -291,7 +291,7 @@ func TestFlashShowsAToastWithoutHistory(t *testing.T) {
 		t.Fatalf("Flash recorded %+v", mgr.History())
 	}
 	toast := mgr.RenderToasts(kit, 80)
-	if !strings.Contains(toast, "COPY") || strings.Contains(toast, "INFO") || strings.Contains(toast, "\x1b]52") {
+	if !strings.Contains(toast, "[INFO] COPY") || strings.Contains(toast, "\x1b]52") {
 		t.Fatalf("flash toast %q", toast)
 	}
 	mgr.SetDND(true)
@@ -300,16 +300,16 @@ func TestFlashShowsAToastWithoutHistory(t *testing.T) {
 	}
 }
 
-func TestBadgeNamesTheNotificationInPlaceOfItsLevel(t *testing.T) {
+func TestCustomBadgeKeepsSeverityLabel(t *testing.T) {
 	mgr := NewManager(10, 3, 5)
 	kit := ui.New(theme.Nostalgia(), ui.Plain)
 	mgr.Record(Notification{Title: "Copy blocked", Message: "by policy", Level: LevelWarning, Badge: "COPY"})
 	mgr.Record(Notification{Title: "indexer", Message: "restarting", Level: LevelWarning})
 	panel := mgr.RenderPanel(kit, ui.Bounds{Width: 80, Height: 20})
-	if !strings.Contains(panel, "COPY") || strings.Count(panel, "BACKOFF") != 1 {
+	if !strings.Contains(panel, "COPY") || strings.Count(panel, "[WARN]") != 2 {
 		t.Fatalf("panel:\n%s", panel)
 	}
-	if toasts := mgr.RenderToasts(kit, 80); !strings.Contains(toasts, "COPY Copy blocked") || strings.Count(toasts, "BACKOFF") != 1 {
+	if toasts := mgr.RenderToasts(kit, 80); !strings.Contains(toasts, "[WARN] COPY Copy blocked") || strings.Count(toasts, "[WARN]") != 2 {
 		t.Fatalf("toasts:\n%s", toasts)
 	}
 }

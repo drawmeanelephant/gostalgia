@@ -7,9 +7,9 @@
 | | > NOTIFICATION CENTER                                                    | |
 | | NOTIFICATIONS: 2 total | 2 unread | DND OFF                              | |
 | |             +----------------------------------------------+             | |
-| |   * [BUSY] B| > Shut down Gostalgia?                       |             | |
+| |   * [WARN] [| > Shut down Gostalgia?                       |             | |
 | |     PID 12 b| Stops every app and service and ends every   |             | |
-| | > * [FAIL] C| attached session.                            |]            | |
+| | > * [ERROR] | attached session.                            |             | |
 | |     PID 31 e|                                              |             | |
 | |             | [Cancel]  Shut down                          |             | |
 | |             +----------------------------------------------+             | |

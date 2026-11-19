@@ -1,0 +1,77 @@
+# Notification severity: equal severity, distinct acknowledgement
+
+## selected unseen
+### full 80x24
++------------------------------------------------------------------------------+
+| > NOTIFICATION CENTER                                                        |
+| NOTIFICATIONS: 2 total | 1 unread | DND OFF                                  |
+|                                                                              |
+| > * [ERROR] [15:10:26] newer crash                                           |
+|     exit 2                                                                   |
+|     [ERROR] [15:09:26] older crash                                           |
+|     exit 1                                                                   |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+### compact 30x10
+1/2 | 1 unread | DND OFF
+> * [ERROR] newer crash
+    exit 2
+    [ERROR] older crash
+    exit 1
+
+
+
+
+
+
+## selected seen
+### full 80x24
++------------------------------------------------------------------------------+
+| > NOTIFICATION CENTER                                                        |
+| NOTIFICATIONS: 2 total | 1 unread | DND OFF                                  |
+|                                                                              |
+|   * [ERROR] [15:10:26] newer crash                                           |
+|     exit 2                                                                   |
+| >   [ERROR] [15:09:26] older crash                                           |
+|     exit 1                                                                   |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+|                                                                              |
++------------------------------------------------------------------------------+
+### compact 30x10
+2/2 | 1 unread | DND OFF
+  * [ERROR] newer crash
+    exit 2
+>   [ERROR] older crash
+    exit 1
+
+
+
+
+

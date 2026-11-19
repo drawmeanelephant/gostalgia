@@ -177,6 +177,23 @@ func (k Kit) Badge(text string, state theme.State, width int) string {
 	return k.paint(k.Truncate(content, width), s.Text, s.Fill, true)
 }
 
+// Severity renders a notification's level cue: the level's own symbol and
+// label in the state's colors, or the literal bracketed label in Monochrome
+// and Plain, where color and weight alone cannot carry severity. Plain emits
+// no escape sequences. The symbol and label are shell-owned vocabulary, so
+// external text never supplies either.
+func (k Kit) Severity(symbol, name string, state theme.State, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	cue := symbol + " " + label(name)
+	if k.ASCIIChrome() || k.Mode() == Plain {
+		cue = "[" + label(name) + "]"
+	}
+	s := k.theme.Status(state)
+	return k.paint(k.Truncate(cue, width), s.Text, s.Fill, true)
+}
+
 type AppCard struct {
 	Name, ID, Version, Description string
 	Status                         string

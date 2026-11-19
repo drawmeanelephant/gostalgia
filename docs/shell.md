@@ -348,9 +348,11 @@ event-type request on the returned `tea.View`.
   too short for that panel to show its content (the 30×10 frame leaves
   three rows), each drops its border and shows its essential content:
   - The Notification Center shows a position and unread summary, then the
-    entries around the selection, each as its title and message. It also
-    switches when the panel is too narrow to show an entry's title beside
-    its badge and timestamp. Below seven body rows it is always compact.
+    entries around the selection, each as its severity cue, title and
+    message. The cue stays with the row regardless of focus; the custom
+    badge and receipt tag yield before the title. It also switches when the
+    panel is too narrow to show an entry's title beside its cue and
+    timestamp. Below seven body rows it is always compact.
   - The log tail shows a `LOGS · PID n · name` heading, the search or
     match status when there is one, and then as many log lines as fit. The
     keys scroll it from the same position as the bordered tail. Below seven

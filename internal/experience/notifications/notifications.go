@@ -378,12 +378,11 @@ func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice st
 	}
 
 	for _, t := range m.toasts {
-		badgeText, st := badgeFor(t.Level, t.Badge)
-		badge := kit.Badge(badgeText, st, width)
+		cue := toastCue(kit, t.Level, t.Badge, t.Title, width)
 		title := kit.Heading(t.Title)
 		msg := kit.Text(t.Message)
 
-		line := fmt.Sprintf("%s %s%s%s", badge, title, kit.Separator(), msg)
+		line := fmt.Sprintf("%s %s%s%s", cue, title, kit.Separator(), msg)
 		if t.Wrap {
 			wrapped := strings.Split(ansi.Wrap(line, width, ""), "\n")
 			if len(wrapped) > maxToastRows {
@@ -402,20 +401,68 @@ func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice st
 	return toasts, notice
 }
 
-// badgeFor is the badge label and state of a notification at level, named
-// label when it has its own.
-func badgeFor(level Level, label string) (string, theme.State) {
-	text, st := "INFO", theme.Normal
+// severityFor is a level's mandatory cue: the symbol and label every surface
+// shows, and the theme state that colors it. INFO stays neutral, WARN uses the
+// busy state's attention color, and ERROR the failure color.
+func severityFor(level Level) (symbol, name string, state theme.State) {
 	switch level {
 	case LevelError:
-		text, st = "CRASH", theme.Error
+		return "■", "ERROR", theme.Error
 	case LevelWarning:
-		text, st = "BACKOFF", theme.Busy
+		return "▲", "WARN", theme.Busy
+	default:
+		return "◆", "INFO", theme.Normal
 	}
-	if label != "" {
-		text = label
+}
+
+// toastCue is a toast's severity cue. Its custom badge yields when keeping it
+// would push the title and its separator off the first toast row: the badge
+// is supplementary, the severity and title are not.
+func toastCue(kit ui.Kit, level Level, custom, title string, width int) string {
+	if custom == "" {
+		return severityCue(kit, level, "", width)
 	}
-	return text, st
+	symbol, name, state := severityFor(level)
+	head := ui.GraphemeWidth(kit.Severity(symbol, name, state, width)) + 1 +
+		ui.GraphemeWidth(customText(custom)) + 1 + ui.GraphemeWidth(title) + ui.GraphemeWidth(kit.Separator())
+	if head > width {
+		return severityCue(kit, level, "", width)
+	}
+	return severityCue(kit, level, custom, width)
+}
+
+// customText is a notification's custom badge as one sanitized line.
+func customText(custom string) string {
+	return strings.ReplaceAll(ui.Sanitize(custom), "\n", " ")
+}
+
+// severityCue renders level's mandatory cue, then the notification's custom
+// badge when it has one. The custom badge supplements the severity; it never
+// replaces it.
+func severityCue(kit ui.Kit, level Level, custom string, width int) string {
+	symbol, name, state := severityFor(level)
+	cue := kit.Severity(symbol, name, state, width)
+	if custom == "" {
+		return cue
+	}
+	custom = customText(custom)
+	room := width - ui.GraphemeWidth(cue) - 1
+	if room <= 0 {
+		return cue
+	}
+	return cue + " " + kit.StatusText(kit.Truncate(custom, room), state)
+}
+
+// severityColumn is the display width of the widest severity cue. The full
+// panel reserves it before deciding whether a title still fits beside the
+// markers and timestamp.
+func severityColumn(kit ui.Kit) int {
+	width := 0
+	for _, level := range []Level{LevelInfo, LevelWarning, LevelError} {
+		symbol, name, state := severityFor(level)
+		width = max(width, ui.GraphemeWidth(kit.Severity(symbol, name, state, 64)))
+	}
+	return width
 }
 
 // RenderPanel formats the full notification history panel. The list windows
@@ -467,16 +514,14 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		n := m.history[i]
 		focused := i == m.selected
 
-		badgeLabel, badgeState := badgeFor(n.Level, n.Badge)
-
 		timeStr := n.Timestamp.Format("15:04:05")
-		badge := kit.Badge(badgeLabel, badgeState, w)
+		cue := severityCue(kit, n.Level, n.Badge, w)
 		titleText := n.Title
 		if n.Receipt != nil {
 			titleText += " [RECEIPT AVAILABLE]"
 		}
 
-		headerLine := fmt.Sprintf("%s%s%s [%s] %s", entryPrefix(kit, focused), seenMarker(kit, n), badge, timeStr, titleText)
+		headerLine := fmt.Sprintf("%s%s%s [%s] %s", entryPrefix(kit, focused), seenMarker(kit, n), cue, timeStr, titleText)
 		detailLine := fmt.Sprintf("    %s", n.Message)
 
 		if focused {
@@ -502,24 +547,25 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 const compactPanelHeight = 7
 
 // minTitleCells is how much of an entry's title the bordered panel's
-// header row must leave room for after its markers, badge and timestamp.
+// header row must leave room for after its markers, severity cue and
+// timestamp.
 const minTitleCells = 12
 
 // compactPanel reports whether bounds are too short for one whole entry or
 // too narrow for its title in the bordered panel. The panel then drops its
-// chrome, badge and timestamp so the selected entry stays readable.
+// chrome, custom badge and timestamp so the selected entry stays readable.
 func compactPanel(kit ui.Kit, bounds ui.Bounds) bool {
 	if bounds.Height < compactPanelHeight {
 		return true
 	}
 	w := kit.PanelContentBounds(bounds).Width
-	header := ui.GraphemeWidth(entryPrefix(kit, true)) + len("* ") + ui.GraphemeWidth(kit.Badge("BACKOFF", theme.Busy, w)) + len(" [15:04:05] ")
+	header := ui.GraphemeWidth(entryPrefix(kit, true)) + ui.GraphemeWidth(seenMarker(kit, Notification{})) + severityColumn(kit) + len(" [15:04:05] ")
 	return w-header < minTitleCells
 }
 
 // renderCompactPanel is the Notification Center for a body too short for
 // its panel: a one-line summary when there is room, then the entries
-// around the selection, each as its title and message.
+// around the selection, each as its severity cue, title and message.
 func (m *Manager) renderCompactPanel(kit ui.Kit, bounds ui.Bounds) string {
 	w, rows := bounds.Width, bounds.Height
 	dndStatus := "DND OFF"
@@ -538,11 +584,15 @@ func (m *Manager) renderCompactPanel(kit ui.Kit, bounds ui.Bounds) string {
 	start, end := m.window(max(1, rows/itemRows))
 	for i := start; i < end; i++ {
 		n := m.history[i]
-		titleText := n.Title
-		if n.Receipt != nil {
-			titleText += " [RECEIPT]"
+		symbol, name, state := severityFor(n.Level)
+		cue := kit.Severity(symbol, name, state, w)
+		headerLine := entryPrefix(kit, i == m.selected) + seenMarker(kit, n) + cue + " " + n.Title
+		// The receipt tag yields before the title does: the compact row has
+		// room for the selected entry's identity first.
+		if n.Receipt != nil && ui.GraphemeWidth(headerLine+" [RECEIPT]") <= w {
+			headerLine += " [RECEIPT]"
 		}
-		headerLine := kit.Truncate(entryPrefix(kit, i == m.selected)+seenMarker(kit, n)+titleText, w)
+		headerLine = kit.Truncate(headerLine, w)
 		detailLine := kit.Truncate("    "+n.Message, w)
 		if i == m.selected {
 			lines = append(lines, kit.Selection(headerLine), kit.Text(detailLine))

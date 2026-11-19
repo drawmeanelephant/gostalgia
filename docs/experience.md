@@ -485,8 +485,19 @@ scrollable table:
   too. Drawing toasts, or opening and closing the palette or a dialog, never
   advances or restarts a countdown. The Notification Center lists the same
   events itself, so no toasts are drawn over it.
+- **Severity Treatment**: Toasts and Notification Center rows share one
+  mandatory cue per level: `INFO`, `WARN`, or `ERROR` with its own symbol and
+  the theme's state colors. Monochrome and Plain render the literal `[INFO]`,
+  `[WARN]`, and `[ERROR]` instead, so severity never rests on color or bold
+  alone, and Plain emits no escapes. An application's custom badge follows the
+  severity as a supplement and never replaces it; at the narrowest toast it
+  yields first when the title or guidance would not fit. Unseen markers and
+  focus stay independent of the severity cue: selecting or rendering an entry
+  changes neither its level nor its acknowledgement.
 - **Notification Center**: Dedicated full-screen panel listing complete event history,
   timestamps, severities (`INFO`, `WARN`, `ERROR`), and associated PIDs.
+  Compact rows keep the same severity cue beside the title, dropping the
+  custom badge and receipt tag before the title.
   - Unseen vs. Seen distinction: events arrive unread until inspected.
   - `↑` / `↓`: Select notifications.
   - `Enter`: Mark seen and drill down to crash receipts.
