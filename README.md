@@ -8,6 +8,11 @@ It runs hosted on Windows, macOS, or Linux but presents its own
 abstractions for applications, processes, files, services, IPC, configuration,
 sessions, and permissions. The host OS is substrate, not the application model.
 
+![Gostalgia's Home view in the Nostalgia theme, showing the Gostalgia wordmark, the Home tab beside Apps (4), Prompt, Tasks, and Notifications, an ONLINE guest badge, SYSTEM ACTIVITY with uptime, process, service, user, and drive counts, a RUNNING APPLICATIONS list with live PIDs, empty DOCUMENT SHORTCUTS, and the C:\users\guest prompt with F-key and palette hints.](docs/images/shell-home.png)
+
+*Final production shell at 80×24 in the Nostalgia theme, captured from a real
+PTY with four apps running.*
+
 **Status: M1 (runtime vertical slice) complete — live tracker in
 [status.md](status.md).** The environment boots, starts its core services,
 opens a user session, launches and supervises applications, serves a local IPC
