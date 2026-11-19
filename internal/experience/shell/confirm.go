@@ -37,6 +37,8 @@ type confirmation struct {
 	appID string
 	name  string
 	pid   int32
+	// polls is the shell's process-poll count when the dialog opened.
+	polls int
 	// typed reaps through the shell command, so its result lands in the
 	// transcript as a typed reap always has.
 	typed  bool
@@ -87,6 +89,7 @@ func (m *Model) run(line string) tea.Cmd {
 
 func (m *Model) openConfirm(c confirmation) {
 	c.active = confirmCancel
+	c.polls = m.procPolls
 	m.confirm = &c
 }
 
@@ -123,17 +126,24 @@ func (m *Model) confirmBlocked(c confirmation) string {
 			}
 		}
 		// The app list refreshes only after commands, but the process table
-		// is polled. app/stop names only the app, so a table that shows the
-		// dialog's PID ended, or the app live under another PID, means
-		// confirming would stop an instance the dialog never showed.
+		// is polled, and app/stop names only the app, so the table can show
+		// that confirming would stop an instance the dialog never showed.
+		// An ended PID never runs again, so any poll proves it. A missing
+		// PID, or the app (a process named by its ID) live under another
+		// PID, counts only from a poll since the dialog opened: an older
+		// table can predate the app list the dialog was built from.
 		if running && m.tasks != nil {
+			fresh, seen := m.procPolls > c.polls, false
 			for _, p := range m.tasks.Processes() {
 				switch {
-				case p.ID == c.pid && !stoppable(p.State),
-					p.ID != c.pid && p.Kind == "app" && p.Name == c.appID && stoppable(p.State):
+				case p.ID == c.pid:
+					seen = true
+					running = running && stoppable(p.State)
+				case fresh && p.Name == c.appID && stoppable(p.State):
 					running = false
 				}
 			}
+			running = running && (seen || !fresh)
 		}
 		if !running {
 			return fmt.Sprintf("%s is no longer running as PID %d.", name, c.pid)
@@ -157,6 +167,7 @@ func (m *Model) confirmBlocked(c confirmation) string {
 // confirmDialog is the open confirmation as a kit dialog.
 func (m *Model) confirmDialog() ui.Dialog {
 	c := *m.confirm
+	blocked := m.confirmBlocked(c)
 	var title, body, verb string
 	switch c.kind {
 	case confirmShutdown:
@@ -166,7 +177,8 @@ func (m *Model) confirmDialog() ui.Dialog {
 		title, verb = "Stop "+viewText(c.name)+"?", "Stop app"
 		body = fmt.Sprintf("Stops %s (%s), PID %d. Unsaved work may be lost.",
 			viewText(c.name), viewText(c.appID), c.pid)
-		if c.pid == 0 {
+		if c.pid == 0 || blocked != "" {
+			// The reason already names the PID; the warning no longer applies.
 			body = fmt.Sprintf("App: %s (%s).", viewText(c.name), viewText(c.appID))
 		}
 	case confirmStopProcess:
@@ -177,7 +189,6 @@ func (m *Model) confirmDialog() ui.Dialog {
 		body = "Clears every terminated process in the environment, not only this row."
 	}
 	// A reason comes first so a small screen still shows it.
-	blocked := m.confirmBlocked(c)
 	if blocked != "" {
 		body = blocked + " " + body
 	}

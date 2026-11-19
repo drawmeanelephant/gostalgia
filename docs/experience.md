@@ -314,15 +314,19 @@ Destructive actions open a `kit.Dialog` layer before sending any request:
 - The dialog keeps the target it showed. A refresh, relaunch or row reorder
   can disable confirmation (the dialog then says why), never retarget it to
   another app or process. Availability is checked again when Enter is
-  pressed. Because `app/stop` names only the app, an app stop is disabled
-  once either the app list or the polled process table shows that the PID
-  the dialog named has ended or that the app runs under another PID.
+  pressed. Because `app/stop` names only the app, an app stop is also
+  checked against the polled process table: it is disabled when any poll
+  shows the dialog's PID ended, or when a poll taken after the dialog opened
+  no longer lists that PID or shows the app's ID live under another PID. A
+  disabled app stop names the app instead of warning about unsaved work.
 - `Cancel` is focused when the dialog opens. `Tab`/`→` and
   `Shift-Tab`/`←` move between enabled actions, `Enter` chooses the focused
   one, and `Esc` cancels. Canceling sends nothing; confirming sends exactly
   one request. A repeat-flagged held `Enter` never confirms, and neither
   does `Enter` below the 30×10 minimum, where the dialog is not drawn.
-  At 30×10 every dialog shows its whole body and both actions.
+  At 30×10 a disabled dialog's reason comes first, both actions always
+  show, and the dialogs for the built-in apps fit their whole body; longer
+  names and IDs wrap and can push the end of the body out of view.
 - The action is disabled, shown in the kit's parentheses, while the shell is
   busy, while a confirmed stop or reap is still in flight, for an app that is
   not running (including an unknown ID), and for a process that has ended.

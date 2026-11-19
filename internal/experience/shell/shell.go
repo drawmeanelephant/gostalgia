@@ -152,6 +152,9 @@ type Model struct {
 	// procPending is set while a confirmed process stop or reap is in
 	// flight, so another cannot be confirmed until its result arrives.
 	procPending bool
+	// procPolls counts process-table updates, so a confirmation can tell
+	// a poll newer than itself from an older one.
+	procPolls int
 
 	taskView  bool
 	notifView bool
@@ -559,6 +562,7 @@ func (m *Model) SetColorModeByName(name string) bool {
 
 func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
 	m.tasks.SetProcesses(procs)
+	m.procPolls++
 	var cmds []tea.Cmd
 
 	for _, p := range procs {

@@ -55,10 +55,10 @@ func fixtureModel(th theme.Theme, mode ui.ColorMode) *Model {
 	}
 	usage := platform.ResourceUsage{Supported: true, MemoryBytes: 12 << 20, CPUUserMs: 840, CPUSysMs: 410}
 	m.tasks.SetProcesses([]taskmanager.ProcessRow{
-		{ID: 1, Name: "environment", Kind: "service", State: "running", Resources: usage},
-		{ID: 7, Name: "com.gostalgia.echo", Kind: "app", State: "running", RestartCount: 1, Resources: usage},
-		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "service", State: "restarting", RestartCount: 4},
-		{ID: 31, Name: "com.gostalgia.clock", Kind: "app", State: "failed", ExitCode: 2, RestartCount: 3, CrashLoop: true},
+		{ID: 1, Name: "environment", Kind: "inproc", State: "running", Resources: usage},
+		{ID: 7, Name: "com.gostalgia.echo", Kind: "child", State: "running", RestartCount: 1, Resources: usage},
+		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "inproc", State: "restarting", RestartCount: 4},
+		{ID: 31, Name: "com.gostalgia.clock", Kind: "child", State: "failed", ExitCode: 2, RestartCount: 3, CrashLoop: true},
 	})
 	receipt := fixtureReceipt()
 	notifs.Record(notifications.Notification{ID: "n1", Timestamp: fixtureTime, Title: "clock Crashed",

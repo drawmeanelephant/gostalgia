@@ -294,26 +294,74 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 	// The app list refreshes only after a command, but the process table
 	// is polled; a relaunch the poll sees first must still disable the
 	// stop, because app/stop would reach the new instance.
-	t.Run("app relaunched, seen only in the process table", func(t *testing.T) {
+	relaunch := taskmanager.ProcessRow{ID: 45, Name: "com.gostalgia.echo", Kind: "child", State: "running"}
+	for _, poll := range []struct {
+		name string
+		rows func(rows []taskmanager.ProcessRow) []taskmanager.ProcessRow
+	}{
+		{"old PID ended, new PID live", func(rows []taskmanager.ProcessRow) []taskmanager.ProcessRow {
+			rows[1].State = "stopped"
+			return append(rows, relaunch)
+		}},
+		{"old PID reaped, new PID live", func(rows []taskmanager.ProcessRow) []taskmanager.ProcessRow {
+			return append(append(rows[:1:1], rows[2:]...), relaunch)
+		}},
+		{"old PID reaped, nothing new yet", func(rows []taskmanager.ProcessRow) []taskmanager.ProcessRow {
+			return append(rows[:1:1], rows[2:]...)
+		}},
+		{"new PID live beside the old row", func(rows []taskmanager.ProcessRow) []taskmanager.ProcessRow {
+			return append(rows, relaunch)
+		}},
+	} {
+		t.Run("app relaunched, seen only in the process table/"+poll.name, func(t *testing.T) {
+			m, rec := recordingFixture(t)
+			m.setMode(modeLauncher)
+			m.selected = 0
+			act(t, m, key(tea.KeyF3))
+			act(t, m, tabKey)
+			if m.confirm.active != confirmProceed {
+				t.Fatal("stop was not confirmable before the relaunch")
+			}
+			m.Update(procUpdateMsg{procs: poll.rows(m.tasks.Processes())})
+			if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
+				t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
+			}
+			act(t, m, enterKey)
+			act(t, m, tabKey)
+			act(t, m, enterKey)
+			if got := rec.destructive(); len(got) != 0 {
+				t.Fatalf("stale confirmation sent %v", got)
+			}
+		})
+	}
+	// A table polled before the dialog opened can predate the app list:
+	// its older live instance, or a missing PID, disables nothing.
+	t.Run("table older than the app list", func(t *testing.T) {
 		m, rec := recordingFixture(t)
+		rows := m.tasks.Processes()
+		rows[1].ID = 3
+		m.Update(procUpdateMsg{procs: rows})
 		m.setMode(modeLauncher)
 		m.selected = 0
 		act(t, m, key(tea.KeyF3))
 		act(t, m, tabKey)
-		if m.confirm.active != confirmProceed {
-			t.Fatal("stop was not confirmable before the relaunch")
-		}
-		rows := m.tasks.Processes()
-		rows[1] = taskmanager.ProcessRow{ID: 45, Name: "com.gostalgia.echo", Kind: "app", State: "running"}
-		m.Update(procUpdateMsg{procs: rows})
-		if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
-			t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
-		}
 		act(t, m, enterKey)
+		if got := rec.destructive(); len(got) != 1 || got[0].params != `{"id":"com.gostalgia.echo"}` {
+			t.Fatalf("live app's stop sent %v", got)
+		}
+	})
+	// An older instance's ended row beside the live one disables nothing.
+	t.Run("ended rows of older instances", func(t *testing.T) {
+		m, rec := recordingFixture(t)
+		rows := append(m.tasks.Processes(), taskmanager.ProcessRow{ID: 3, Name: "com.gostalgia.echo", Kind: "child", State: "stopped"})
+		m.Update(procUpdateMsg{procs: rows})
+		m.setMode(modeLauncher)
+		m.selected = 0
+		act(t, m, key(tea.KeyF3))
 		act(t, m, tabKey)
 		act(t, m, enterKey)
-		if got := rec.destructive(); len(got) != 0 {
-			t.Fatalf("stale confirmation sent %v", got)
+		if got := rec.destructive(); len(got) != 1 || got[0].params != `{"id":"com.gostalgia.echo"}` {
+			t.Fatalf("live app's stop sent %v", got)
 		}
 	})
 	t.Run("app listed as running but its process has failed", func(t *testing.T) {
@@ -512,6 +560,13 @@ func TestConfirmationsFitTheMinimumScreen(t *testing.T) {
 		selectPID(t, m, 7)
 		act(t, m, typed("x"))
 		m.procPending = true
+		check(t, m)
+	})
+	t.Run("blocked app stop", func(t *testing.T) {
+		m, _ := recordingFixture(t)
+		m.setMode(modeLauncher)
+		m.selected = 2 // Clock, whose process has failed
+		act(t, m, key(tea.KeyF3))
 		check(t, m)
 	})
 }
