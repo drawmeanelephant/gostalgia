@@ -497,7 +497,7 @@ func (m *Model) homeHit(y, w int, kind homeItemType, key string) hit {
 // homeAppHits are the rows of the running apps renderHomeApps shows in b.
 func (m *Model) homeAppHits(b ui.Bounds, hv homeView) []hit {
 	var ids []string
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if a.Running {
 			ids = append(ids, a.Manifest.ID)
 		}

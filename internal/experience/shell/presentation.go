@@ -438,6 +438,9 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			return m.dismissView()
 		}
 		m.apps = msg.apps
+		// A fresh app/list answer outranks an older process-derived state;
+		// the next accepted poll reconciles it again.
+		m.procApps = nil
 		if msg.seq == v.seq && msg.viewErr != nil {
 			v.banner = safe(msg.viewErr.Error())
 		}

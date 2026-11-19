@@ -330,12 +330,18 @@ event-type request on the returned `tea.View`.
   the rectangle the layout gives them.
 - **Header counts.** The tabs carry parenthesized ASCII counts, so they
   read without color in every theme and in Plain. `Apps (n)` counts the
-  registered apps in the accepted `app/list` snapshot that report running;
-  services and other runtime processes are not apps and are not counted.
-  `Notifications (n)` counts events the notification manager still holds as
-  unseen. Both counts disappear at zero, read only state the shell already
-  maintains (rendering starts no poll or refresh), and their width is part
-  of each tab's normal measured span, so mouse geometry stays aligned.
+  registered apps that are running, read from the accepted `app/list`
+  snapshot and reconciled with the newest accepted process poll. A process
+  row counts only when its name is a registered app ID and its state is live,
+  so services, terminal rows and arbitrary runtime processes are excluded;
+  several rows for one app count once. An out-of-band stop or launch therefore
+  updates Home and this count on the existing 500 ms process poll, without
+  entering Apps or starting another poll. A failed or superseded poll leaves
+  the last accepted state in place. `Notifications (n)` counts events the
+  notification manager still holds as unseen. Both counts disappear at zero,
+  read only state the shell already maintains (rendering starts no poll or
+  refresh), and their width is part of each tab's normal measured span, so
+  mouse geometry stays aligned.
 - **Responsive priorities.** When the frame is short, the blank spacer rows
   give way. Tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the

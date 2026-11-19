@@ -322,6 +322,42 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		h.Type("echo").Wait(fmt.Sprintf("LIVE / PID %d", launched.PID))
 	})
 
+	t.Run("home_external_lifecycle_badge", func(t *testing.T) {
+		h, client := newSteepRuntime(t)
+		// Stay on Home for the whole flow: no Apps visit and no shell
+		// command runs. Echo is the boot app, so its badge is already up.
+		h.Wait([]string{"SYSTEM ACTIVITY", "Apps (1)"})
+
+		// Another authenticated client stops Echo. The existing 500 ms
+		// process poll must update Home's badge and app list.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		if err := client.Call(ctx, "app/stop", map[string]string{"id": "com.gostalgia.echo"}, nil); err != nil {
+			t.Fatalf("external app/stop: %v", err)
+		}
+		steepAppRunning(t, client, "com.gostalgia.echo", false)
+		h.WaitNot("Apps (1)")
+		h.Wait("No applications running")
+
+		// A later external launch appears on the same poll path with its
+		// live PID, still without leaving Home.
+		var launched struct {
+			ID  string `json:"id"`
+			PID int32  `json:"pid"`
+		}
+		ctx2, cancel2 := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel2()
+		if err := client.Call(ctx2, "app/launch", map[string]string{"id": "com.gostalgia.echo"}, &launched); err != nil {
+			t.Fatalf("external app/launch: %v", err)
+		}
+		if launched.PID == 0 {
+			t.Fatalf("external app/launch returned no PID: %+v", launched)
+		}
+		steepAppRunning(t, client, "com.gostalgia.echo", true)
+		h.Wait("Apps (1)")
+		h.Wait(fmt.Sprintf("LIVE / PID %d", launched.PID))
+	})
+
 	t.Run("apps_command_opens_shelf", func(t *testing.T) {
 		h, client := newSteepRuntime(t)
 		h.Type("apps").Key("enter").Wait("SEARCH: type to filter apps...")

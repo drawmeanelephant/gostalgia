@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/experience/notifications"
+	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -125,6 +126,105 @@ func TestHeaderRunningAppCountFollowsAcceptedRefresh(t *testing.T) {
 	}
 	if m.appsSent != 0 {
 		t.Fatalf("header rendering sent %d app/list refreshes", m.appsSent)
+	}
+}
+
+// A registered app's process row carries its app ID as the process name. The
+// header follows the newest accepted process poll even while the user stays
+// on Home, so an external stop or launch becomes visible without Apps.
+func TestHeaderRunningAppCountFollowsAcceptedProcessPolls(t *testing.T) {
+	rec := &recordingCaller{}
+	m := sized(fixtureModel(theme.Nostalgia(), ui.Plain), 80, 24)
+	m.client = rec
+	if m.currentMode() != modeHome {
+		t.Fatalf("start mode = %v, want Home", m.currentMode())
+	}
+	// Start stopped so every visible count change is the poll's, not the
+	// fixture's stale app/list running flags.
+	for i := range m.apps {
+		m.apps[i].Running, m.apps[i].PID = false, 0
+	}
+	env := taskmanager.ProcessRow{ID: 1, Name: "environment", Kind: "inproc", State: "running"}
+	indexer := taskmanager.ProcessRow{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "child", State: "running"}
+	echoRunning := taskmanager.ProcessRow{ID: 7, Name: "com.gostalgia.echo", Kind: "inproc", State: "running"}
+	echoStopped := taskmanager.ProcessRow{ID: 7, Name: "com.gostalgia.echo", Kind: "inproc", State: "stopped"}
+	notesStopped := taskmanager.ProcessRow{ID: 21, Name: "com.gostalgia.notes", Kind: "inproc", State: "stopped"}
+	notesRunning := taskmanager.ProcessRow{ID: 42, Name: "com.gostalgia.notes", Kind: "inproc", State: "running"}
+	clockRunning := taskmanager.ProcessRow{ID: 31, Name: "com.gostalgia.clock", Kind: "child", State: "running"}
+	expectCount := func(want string, why string) {
+		t.Helper()
+		header := headerRow(t, m)
+		if !strings.Contains(header, want) {
+			t.Fatalf("%s: header %q lacks %q", why, header, want)
+		}
+	}
+
+	// Echo runs next to a stopped registered app, a running service and an
+	// unrelated running process. Only the app is counted.
+	m.Update(procUpdateMsg{seq: 1, procs: []taskmanager.ProcessRow{env, echoRunning, indexer, notesStopped}})
+	expectCount("Apps (1)", "accepted poll with one running app")
+
+	// Another gctl client stops Echo. The next accepted poll clears the
+	// count while the user remains on Home; Home's own app rows follow too.
+	m.Update(procUpdateMsg{seq: 2, procs: []taskmanager.ProcessRow{env, echoStopped, indexer, notesStopped}})
+	if header := headerRow(t, m); strings.Contains(header, "Apps (") {
+		t.Fatalf("stopped app kept a running count: %q", header)
+	}
+	if view := screenText(m.View()); !strings.Contains(strings.Join(view, "\n"), "No applications running") {
+		t.Fatalf("Home still lists a stopped app:\n%s", strings.Join(view, "\n"))
+	}
+
+	// A later external launch appears on the next accepted poll, including a
+	// live PID in Home's row, without opening Apps or running a command.
+	m.Update(procUpdateMsg{seq: 3, procs: []taskmanager.ProcessRow{env, echoStopped, indexer, notesStopped, notesRunning}})
+	expectCount("Apps (1)", "external launch")
+	view := strings.Join(screenText(m.View()), "\n")
+	if !strings.Contains(view, "Notes") || !strings.Contains(view, "LIVE / PID 42") {
+		t.Fatalf("Home lacks the externally launched app:\n%s", view)
+	}
+
+	// Two live rows for one registered app count once, and a second running
+	// app adds one. Unrelated rows stay uncounted.
+	m.Update(procUpdateMsg{seq: 4, procs: []taskmanager.ProcessRow{
+		env, echoStopped, indexer, notesRunning, clockRunning,
+		{ID: 43, Name: "com.gostalgia.notes", Kind: "inproc", State: "restarting"},
+	}})
+	expectCount("Apps (2)", "deduplicated process rows")
+
+	// Failed and older samples keep the last known app state.
+	before := headerRow(t, m)
+	m.Update(procUpdateMsg{seq: 5, err: fmt.Errorf("proc/list: socket closed")})
+	if got := headerRow(t, m); got != before {
+		t.Fatalf("failed sample changed header %q to %q", before, got)
+	}
+	m.Update(procUpdateMsg{seq: 1, procs: []taskmanager.ProcessRow{env}})
+	if got := headerRow(t, m); got != before {
+		t.Fatalf("older sample changed header %q to %q", before, got)
+	}
+
+	// A fresh app/list answer outranks the older process-derived state until
+	// the next accepted poll reconciles it.
+	m.Update(appListMsg{seq: m.appsSent, apps: []appStatus{
+		runningApp("com.gostalgia.echo", "Echo", 55),
+		readyApp("com.gostalgia.notes", "Notes"),
+		readyApp("com.gostalgia.clock", "Clock"),
+	}})
+	expectCount("Apps (1)", "fresh app list after an older poll")
+	m.Update(procUpdateMsg{seq: 6, procs: []taskmanager.ProcessRow{env, echoStopped}})
+	if header := headerRow(t, m); strings.Contains(header, "Apps (") {
+		t.Fatalf("newer poll kept the app list's old count: %q", header)
+	}
+
+	// The poll path is the only trigger: no app/list refresh and no request
+	// came from the process updates or from rendering.
+	for range 3 {
+		m.View()
+	}
+	if calls := rec.all(); len(calls) != 0 {
+		t.Fatalf("process-poll badge path sent %v", calls)
+	}
+	if m.appsSent != 0 {
+		t.Fatalf("process-poll badge path sent %d app/list refreshes", m.appsSent)
 	}
 }
 

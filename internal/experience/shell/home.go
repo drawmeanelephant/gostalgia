@@ -86,7 +86,7 @@ func formatUptime(seconds float64) string {
 
 func (m *Model) homeItems() []homeItem {
 	var items []homeItem
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if a.Running {
 			items = append(items, homeItem{kind: homeItemApp, app: a})
 		}
@@ -257,7 +257,7 @@ func (m *Model) homeRow(selected, hovered bool, name, rest string) string {
 func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 	var rows []string
 	selectedRow := -1
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if !a.Running {
 			continue
 		}

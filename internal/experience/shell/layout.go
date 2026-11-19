@@ -249,12 +249,13 @@ func (m *Model) frame(home homeView) bloom.Child {
 	)
 }
 
-// runningAppCount is how many registered apps the accepted app/list snapshot
-// reports running. Services and arbitrary runtime processes are not apps and
-// are not counted.
+// runningAppCount is how many registered apps run. It reads the accepted
+// app/list snapshot reconciled with the newest accepted process poll, so an
+// external launch or stop appears without another app/list refresh. Services
+// and arbitrary runtime processes are not apps and are not counted.
 func (m *Model) runningAppCount() int {
 	running := 0
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if a.Running {
 			running++
 		}

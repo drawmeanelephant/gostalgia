@@ -298,8 +298,11 @@ presents three discoverable activity sections:
    `2h 15m`), active process count, registered service count, current user, and
    environment drive indicator sourced directly via `sys/status`.
 2. **Running Applications**: Quick-switch shortcuts for all currently active
-   applications displaying live PIDs. An honest empty notice is displayed when
-   no applications are running, hinting at `F2` to launch apps.
+   applications displaying live PIDs. The list reconciles the accepted
+   `app/list` snapshot with the newest accepted process poll, matching
+   registered app IDs only, so an out-of-band stop or launch updates Home and
+   the header count between app/list refreshes. An honest empty notice is
+   displayed when no applications are running, hinting at `F2` to launch apps.
 3. **Document Shortcuts**: Quick-open links to user files stored under
    `C:\users\guest\documents` (`/users/guest/documents`), discovered via `fs/list`.
    Selecting a document and pressing `Enter` automatically opens and prints it
