@@ -482,6 +482,7 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	if len(raw) == 0 {
 		t.Fatal("Ctrl-C recording contains no terminal output after Ctrl-C")
 	}
+	missing := false
 	for name, sequence := range map[string]string{
 		"alternate screen reset": "\x1b[?1049l",
 		"cursor visible":         "\x1b[?25h",
@@ -495,7 +496,11 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 		"modifyOtherKeys reset":  "\x1b[>4m",
 	} {
 		if !bytes.Contains(raw, []byte(sequence)) {
+			missing = true
 			t.Errorf("post-Ctrl-C output lacks %s (%q)", name, sequence)
 		}
+	}
+	if missing {
+		t.Errorf("post-Ctrl-C raw output was %q", raw)
 	}
 }
