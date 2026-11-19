@@ -119,9 +119,9 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 	}
 
 	// View logs with 'l'
-	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "l"})
-	// Simulate log arrival
-	m.Update(procLogsMsg{pid: 2, name: "worker", content: client.logs[2]})
+	_, fetch := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "l"})
+	// Deliver the log request's answer.
+	m.Update(fetch())
 
 	logView := m.View().Content
 	if !strings.Contains(logView, "CHILD LOG TAIL: worker (PID 2)") {

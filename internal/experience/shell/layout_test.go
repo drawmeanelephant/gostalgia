@@ -206,6 +206,7 @@ type modelState struct {
 	taskMode                             taskmanager.Mode
 	focus, cell, regionTop, regionWindow int
 	transcript                           int
+	transcriptPos                        bloom.ViewportPos
 }
 
 func stateOf(m *Model) modelState {
@@ -215,6 +216,7 @@ func stateOf(m *Model) modelState {
 		paletteSel: m.paletteSelected, paletteFilter: m.paletteQuery,
 		taskView: m.taskView, notifView: m.notifView, busy: m.busy,
 		taskSel: m.tasks.SelectedIndex(), taskMode: m.tasks.Mode(), transcript: len(m.transcript),
+		transcriptPos: m.transcriptPos,
 	}
 	if v := m.presentation; v != nil {
 		s.focus, s.cell, s.regionTop, s.regionWindow = v.focus, v.cell, v.regionTop, v.regionWindow

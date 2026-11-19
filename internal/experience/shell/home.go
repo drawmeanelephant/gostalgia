@@ -136,7 +136,7 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	apps := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeApps(b, hv) }).Natural(0, appsRows)
 	docsRows := 1 + max(1, len(m.homeData.Documents))
 	docs := m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows)
-	return sizedNode(func(ctx bloom.Context) bloom.Child {
+	return ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 		return bloom.Column(
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
 			bloom.Auto(apps).Min(min(appsRows, ctx.Height)).ID(homeAppsID),

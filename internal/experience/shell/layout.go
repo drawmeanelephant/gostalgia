@@ -8,7 +8,6 @@ import (
 
 	"bloomfx.dev/bloom"
 	"bloomfx.dev/bloom/fx"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
@@ -203,7 +202,7 @@ func (m *Model) frame(home homeView) bloom.Child {
 	body := m.body(home)
 	if m.toastLines() > 0 {
 		base := body
-		body = sizedNode(func(ctx bloom.Context) bloom.Child {
+		body = ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 			return bloom.Overlay(base, m.toastLayer(ctx.Width, ctx.Height))
 		})
 	}
@@ -302,6 +301,8 @@ func (m *Model) toastLines() int {
 // body is the frame's main slot for the current screen.
 func (m *Model) body(home homeView) bloom.Child {
 	switch {
+	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
+		return m.tasks.LogsNode(m.kit)
 	case m.taskView && m.tasks != nil:
 		return m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) })
 	case m.notifView && m.notifs != nil:
@@ -321,49 +322,13 @@ func (m *Model) body(home homeView) bloom.Child {
 	case modeHome:
 		return m.homeNode(home)
 	}
-	return m.kit.Leaf(m.transcriptView)
+	return m.transcriptNode()
 }
-
-func (m *Model) transcriptView(b ui.Bounds) string {
-	var lines []string
-	for _, e := range m.transcript {
-		line := ui.Wrap(e.text, b.Width)
-		switch e.kind {
-		case "accent":
-			line = m.kit.Heading(line)
-		case "muted":
-			line = m.kit.Muted(line)
-		case "command":
-			line = m.kit.Heading(line)
-		case "error":
-			line = m.kit.StatusText(line, theme.Error)
-		default:
-			line = m.kit.Text(line)
-		}
-		lines = append(lines, strings.Split(line, "\n")...)
-	}
-	// Transcript scrollback delegates its window to bubbles/viewport
-	// (issue #185). m.scroll stays the canonical "lines back from the
-	// tail" offset; the viewport offsets from the top, so callers keep
-	// the same scroll contract.
-	vp := viewport.New(viewport.WithWidth(b.Width), viewport.WithHeight(b.Height))
-	vp.SetContentLines(lines)
-	vp.SetYOffset(len(lines) - b.Height - m.scroll)
-	return vp.View()
-}
-
-// sizedNode builds its subtree for the exact space its slot gives it. It
-// asks for no space of its own.
-type sizedNode func(ctx bloom.Context) bloom.Child
-
-func (sizedNode) View() string                           { return "" }
-func (sizedNode) Measure(bloom.Size) bloom.Size          { return bloom.Size{} }
-func (n sizedNode) Layout(ctx bloom.Context) bloom.Child { return n(ctx) }
 
 // promptNode is the prompt row. In editable prompt mode it places the real
 // terminal cursor at the insertion point.
 func (m *Model) promptNode() bloom.Child {
-	return sizedNode(func(ctx bloom.Context) bloom.Child {
+	return ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 		if ctx.Width <= 0 || ctx.Height <= 0 {
 			return nil
 		}
@@ -450,8 +415,14 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 	case m.taskView && m.tasks != nil:
 		switch m.tasks.Mode() {
 		case taskmanager.ModeLogs:
+			if m.tasks.Searching() {
+				return []ui.Binding{
+					{Key: "Enter", Help: "FIND"}, {Key: "Esc", Help: "CANCEL"}, {Key: "Ctrl-C", Help: exitHelp},
+				}
+			}
 			return []ui.Binding{
-				{Key: "Esc", Help: "BACK"}, {Key: "↑↓", Help: "SCROLL"}, {Key: "Ctrl-C", Help: exitHelp},
+				{Key: "Esc", Help: "BACK"}, {Key: "↑↓", Help: "SCROLL"}, {Key: "f", Help: "FOLLOW"},
+				{Key: "/", Help: "SEARCH"}, {Key: "n/N", Help: "MATCH"}, {Key: "Ctrl-C", Help: exitHelp},
 			}
 		case taskmanager.ModeReceipt:
 			return []ui.Binding{

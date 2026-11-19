@@ -24,8 +24,6 @@ import (
 	"gostalgia/internal/themedef"
 )
 
-const maxTranscript = 400
-
 type entry struct {
 	text string
 	kind string
@@ -97,6 +95,10 @@ type procLogsMsg struct {
 	name    string
 	content string
 	err     error
+	// seq numbers the request; open marks one that opens the log tail
+	// rather than refreshing it.
+	seq  uint64
+	open bool
 }
 type receiptLogsMsg struct {
 	pid       int32
@@ -119,14 +121,20 @@ type configUpdateMsg struct {
 
 // Model owns UI state; tea.Cmd does IO off the event-loop goroutine.
 type Model struct {
-	ctx             context.Context
-	client          Caller
-	closed          <-chan struct{}
-	width, height   int
-	cwd             string
-	input           []rune
-	cursor          int
+	ctx           context.Context
+	client        Caller
+	closed        <-chan struct{}
+	width, height int
+	cwd           string
+	input         []rune
+	cursor        int
+	// transcript is the semantic history behind transcriptBuf: one entry
+	// per logical line, oldest first, kept to restyle the lines when the
+	// kit changes. See transcript.go.
 	transcript      []entry
+	transcriptBuf   *bloom.Buffer
+	transcriptStyle string
+	transcriptPos   bloom.ViewportPos
 	history         []string
 	historyPos      int
 	draft           string
@@ -159,6 +167,14 @@ type Model struct {
 	// result arriving after a newer one is dropped, and a confirmation
 	// can tell a poll sent after it opened from an older one.
 	procSent, procShown int
+	// logsSent numbers proc/logs requests as they are sent. logsOpening is
+	// the open request whose answer may open the log tail, superseding any
+	// before it, and logsShown the newest answer applied for each PID, so a
+	// slow older one cannot take the buffer back. One refresh at a time is
+	// in flight while logsRefreshing.
+	logsSent, logsOpening uint64
+	logsShown             map[int32]uint64
+	logsRefreshing        bool
 
 	taskView  bool
 	notifView bool
@@ -300,18 +316,17 @@ func NewWithNotifs(ctx context.Context, c Caller, closed <-chan struct{}, notifs
 func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}, t theme.Theme, mode ui.ColorMode, notifs *notifications.Manager) *Model {
 	m := &Model{
 		ctx: ctx, client: c, closed: closed, width: 80, height: 24, cwd: "/users/guest",
-		mode: modeHome,
-		transcript: []entry{
-			{"Welcome home. A familiar prompt. A whole new environment.", "accent"},
-			{"Type help to explore, or F2 to open your app shelf.", "muted"},
-		},
-		tasks:     taskmanager.New(),
-		notifs:    notifs,
-		receipts:  receipts.NewStore(50),
-		lastProcs: make(map[int32]procTracking),
-		user:      "guest",
+		mode:          modeHome,
+		transcriptPos: bloom.ViewportEnd,
+		tasks:         taskmanager.New(),
+		notifs:        notifs,
+		receipts:      receipts.NewStore(50),
+		lastProcs:     make(map[int32]procTracking),
+		user:          "guest",
 	}
-	m.kit = ui.New(t, mode)
+	m.setKit(ui.New(t, mode))
+	m.append(entry{"Welcome home. A familiar prompt. A whole new environment.", "accent"})
+	m.append(entry{"Type help to explore, or F2 to open your app shelf.", "muted"})
 	return m
 }
 
@@ -334,14 +349,56 @@ func (m *Model) pollProcessesCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) fetchLogsCmd(pid int32, name string) tea.Cmd {
+// fetchLogsCmd asks proc/logs for the tail of pid's log, to open its log
+// tail with when open is set, and otherwise to refresh it.
+func (m *Model) fetchLogsCmd(pid int32, name string, open bool) tea.Cmd {
 	client := m.client
 	ctx := m.ctx
+	m.logsSent++
+	seq := m.logsSent
+	if open {
+		m.logsOpening = seq
+	} else {
+		m.logsRefreshing = true
+	}
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		logs, err := taskmanager.FetchLogs(c, client, pid, 100)
-		return procLogsMsg{pid: pid, name: name, content: logs, err: err}
+		logs, err := taskmanager.FetchLogs(c, client, pid, taskmanager.LogTailLines)
+		return procLogsMsg{pid: pid, name: name, content: logs, err: err, seq: seq, open: open}
+	}
+}
+
+// applyLogs takes a proc/logs answer. The latest open request opens its
+// log tail while the table it was asked from is still showing; any other
+// answer only refreshes a log tail already kept for its PID, open or not,
+// so a late one never shows another process's lines.
+func (m *Model) applyLogs(msg procLogsMsg) {
+	if !msg.open {
+		m.logsRefreshing = false
+	}
+	opening := msg.open && msg.seq == m.logsOpening
+	if opening {
+		m.logsOpening = 0
+		opening = m.taskView && m.tasks.Mode() == taskmanager.ModeTable
+	}
+	if msg.err != nil {
+		if opening {
+			m.tasks.SetError(msg.err.Error())
+		}
+		return
+	}
+	if msg.seq <= m.logsShown[msg.pid] {
+		return
+	}
+	if m.logsShown == nil {
+		m.logsShown = make(map[int32]uint64)
+	}
+	if opening {
+		m.logsShown[msg.pid] = msg.seq
+		m.tasks.ShowLogs(msg.pid, msg.name, msg.content)
+	} else if m.tasks.UpdateLogs(msg.pid, msg.content) {
+		m.logsShown[msg.pid] = msg.seq
 	}
 }
 
@@ -562,7 +619,7 @@ func (m *Model) SetColorModeByName(name string) bool {
 	default:
 		return false
 	}
-	m.kit = ui.New(m.kit.Theme(), mode)
+	m.setKit(ui.New(m.kit.Theme(), mode))
 	return true
 }
 
@@ -746,7 +803,7 @@ func (m *Model) Init() tea.Cmd {
 
 func (m *Model) submit(line string) tea.Cmd {
 	m.busy = true
-	m.scroll = 0
+	m.resetScroll()
 	m.append(entry{dosPath(m.cwd) + "> " + line, "command"})
 	m.history = append(m.history, line)
 	if len(m.history) > 100 {
@@ -759,28 +816,6 @@ func (m *Model) submit(line string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
 		return execute(ctx, m.client, cwd, line)
-	}
-}
-
-func (m *Model) append(e entry) {
-	// Never render terminal controls from app/file output (escape sequences,
-	// OSC clipboard commands, carriage return spoofing, etc.).
-	e.text = safe(e.text)
-	// Keep memory bounded even when a service returns an enormous file.
-	r := []rune(e.text)
-	if len(r) > 12000 {
-		e.text = string(r[:12000]) + "\n[output truncated]"
-	}
-	for _, line := range strings.Split(e.text, "\n") {
-		m.transcript = append(m.transcript, entry{line, e.kind})
-	}
-	if len(m.transcript) > maxTranscript {
-		m.transcript = m.transcript[len(m.transcript)-maxTranscript:]
-	}
-	if e.kind == "error" {
-		if m.presentation == nil {
-			m.setMode(modePrompt)
-		}
 	}
 }
 
@@ -804,6 +839,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickCmd())
 		if !m.busy {
 			cmds = append(cmds, m.pollProcessesCmd())
+			if pid, open := m.tasks.LogsPID(); open && m.taskView && !m.logsRefreshing {
+				cmds = append(cmds, m.fetchLogsCmd(pid, "", false))
+			}
 			if time.Time(msg).Second()%5 == 0 {
 				cmds = append(cmds, m.fetchConfigCmd())
 			}
@@ -875,11 +913,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case procLogsMsg:
 		m.initExperience()
-		if msg.err != nil {
-			m.tasks.SetError(msg.err.Error())
-		} else {
-			m.tasks.ShowLogs(msg.pid, msg.name, msg.content)
-		}
+		m.applyLogs(msg)
 		return m, nil
 	case procActionMsg:
 		m.initExperience()
@@ -1141,6 +1175,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.paletteOpen {
 			return m.handlePaletteKey(msg)
 		}
+		if m.taskView && m.tasks.Searching() {
+			return m.handleLogSearchKey(msg)
+		}
 		if m.isShortcut("home", keyStr) {
 			cancel := m.dismissView()
 			m.taskView = false
@@ -1150,7 +1187,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.setMode(modeHome)
 			}
-			m.scroll = 0
+			m.resetScroll()
 			return m, cancel
 		}
 		if m.isShortcut("launcher", keyStr) {
@@ -1162,7 +1199,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.setMode(modeLauncher)
 			}
-			m.scroll = 0
+			m.resetScroll()
 			return m, cancel
 		}
 		if m.isShortcut("tasks", keyStr) {
@@ -1173,7 +1210,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notifView = false
 				m.setMode(modePrompt)
 			}
-			m.scroll = 0
+			m.resetScroll()
 			return m, cancel
 		}
 		if m.isShortcut("notifications", keyStr) {
@@ -1184,7 +1221,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskView = false
 				m.setMode(modePrompt)
 			}
-			m.scroll = 0
+			m.resetScroll()
 			return m, cancel
 		}
 		if m.isShortcut("settings", keyStr) {
@@ -1229,19 +1266,27 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setMode(modePrompt)
 			m.shelf = false
 			return m, nil
-		case "pgup":
-			// A focused version-3 region owns page scrolling; everywhere
-			// else the keys keep scrolling shell output.
-			if m.presentation != nil && m.presentation.regionFocused() {
+		case "pgup", "pgdown":
+			// A focused version-3 region owns page scrolling, an app view
+			// scrolls its rows, and an open log tail pages; otherwise the
+			// keys page the transcript while it is on screen.
+			switch {
+			case m.presentation != nil && m.presentation.regionFocused():
 				return m, m.viewKey(msg)
+			case m.presentation != nil && keyStr == "pgup":
+				m.scroll += max(1, m.height/2)
+			case m.presentation != nil:
+				m.scroll = max(0, m.scroll-max(1, m.height/2))
+			case m.taskView && m.tasks.Mode() == taskmanager.ModeLogs:
+				m.tasks.ScrollLogs(m.solve(), func(v bloom.ViewportView) bloom.ViewportPos {
+					if keyStr == "pgup" {
+						return v.PageUp()
+					}
+					return v.PageDown()
+				})
+			default:
+				m.pageTranscript(keyStr == "pgdown")
 			}
-			m.scroll += max(1, m.height/2)
-			return m, nil
-		case "pgdown":
-			if m.presentation != nil && m.presentation.regionFocused() {
-				return m, m.viewKey(msg)
-			}
-			m.scroll = max(0, m.scroll-max(1, m.height/2))
 			return m, nil
 		}
 		if m.busy {
@@ -1249,6 +1294,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.presentation != nil {
 			return m, m.viewKey(msg)
+		}
+		if m.taskView && m.tasks.Mode() == taskmanager.ModeLogs {
+			return m.handleLogsKey(msg)
 		}
 		if m.taskView {
 			switch msg.String() {
@@ -1266,13 +1314,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if r, ok := m.receipts.GetByPID(sel.ID); ok {
 						m.tasks.ShowReceipt(&r)
 					} else {
-						return m, m.fetchLogsCmd(sel.ID, sel.Name)
+						return m, m.fetchLogsCmd(sel.ID, sel.Name, true)
 					}
 				}
 			case "l":
 				if m.tasks.Mode() == taskmanager.ModeTable {
 					if sel := m.tasks.SelectedProcess(); sel != nil {
-						return m, m.fetchLogsCmd(sel.ID, sel.Name)
+						return m, m.fetchLogsCmd(sel.ID, sel.Name, true)
 					}
 				}
 			case "c":
@@ -1354,6 +1402,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.presentation != nil {
 			return m, m.viewKey(tea.KeyPressMsg{Code: tea.KeyExtended, Text: text})
 		}
+		if m.taskView && m.tasks.Searching() {
+			m.tasks.SearchInput(text)
+			return m, nil
+		}
 		if m.taskView || m.notifView {
 			return m, nil
 		}
@@ -1365,6 +1417,53 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setMode(modePrompt)
 		m.insertPromptText(text)
 		return m, nil
+	}
+	return m, nil
+}
+
+// handleLogsKey scrolls, follows and searches the open log tail. Enter, as
+// Esc, returns to the table.
+func (m *Model) handleLogsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	scroll := func(move func(bloom.ViewportView) bloom.ViewportPos) { m.tasks.ScrollLogs(m.solve(), move) }
+	switch msg.String() {
+	case "up", "k":
+		scroll(func(v bloom.ViewportView) bloom.ViewportPos { return v.Up(1) })
+	case "down", "j":
+		scroll(func(v bloom.ViewportView) bloom.ViewportPos { return v.Down(1) })
+	case "home", "g":
+		scroll(bloom.ViewportView.Top)
+	case "end", "G":
+		scroll(bloom.ViewportView.Bottom)
+	case "f":
+		m.tasks.ToggleFollow(m.solve())
+	case "/":
+		m.tasks.StartSearch()
+	case "n":
+		m.tasks.SeekMatch(m.solve(), true)
+	case "N":
+		m.tasks.SeekMatch(m.solve(), false)
+	case "enter":
+		if !msg.IsRepeat {
+			m.tasks.CloseModal()
+		}
+	}
+	return m, nil
+}
+
+// handleLogSearchKey types the log tail's search, which takes every key
+// but Ctrl-C until Enter finds it or Esc cancels it.
+func (m *Model) handleLogSearchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.tasks.CancelSearch()
+	case "enter":
+		m.tasks.CommitSearch(m.solve())
+	case "backspace", "ctrl+h":
+		m.tasks.SearchBackspace()
+	default:
+		if msg.Text != "" {
+			m.tasks.SearchInput(msg.Text)
+		}
 	}
 	return m, nil
 }
@@ -1470,7 +1569,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if strings.EqualFold(line, "cls") || strings.EqualFold(line, "clear") {
-			m.transcript = nil
+			m.clearTranscript()
 			m.input = nil
 			m.cursor = 0
 			m.scroll = 0
@@ -1631,13 +1730,13 @@ func (m *Model) Theme() theme.Theme {
 
 // SetTheme updates the shell's active theme and color capability mode.
 func (m *Model) SetTheme(t theme.Theme, mode ui.ColorMode) {
-	m.kit = ui.New(t, mode)
+	m.setKit(ui.New(t, mode))
 }
 
 // SetReducedMotion updates the reduced motion preference of the active theme.
 func (m *Model) SetReducedMotion(enabled bool) {
 	th := m.kit.Theme().WithReducedMotion(enabled)
-	m.kit = ui.New(th, m.kit.Mode())
+	m.setKit(ui.New(th, m.kit.Mode()))
 }
 
 // SetThemeByName switches the active theme by case-insensitive built-in

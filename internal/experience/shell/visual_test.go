@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,6 +242,53 @@ func TestShellAccessibleSnapshots(t *testing.T) {
 			setup: func(m *Model) {
 				m.setMode(modePrompt)
 				m.append(entry{"High-contrast dark mode active.", "accent"})
+			},
+		},
+		{
+			// A page up a transcript of wrapped Unicode output.
+			name:  "transcript-paged",
+			theme: theme.Nostalgia(),
+			mode:  ui.Plain,
+			setup: func(m *Model) {
+				m.setMode(modePrompt)
+				for i := range 40 {
+					m.append(entry{fmt.Sprintf("output %02d %s", i, strings.Repeat("\u754C\u9762 he\u0301llo ", i%4*3)), []string{"output", "muted", "command"}[i%3]})
+				}
+				press(m, keyPgUp)
+			},
+		},
+		{
+			// A log tail searched, its current match marked.
+			name:  "logs-search",
+			theme: theme.Monochrome(),
+			mode:  ui.Plain,
+			setup: func(m *Model) {
+				m.taskView = true
+				m.tasks.ShowLogs(7, "com.gostalgia.echo", numberedLog("echo line", 1, 30)+"echo done \u754C\n")
+				press(m, typed("/"), typed("line 01"), keyEnter, typed("n"))
+			},
+		},
+		{
+			// A followed log tail with its matches highlighted in color.
+			name:  "logs-follow-ansi256",
+			theme: theme.HighContrast(),
+			mode:  ui.ANSI256,
+			setup: func(m *Model) {
+				m.taskView = true
+				m.tasks.ShowLogs(7, "com.gostalgia.echo", numberedLog("echo line", 1, 30))
+				press(m, typed("f"), typed("/"), typed("2"), keyEnter)
+			},
+		},
+		{
+			// The log tail at the 30x10 minimum, scrolled and searching.
+			name:  "logs-compact",
+			theme: theme.Nostalgia(),
+			mode:  ui.Plain,
+			setup: func(m *Model) {
+				m.Update(tea.WindowSizeMsg{Width: minFrameWidth, Height: minFrameHeight})
+				m.taskView = true
+				m.tasks.ShowLogs(7, "com.gostalgia.echo", numberedLog("echo line", 1, 30))
+				press(m, keyDown, keyDown, typed("/"), typed("ech"))
 			},
 		},
 	} {

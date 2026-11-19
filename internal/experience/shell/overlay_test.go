@@ -26,7 +26,7 @@ func overlayUnderlays() []geometryScreen {
 			for i := range 30 {
 				m.append(entry{fmt.Sprintf("transcript line %02d", i), "output"})
 			}
-			m.scroll = 3
+			scrollTranscript(m, 3)
 			m.input = []rune("echo he\u0301llo 界 world")
 			m.cursor = 8
 		}},
@@ -362,7 +362,7 @@ func TestToastsOverlayWithoutMovingTheTranscript(t *testing.T) {
 				for i := range 40 {
 					m.append(entry{fmt.Sprintf("line %02d", i), "output"})
 				}
-				m.scroll = scroll
+				scrollTranscript(m, scroll)
 				m.input, m.cursor = []rune("draft"), 3
 				body := checkFrame(t, m)[slotBody]
 				base := screenText(m.View())

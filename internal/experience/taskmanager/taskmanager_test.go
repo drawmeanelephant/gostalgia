@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"bloomfx.dev/bloom"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/experience/receipts"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
@@ -186,6 +188,322 @@ func TestLogTailViewing(t *testing.T) {
 	tm.CloseModal()
 	if tm.Mode() != ModeTable {
 		t.Fatalf("expected ModeTable after CloseModal, got %v", tm.Mode())
+	}
+
+	t.Run("refresh reconciles", testLogRefreshReconciles)
+	t.Run("a tail per process", testLogTailsPerProcess)
+	t.Run("follow", testLogFollow)
+	for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI256} {
+		t.Run(fmt.Sprintf("search/%d", mode), func(t *testing.T) { testLogSearch(t, mode) })
+	}
+}
+
+// numberedLog is a log of lines prefix 001 to prefix last, from first.
+func numberedLog(prefix string, first, last int) string {
+	var b strings.Builder
+	for i := first; i <= last; i++ {
+		fmt.Fprintf(&b, "%s %03d\n", prefix, i)
+	}
+	return b.String()
+}
+
+// The log size the tests view the tail at: a bordered panel with 15 rows
+// of log text.
+const logW, logH = 60, 20
+
+// logScreen is the open log tail drawn at logW\u00D7logH.
+func logScreen(tm *Model, kit ui.Kit) string {
+	return bloom.Render(logW, logH, tm.LogsNode(kit))
+}
+
+func logFrame(tm *Model, kit ui.Kit) *bloom.Frame {
+	return bloom.Solve(logW, logH, tm.LogsNode(kit))
+}
+
+// logTop is the line at the top of the open log tail.
+func logTop(t *testing.T, tm *Model, kit ui.Kit) int {
+	t.Helper()
+	v, ok := logFrame(tm, kit).Viewport(LogsViewport)
+	if !ok {
+		t.Fatal("no log viewport on screen")
+	}
+	return v.First
+}
+
+// logText is the open log tail's lines.
+func logText(tm *Model) []string {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return tm.openLog().lines()
+}
+
+func scrollLogTo(tm *Model, kit ui.Kit, row int) {
+	tm.ScrollLogs(logFrame(tm, kit), func(v bloom.ViewportView) bloom.ViewportPos { return v.AtRow(row) })
+}
+
+// checkLog fails unless the open tail holds exactly want, a line each.
+func checkLog(t *testing.T, tm *Model, want string) {
+	t.Helper()
+	if got := strings.Join(logText(tm), "\n") + "\n"; got != want {
+		t.Fatalf("log holds\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Snapshots that repeat, extend, overlap, shorten or replace the tail
+// reconcile without duplicates, keeping the line read at the top while it
+// is kept, and clamping to the lines kept when it is not.
+func testLogRefreshReconciles(t *testing.T) {
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	tm := New()
+	tm.ShowLogs(5, "daemon", numberedLog("a", 1, 40))
+	scrollLogTo(tm, kit, 10)
+	if top := logTop(t, tm, kit); top != 10 || !strings.Contains(logScreen(tm, kit), "a 011") {
+		t.Fatalf("scrolled to line %d", top)
+	}
+	for _, step := range []struct {
+		name, snapshot, want string
+		top                  int
+	}{
+		{"identical", numberedLog("a", 1, 40), numberedLog("a", 1, 40), 10},
+		{"overlapping", numberedLog("a", 21, 60), numberedLog("a", 1, 60), 10},
+		{"shorter run of the end", numberedLog("a", 50, 60), numberedLog("a", 1, 60), 10},
+		{"grown past the bound", numberedLog("a", 1, 130), numberedLog("a", 31, 130), 0},
+	} {
+		if !tm.UpdateLogs(5, step.snapshot) {
+			t.Fatalf("%s: the opened process has no tail", step.name)
+		}
+		checkLog(t, tm, step.want)
+		if top := logTop(t, tm, kit); top != step.top {
+			t.Fatalf("%s: line %d is at the top, want %d", step.name, top, step.top)
+		}
+	}
+	if n := len(logText(tm)); n != LogTailLines {
+		t.Fatalf("kept %d lines, want the %d proc/logs is asked for", n, LogTailLines)
+	}
+	scrollLogTo(tm, kit, 50)
+	tm.UpdateLogs(5, numberedLog("a", 41, 140))
+	checkLog(t, tm, numberedLog("a", 41, 140))
+	if top := logTop(t, tm, kit); logText(tm)[top] != "a 081" {
+		t.Fatalf("eviction moved the top from a 081 to %s", logText(tm)[top])
+	}
+
+	tm.UpdateLogs(5, "rotated 1\nrotated 2\nrotated 3\n")
+	checkLog(t, tm, "rotated 1\nrotated 2\nrotated 3\n")
+	if screen := logScreen(tm, kit); !strings.Contains(screen, "rotated 1") || !strings.Contains(screen, "rotated 3") || strings.Contains(screen, "a 0") {
+		t.Fatalf("a rotated log did not replace the tail:\n%s", screen)
+	}
+	if top := logTop(t, tm, kit); top != 0 {
+		t.Fatalf("a replaced tail left line %d at the top", top)
+	}
+
+	// A last line without a newline is still being written.
+	tm.ShowLogs(6, "partial", "one\ntwo\nthr")
+	for _, step := range []struct{ snapshot, want string }{
+		{"one\ntwo\nthr", "one\ntwo\nthr\n"},
+		{"one\ntwo\nthree\nfour\n", "one\ntwo\nthree\nfour\n"},
+		{"two\nthree\nfour\nfi", "one\ntwo\nthree\nfour\nfi\n"},
+		{"four\nfive\n", "one\ntwo\nthree\nfour\nfive\n"},
+		{"four\nfive\n", "one\ntwo\nthree\nfour\nfive\n"},
+	} {
+		tm.UpdateLogs(6, step.snapshot)
+		checkLog(t, tm, step.want)
+	}
+}
+
+// Each opened process keeps a tail of its own: another's lines and
+// position never mix in, a refresh of one leaves the other's screen as it
+// is, and reopening a process restores its tail where it was read until
+// it leaves the table.
+func testLogTailsPerProcess(t *testing.T) {
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	tm := New()
+	tm.SetProcesses([]ProcessRow{{ID: 5, Name: "five"}, {ID: 9, Name: "nine"}})
+	tm.ShowLogs(5, "five", numberedLog("five", 1, 50))
+	scrollLogTo(tm, kit, 20)
+
+	tm.ShowLogs(9, "nine", numberedLog("nine", 1, 30))
+	screen := logScreen(tm, kit)
+	if pid, open := tm.LogsPID(); pid != 9 || !open || strings.Contains(screen, "five") || !strings.Contains(screen, "nine 001") {
+		t.Fatalf("opening PID 9 shows:\n%s", screen)
+	}
+	if top := logTop(t, tm, kit); top != 0 {
+		t.Fatalf("PID 9 opened at PID 5's line %d", top)
+	}
+	if !tm.UpdateLogs(5, numberedLog("five", 11, 60)) {
+		t.Fatal("PID 5's tail was not kept")
+	}
+	if got := logScreen(tm, kit); got != screen {
+		t.Fatalf("refreshing PID 5 changed PID 9's screen:\n%s", got)
+	}
+	if tm.UpdateLogs(77, "never opened\n") {
+		t.Fatal("a process never opened took a refresh")
+	}
+
+	tm.CloseModal()
+	tm.ShowLogs(5, "five", numberedLog("five", 11, 60))
+	checkLog(t, tm, numberedLog("five", 1, 60))
+	if top := logTop(t, tm, kit); top != 20 {
+		t.Fatalf("reopening PID 5 put line %d at the top, want 20", top)
+	}
+
+	// PID 9 leaves the table, and its tail goes with it.
+	tm.SetProcesses([]ProcessRow{{ID: 5, Name: "five"}})
+	if tm.UpdateLogs(9, numberedLog("nine", 1, 31)) {
+		t.Fatal("a process gone from the table kept its tail")
+	}
+	if !tm.UpdateLogs(5, numberedLog("five", 11, 60)) {
+		t.Fatal("the open tail was dropped")
+	}
+}
+
+// Follow shows each refresh's new lines at the bottom until the tail is
+// scrolled or f stops it; then refreshes leave the line read in place.
+func testLogFollow(t *testing.T) {
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	tm := New()
+	tm.ShowLogs(3, "svc", numberedLog("l", 1, 40))
+	if tm.Following() || !strings.Contains(logScreen(tm, kit), "l 001") {
+		t.Fatal("a tail opens following, or not at its first line")
+	}
+	tm.ToggleFollow(logFrame(tm, kit))
+	screen := logScreen(tm, kit)
+	if !tm.Following() || !strings.Contains(screen, "l 040") || !strings.Contains(screen, "FOLLOW") {
+		t.Fatalf("f did not follow:\n%s", screen)
+	}
+	tm.UpdateLogs(3, numberedLog("l", 1, 45))
+	if screen := logScreen(tm, kit); !strings.Contains(screen, "l 045") {
+		t.Fatalf("a followed refresh is not on screen:\n%s", screen)
+	}
+
+	tm.ScrollLogs(logFrame(tm, kit), func(v bloom.ViewportView) bloom.ViewportPos { return v.Up(1) })
+	top := logTop(t, tm, kit)
+	if tm.Following() {
+		t.Fatal("scrolling up kept following")
+	}
+	tm.UpdateLogs(3, numberedLog("l", 1, 50))
+	if got := logTop(t, tm, kit); got != top || strings.Contains(logScreen(tm, kit), "l 050") {
+		t.Fatalf("a refresh moved an unfollowed tail from line %d to %d", top, got)
+	}
+	// Scrolling back to the end does not follow on its own.
+	tm.ScrollLogs(logFrame(tm, kit), bloom.ViewportView.Bottom)
+	if tm.Following() {
+		t.Fatal("scrolling to the end followed without f")
+	}
+	tm.ToggleFollow(logFrame(tm, kit))
+	tm.ToggleFollow(logFrame(tm, kit))
+	top = logTop(t, tm, kit)
+	tm.UpdateLogs(3, numberedLog("l", 1, 55))
+	if tm.Following() || logTop(t, tm, kit) != top {
+		t.Fatal("f did not stop following where the tail was")
+	}
+}
+
+// Search marks every match in the theme's selection style, n and N move to
+// the next and previous one, wrapping, and bring it into view; a refresh
+// while typing, Unicode, no matches and an empty search keep the log and
+// its viewport whole.
+func testLogSearch(t *testing.T, mode ui.ColorMode) {
+	kit := ui.New(theme.Nostalgia(), mode)
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		switch {
+		case i == 3:
+			b.WriteString("Alpha \u754c three\n")
+		case i%10 == 0:
+			fmt.Fprintf(&b, "alpha line %03d\n", i)
+		default:
+			fmt.Fprintf(&b, "beta line %03d\n", i)
+		}
+	}
+	tm := New()
+	tm.ShowLogs(4, "search", b.String())
+	plain := logScreen(tm, kit)
+
+	tm.StartSearch()
+	tm.SearchInput("alp")
+	tm.UpdateLogs(4, b.String()+"beta line 041\n")
+	tm.SearchInput("hx")
+	tm.SearchBackspace()
+	if screen := logScreen(tm, kit); !tm.Searching() || !strings.Contains(ansi.Strip(screen), "Search: alph_") {
+		t.Fatalf("typing the search shows:\n%s", ansi.Strip(screen))
+	}
+	tm.CommitSearch(logFrame(tm, kit))
+	screen := logScreen(tm, kit)
+	if tm.Searching() || !strings.Contains(ansi.Strip(screen), "Match 1 of 5") {
+		t.Fatalf("the committed search shows:\n%s", ansi.Strip(screen))
+	}
+	marker := kit.Theme().Focus.Marker + " Alpha"
+	if !strings.Contains(ansi.Strip(screen), marker) {
+		t.Fatalf("the current match is not marked with %q:\n%s", marker, ansi.Strip(screen))
+	}
+	switch mode {
+	case ui.Plain:
+		if strings.Contains(screen, "\x1b") {
+			t.Fatal("Plain search drew an escape sequence")
+		}
+	default:
+		if screen == plain || strings.Contains(screen, "38;2;") || strings.Contains(screen, "48;2;") {
+			t.Fatal("ANSI256 matches are not highlighted, or in truecolor")
+		}
+	}
+
+	wantLines := []int{10, 20, 30, 40, 3}
+	for i, line := range wantLines {
+		tm.SeekMatch(logFrame(tm, kit), true)
+		screen := ansi.Strip(logScreen(tm, kit))
+		if !strings.Contains(screen, fmt.Sprintf("Match %d of 5", (i+1)%5+1)) {
+			t.Fatalf("n %d shows:\n%s", i+1, screen)
+		}
+		want := fmt.Sprintf("alpha line %03d", line)
+		if line == 3 {
+			want = "Alpha \u754c three"
+		}
+		if !strings.Contains(screen, kit.Theme().Focus.Marker+" "+want) {
+			t.Fatalf("n %d did not bring %q into view:\n%s", i+1, want, screen)
+		}
+	}
+	tm.SeekMatch(logFrame(tm, kit), false)
+	if screen := ansi.Strip(logScreen(tm, kit)); !strings.Contains(screen, "Match 5 of 5") {
+		t.Fatalf("N before the first match did not wrap to the last:\n%s", screen)
+	}
+
+	for _, c := range []struct{ query, status string }{
+		{"\u754c", "Match 1 of 1"},
+		{"zzz", "No match for \"zzz\""},
+		{"", "/ search"},
+	} {
+		tm.StartSearch()
+		tm.CancelSearch()
+		tm.StartSearch()
+		for tm.mu.RLock(); tm.searchDraft != ""; tm.mu.RLock() {
+			tm.mu.RUnlock()
+			tm.SearchBackspace()
+		}
+		tm.mu.RUnlock()
+		tm.SearchInput(c.query)
+		tm.CommitSearch(logFrame(tm, kit))
+		tm.SeekMatch(logFrame(tm, kit), true)
+		tm.SeekMatch(logFrame(tm, kit), false)
+		if screen := ansi.Strip(logScreen(tm, kit)); !strings.Contains(screen, c.status) {
+			t.Fatalf("search %q shows:\n%s", c.query, screen)
+		}
+	}
+	tm.mu.RLock()
+	cleared := tm.openLog().re == nil && !tm.openLog().matched
+	tm.mu.RUnlock()
+	rows := strings.Split(ansi.Strip(logScreen(tm, kit)), "\n")
+	if !cleared || strings.Contains(strings.Join(rows[2:], "\n"), kit.Theme().Focus.Marker) {
+		t.Fatalf("an empty search left a match:\n%s", strings.Join(rows, "\n"))
+	}
+
+	// A refresh that replaces the line of the current match drops it.
+	tm.StartSearch()
+	tm.SearchInput("alpha")
+	tm.CommitSearch(logFrame(tm, kit))
+	tm.UpdateLogs(4, "rotated\nalpha again\n")
+	tm.SeekMatch(logFrame(tm, kit), true)
+	if screen := ansi.Strip(logScreen(tm, kit)); !strings.Contains(screen, "Match 1 of 1") || !strings.Contains(screen, "alpha again") {
+		t.Fatalf("search after a replaced tail shows:\n%s", screen)
 	}
 }
 
@@ -413,8 +731,7 @@ func TestCompactLogsShowAndScrollText(t *testing.T) {
 			t.Fatalf("height %d: heading missing:\n%s", h, out)
 		}
 	}
-	tm.SelectNext()
-	tm.SelectNext()
+	tm.ScrollLogs(bloom.Solve(26, 3, tm.LogsNode(kit)), func(v bloom.ViewportView) bloom.ViewportPos { return v.Down(2) })
 	if out := tm.Render(kit, ui.Bounds{Width: 26, Height: 3}); !strings.Contains(out, "three") || !strings.Contains(out, "four") || strings.Contains(out, "two") {
 		t.Fatalf("scrolled compact logs:\n%s", out)
 	}

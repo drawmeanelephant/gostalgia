@@ -128,7 +128,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Title:  "cls",
 			Detail: "Clear terminal transcript",
 			Action: func(m *Model) tea.Cmd {
-				m.transcript = nil
+				m.clearTranscript()
 				m.input = nil
 				m.cursor = 0
 				m.scroll = 0

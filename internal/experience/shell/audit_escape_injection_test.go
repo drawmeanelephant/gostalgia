@@ -2,10 +2,14 @@ package shell
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 )
@@ -117,6 +121,110 @@ func TestAuditDocCommandOutputSanitized(t *testing.T) {
 		}
 		if strings.Contains(res.text, "cHJldmVydA==") {
 			t.Fatalf("%s output kept the OSC 52 payload: %q", line, res.text)
+		}
+	}
+}
+
+// injections are terminal control strings, each with its payload marked
+// cHduZWQ, in the 7-bit forms and with the terminators terminals accept.
+var injections = []struct{ name, seq string }{
+	{"OSC 8 BEL", "\x1b]8;;https://evil.invalid/cHduZWQ\aclick\x1b]8;;\a"},
+	{"OSC 8 ST", "\x1b]8;;https://evil.invalid/cHduZWQ\x1b\\click\x1b]8;;\x1b\\"},
+	{"OSC 52 BEL", "\x1b]52;c;cHduZWQ=\a"},
+	{"OSC 52 ST", "\x1b]52;c;cHduZWQ=\x1b\\"},
+	{"DCS", "\x1bP1$qcHduZWQ\x1b\\"},
+	{"DCS tmux passthrough", "\x1bPtmux;\x1b\x1b]52;c;cHduZWQ=\a\x1b\\"},
+	{"APC ST", "\x1b_Ga=T,f=100;cHduZWQ=\x1b\\"},
+}
+
+// checkInjected fails if view, drawn from text holding inj between
+// "safe before" and "safe after", lets any control string or its payload
+// through, or loses the safe text around it. Plain views carry no escape
+// at all; colored ones keep only the kit's own styling.
+func checkInjected(t *testing.T, where string, view string, plain bool) {
+	t.Helper()
+	for _, bad := range []string{"\x1b]", "\x1bP", "\x1b_", "\x1b^", "\x1bX", "\a", "\u0090", "\u009b", "\u009d", "\u009f", "cHduZWQ", "evil.invalid"} {
+		if strings.Contains(view, bad) {
+			t.Fatalf("%s: rendered %q", where, bad)
+		}
+	}
+	if plain && strings.Contains(view, "\x1b") {
+		t.Fatalf("%s: Plain view holds an escape", where)
+	}
+	if text := ansi.Strip(view); !strings.Contains(text, "safe before") || !strings.Contains(text, "safe after") {
+		t.Fatalf("%s: the safe text around the injection is gone:\n%s", where, text)
+	}
+}
+
+// Transcript output, error results and their restyled history never draw
+// OSC 8, OSC 52, DCS or APC strings, whatever the theme and profile.
+func TestAuditTranscriptBufferSanitized(t *testing.T) {
+	for _, inj := range injections {
+		for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI256} {
+			t.Run(fmt.Sprintf("%s/%v", inj.name, mode), func(t *testing.T) {
+				m := sized(NewWithTheme(context.Background(), noopCaller{}, nil, theme.Nostalgia(), mode), 80, 24)
+				m.setMode(modePrompt)
+				text := "safe before " + inj.seq + " safe after"
+				m.Update(resultMsg{text: text})
+				checkInjected(t, "output", m.View().Content, mode == ui.Plain)
+				m.Update(resultMsg{err: errors.New(text)})
+				checkInjected(t, "error", m.View().Content, mode == ui.Plain)
+				for i, e := range m.transcript {
+					if strings.ContainsAny(e.text, "\x1b\a") || strings.ContainsAny(m.transcriptBuf.Line(i), "\a") {
+						t.Fatalf("line %d was kept unsanitized: %q", i, e.text)
+					}
+				}
+				for _, th := range []theme.Theme{theme.Midnight(), theme.Monochrome(), theme.HighContrast()} {
+					m.SetTheme(th, mode)
+					checkInjected(t, "restyled "+th.Name, m.View().Content, mode == ui.Plain)
+				}
+			})
+		}
+	}
+}
+
+// Log tails, as first opened, refreshed, replaced and searched, never
+// draw OSC 8, OSC 52, DCS or APC strings either.
+func TestAuditLogBuffersSanitized(t *testing.T) {
+	for _, inj := range injections {
+		for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI256} {
+			t.Run(fmt.Sprintf("%s/%v", inj.name, mode), func(t *testing.T) {
+				line := "safe before " + inj.seq + " safe after\n"
+				client := &experienceCaller{
+					procs: []taskmanager.ProcessRow{{ID: 2, Name: "evil\x1b]52;c;cHduZWQ=\a", State: "running"}},
+					logs:  map[int32]string{2: "boot\n" + line},
+				}
+				m := sized(NewWithTheme(context.Background(), client, nil, theme.Nostalgia(), mode), 80, 24)
+				press(m, tea.KeyPressMsg{Code: tea.KeyF5})
+				m.Update(procUpdateMsg{procs: client.procs})
+				m.Update(requestLogs(t, m, 2)())
+				checkInjected(t, "opened", m.View().Content, mode == ui.Plain)
+
+				press(m, typed("f"))
+				client.logs[2] = "boot\n" + line + "more " + inj.seq + "\n" + line
+				refresh, ok := tickLogs(m)
+				if !ok {
+					t.Fatal("no refresh")
+				}
+				m.Update(refresh)
+				checkInjected(t, "refreshed", m.View().Content, mode == ui.Plain)
+
+				client.logs[2] = line + "rotated " + inj.seq
+				refresh, _ = tickLogs(m)
+				m.Update(refresh)
+				checkInjected(t, "replaced", m.View().Content, mode == ui.Plain)
+
+				press(m, typed("/"))
+				m.Update(tea.PasteMsg{Content: "safe" + inj.seq})
+				press(m, keyEnter, typed("n"))
+				view := m.View().Content
+				checkInjected(t, "searched", view, mode == ui.Plain)
+				if !strings.Contains(ansi.Strip(view), "for \"safe") {
+					t.Fatalf("the search did not run:\n%s", ansi.Strip(view))
+				}
+				m.SetTheme(theme.Midnight(), mode)
+				checkInjected(t, "restyled", m.View().Content, mode == ui.Plain)
+			})
 		}
 	}
 }
