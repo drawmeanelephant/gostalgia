@@ -412,12 +412,113 @@ The slice maps `/` onto `<root>/vfs` with lexical confinement. That is
 enough to prove the abstraction boundary; real drivers/virtual backends
 slide in behind the same `vfs.FS` interface later.
 
-### 4.6 Desktop toolkit — deferred decision, leading candidate recorded
+### 4.6 Desktop toolkit — experimental bloom adapter; decision deferred
 
-The desktop is Milestone M4. Leading candidate: **Gio** (pure Go, no cgo,
-cross-platform); alternatives: Fyne (cgo/OpenGL, more batteries), Ebiten
-(game-oriented). This decision is *not* made yet; the window service API
-will be designed first so the toolkit sits behind `desktop/` adapters.
+The desktop is Milestone M4. The documented candidate baseline is **Gio**
+(pure Go, no cgo, cross-platform), with Fyne (cgo/OpenGL, more batteries) and
+Ebiten (game-oriented) as alternatives. The toolkit decision remains open: a
+window service API should keep the toolkit behind `desktop/` adapters.
+
+Issue #215 adds a **nonproduction experimental spike**, not a desktop toolkit
+decision or production multiwindow feature. Its neutral draft is
+`internal/experience/experimental/windows`; the only implementation is the
+adapter-local `bloomadapter`, and `cmd/windowdemo` beneath that experimental
+subtree is its standalone entry point. The normal shell, runtime, and startup
+paths do not import or register it. The SDK, app-facing presentation contract,
+core packages, and event bus implementation are unchanged, and no Gio code or
+dependency was added.
+
+#### Draft and observed bloom behavior
+
+The draft's `ID`, `Title`, `Bounds`, `Window`, and `Service` describe identity,
+position/size, bottom-to-top z-order, focus, and lifecycle without bloom,
+Bubble Tea, `Edge`, or drag-message types. A `Window` carries an unchanged
+`sdk.View`: applications still provide data, not toolkit widgets. `Open`,
+`Focus`, `Move`, and `Close` are the only mutations. They publish typed
+`window.opened`, `window.focused`, `window.moved`, and `window.closed` payloads
+with a nonempty source through the existing `events.Bus`. Opening focuses the
+new window; focusing raises it; closing the focused window publishes its close
+before the next focus transition. Layout and rendering publish nothing.
+
+The demonstration opens the existing version-1 **Screen** item/form/action
+fixture and version-2 **Pad** block/meter/grid fixture side by side. Focused Go
+tests drive solved bloom frames and their actual mouse handlers: a title drag
+changes only that window's bounds, clicking an exposed overlapped window raises
+it, both border and keyboard close paths leave the survivor editable, and focus
+scopes preserve independent field drafts. Enter emits unchanged
+`sdk.ActionRequest` values with the fixture version, instance, item/cell IDs,
+current fields, and a request ID. Real 80×24 PTY checks show both populated
+views, editing/action feedback, focus switching, close, and a usable survivor.
+The 30×10 path clamps both windows to the available canvas; the fixtures are
+necessarily clipped there and this compact mode is not presented as a complete
+small-screen presentation renderer.
+
+The following toolkit leaks and limits were actually observed in the adapter;
+none is hidden behind a claim of universal neutrality:
+
+- **Geometry is bloom-specific at the boundary.** Neutral `Bounds` become
+  terminal-cell `Layer.Anchor(Start, Start).Offset(...).Size(...)` rectangles.
+  Alpha.6 clamps layer size but not offset, so the adapter clamps every drag and
+  resize and reserves the help row. There is no independent z-index property:
+  declaration order in `bloom.Overlay` is the service's bottom-to-top order.
+- **Dragging leaks `on.Drag` mechanics.** The adapter translates `Start`,
+  `Screen`, `Done`, and mouse messages into neutral `Move` calls. A stable,
+  unique title ID preserves capture when raising a window reorders the layer
+  tree. Only the title owns the drag handler: putting it on the box would also
+  drag from the close control. The neutral API does not expose these events.
+- **Focus needs adapter policy.** Nonmodal layers have no `Scope` method in
+  alpha.6, so each window is an `Auto(...).ID(...).Scope()` slot with a retained
+  `bloom.Focus`. The adapter pushes/pops scopes, remembers each window's
+  control, and supplies F6/Ctrl-W routing. `Focus.Update` handles Tab and
+  Press activation, not text editing or window switching. Click-focus is
+  initially confined to the old scope, so control-local mouse handlers restore
+  the clicked control while activating its window; otherwise the first click
+  would only raise it.
+- **Border close and removal have toolkit requirements.** `Box.Edge` displays
+  the title and `[X]` only where the box has border cells and enough width.
+  Ctrl-W is the keyboard equivalent. In the real PTY, removing a layer left
+  stale cells during the terminal's differential repaint even though the new
+  full frame was correct. Close therefore returns `tea.ClearScreen` for a full
+  repaint; this workaround is adapter-local and adds no animation or idle work.
+- **Presentation rendering is deliberately an adapter subset.** The adapter
+  maps SDK items, single-line fields, actions, blocks, meters, and grid cells to
+  bloom text controls and owns selection/draft state. It does not reuse the
+  production shell's private renderer or implement version-3 regions and
+  multiline editing. Demo action requests are recorded locally, not sent over
+  app IPC, and there is no persistence, reopen UI, production routing, or second
+  terminal owner.
+- **Color and lifecycle checks found no additional leak in the tested scope.**
+  The root uses kit `WithColors`, never `Root.Init`, ignores host color replies,
+  and attaches no clipboard, animation, or global motion behavior. Effective
+  Plain emitted no escapes and ANSI256 no truecolor in the adapter tests.
+  Malicious title/item controls were removed by `ui.Sanitize`. Subscriber
+  envelopes had the concrete experimental payload types and documented order;
+  repeated renders emitted none. These are observations for this fixture and
+  profile matrix, not a proof for every bloom composition or future toolkit.
+
+Run the demonstration with
+`go run ./internal/experience/experimental/windows/cmd/windowdemo` and its tests
+with `go test -count=1 ./internal/experience/experimental/windows/...`.
+
+#### Gio comparison status and approved deferral
+
+There was **no existing Gio spike, adapter, or earlier draft API** in the
+repository or issue history, and no Gio experiment ran in this mission. The only
+Gio-side comparison is therefore with the documented candidate baseline above:
+its pure-Go/no-cgo/cross-platform goals match this repository's constraints, and
+its eventual adapter would need to satisfy the same neutral window and SDK-data
+contracts. Whether Gio would impose different bounds, focus, drag, close, or
+repaint mechanics is **unverified**. Cross-toolkit neutrality is also
+**unverified**; one bloom implementation cannot establish it.
+
+Under the **USER-APPROVED proposal** recorded on
+[#206](https://github.com/drawmeanelephant/gostalgia/issues/206#issuecomment-6990850564),
+this observed-bloom/documented-Gio comparison substitutes for the unavailable
+side-by-side spike. It does not claim empirical Gio fulfillment.
+[#216](https://github.com/drawmeanelephant/gostalgia/issues/216) is the linked
+follow-up for approving a Gio dependency, implementing the same draft behind a
+real Gio adapter, rerunning these behaviors, and replacing every unverified Gio
+entry with observed results.
 
 ## 5. Milestones
 
