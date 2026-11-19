@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"image"
 	"io"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/runtime"
@@ -62,9 +64,16 @@ type copyObserver struct {
 	results chan resultMsg
 	copies  chan copyMsg
 	probed  chan struct{}
+	events  chan string
 }
 
 func (m *copyObserver) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.MouseMsg:
+		m.events <- fmt.Sprintf("%T: %+v", msg, msg)
+	case bloom.SelectionMsg:
+		m.events <- fmt.Sprintf("selection: %+v", msg)
+	}
 	if p, ok := msg.(probeMsg); ok {
 		p.fn(m.Model)
 		m.probed <- struct{}{}
@@ -133,7 +142,7 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 
 	ctx := t.Context()
 	m := &copyObserver{Model: New(ctx, client, rt.Done()), results: make(chan resultMsg, 20),
-		copies: make(chan copyMsg, 4), probed: make(chan struct{})}
+		copies: make(chan copyMsg, 4), probed: make(chan struct{}), events: make(chan string, 100)}
 	output := &lockedBuffer{}
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithInput(nil), tea.WithOutput(output),
 		tea.WithoutSignalHandler(), tea.WithWindowSize(80, 24))
@@ -147,8 +156,16 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 		case msg := <-ch:
 			return msg
 		case <-time.After(perStep):
-			t.Fatalf("timed out at %s", step)
-			return copyMsg{}
+			for {
+				select {
+				case event := <-m.events:
+					t.Logf("event before timeout: %s", event)
+				default:
+					t.Logf("last terminal output: %q", output.String())
+					t.Fatalf("timed out at %s", step)
+					return copyMsg{}
+				}
+			}
 		}
 	}
 	probe := func(fn func(*Model)) {
