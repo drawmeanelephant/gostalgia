@@ -10,6 +10,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 // PresentationVersion is the newest data/action protocol version, independent
@@ -88,6 +89,21 @@ type Block struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	Text  string `json:"text"`
+	// Focus is an optional hint naming the block cell that matters most,
+	// such as a map's player position. The experience may crop a hinted
+	// block to a bounded viewport that keeps this cell visible; a block
+	// without one renders exactly as before. Version 3 and later.
+	Focus *BlockFocus `json:"focus,omitempty"`
+}
+
+// BlockFocus names one cell of a Block. X counts Unicode code points from
+// the left edge of Focus.Y's line; Y counts lines from the block's top.
+// Both are validated against the block's own text, so a focus never names a
+// cell the block does not contain. The experience converts the column to
+// display cells when it crops, keeping the named cell in view.
+type BlockFocus struct {
+	X int `json:"x"`
+	Y int `json:"y"`
 }
 
 // Meter is a labeled gauge rendered in the theme's progress vocabulary. Value
@@ -237,8 +253,12 @@ func (v View) Validate() error {
 	for _, f := range v.Fields {
 		hasMultiline = hasMultiline || f.Multiline
 	}
-	if v.Version < 3 && (v.Region != nil || hasMultiline) {
-		return fmt.Errorf("presentation: multiline fields and the scroll region require version 3")
+	hasFocus := false
+	for _, block := range v.Blocks {
+		hasFocus = hasFocus || block.Focus != nil
+	}
+	if v.Version < 3 && (v.Region != nil || hasMultiline || hasFocus) {
+		return fmt.Errorf("presentation: multiline fields, the scroll region, and block focus require version 3")
 	}
 	check := func(id, label string, seen map[string]bool) error {
 		if !entryPattern.MatchString(id) || len(id) > 64 || seen[id] ||
@@ -285,6 +305,13 @@ func (v View) Validate() error {
 		text := strings.TrimSuffix(block.Text, "\n")
 		if len(block.Text) > maxBlockBytes || strings.Count(text, "\n")+1 > maxBlockLines {
 			return fmt.Errorf("presentation: block %q exceeds line or size budget", block.ID)
+		}
+		if block.Focus != nil {
+			lines := strings.Split(text, "\n")
+			if block.Focus.Y < 0 || block.Focus.Y >= len(lines) ||
+				block.Focus.X < 0 || block.Focus.X >= utf8.RuneCountInString(lines[block.Focus.Y]) {
+				return fmt.Errorf("presentation: block %q focus is outside its text", block.ID)
+			}
 		}
 	}
 	seen = make(map[string]bool)

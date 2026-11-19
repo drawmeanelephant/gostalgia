@@ -54,6 +54,14 @@ func TestLiveRunThroughApp(t *testing.T) {
 	if !strings.Contains(b.Text, string(engine.GlyphPlayer)) {
 		t.Error("map does not draw the player glyph")
 	}
+	// The v3 focal point is the engine's own tile, so a cropped viewport can
+	// keep the player visible without scanning map glyphs.
+	if b.Focus == nil {
+		t.Fatal("live v3 map has no focal point")
+	}
+	if pos := h.app.g.PlayerPosition(); b.Focus.X != pos.X || b.Focus.Y != pos.Y {
+		t.Fatalf("focal point = %+v, engine position = %+v", b.Focus, pos)
+	}
 	if findMeter(v, "hp") == nil || findMeter(v, "satiety") == nil {
 		t.Error("missing vitals meters")
 	}

@@ -103,6 +103,22 @@ func TestPresentationValidation(t *testing.T) {
 		func(v *View) { v.Grid = &Grid{Label: strings.Repeat("x", 257), Columns: 1} },
 		func(v *View) {
 			v.Version = 2
+			v.Blocks = []Block{{ID: "art", Text: "abc", Focus: &BlockFocus{X: 1, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 2, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 0, Y: 2}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: -1, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 0, Y: -1}}}
+		},
+		func(v *View) {
+			v.Version = 2
 			v.Region = &Region{ID: "log", Text: "x"}
 		},
 		func(v *View) {
@@ -136,6 +152,27 @@ func TestPresentationValidation(t *testing.T) {
 	v.Blocks = []Block{{ID: "art", Text: strings.Repeat("x\n", maxBlockLines)}}
 	if err := v.Validate(); err != nil {
 		t.Fatalf("trailing newline counted as an extra line: %v", err)
+	}
+}
+
+// TestPresentationBlockFocus pins the optional version-3 focal point: it is
+// accepted inside the block's own text, counts runes rather than bytes, and a
+// trailing newline adds no line for Focus.Y to name.
+func TestPresentationBlockFocus(t *testing.T) {
+	v := testView()
+	v.Version, v.Instance = PresentationVersion, "launch"
+	v.Blocks = []Block{{
+		ID: "map", Text: "map\n界@\nend\n",
+		Focus: &BlockFocus{X: 1, Y: 1},
+	}}
+	if err := v.Validate(); err != nil {
+		t.Fatalf("valid block focus rejected: %v", err)
+	}
+	// X counts code points: the wide rune at column 0 still lets column 1
+	// name the following ASCII cell, and byte offsets would wrongly reject it.
+	v.Blocks[0].Focus = &BlockFocus{X: 2, Y: 2}
+	if err := v.Validate(); err != nil {
+		t.Fatalf("focus on the last terminated line rejected: %v", err)
 	}
 }
 
