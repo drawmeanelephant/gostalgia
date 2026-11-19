@@ -189,6 +189,33 @@ func TestMotionConfigRefreshPrecedence(t *testing.T) {
 		t.Fatal("removing explicit config did not restore the theme default")
 	}
 
+	for _, defaultReduced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("user theme default %v survives removal", defaultReduced), func(t *testing.T) {
+			user := theme.Nostalgia().WithReducedMotion(defaultReduced)
+			user.Name = "ocean"
+			m := motionModel(theme.Nostalgia(), ui.ANSI256, newFakeMotionClock())
+			m.pendingTheme = "ocean"
+			m.Update(themeResolveMsg{name: "ocean", theme: &user})
+			explicit := !defaultReduced
+			m.Update(configUpdateMsg{loaded: true, theme: "ocean", reducedMotion: &explicit, motionConfigured: true})
+			if m.Theme().ReducedMotion != explicit {
+				t.Fatal("explicit config was not applied to the active user theme")
+			}
+			m.Update(configUpdateMsg{loaded: true, theme: "ocean", reducedMotion: &explicit})
+			if m.Theme().ReducedMotion != defaultReduced {
+				t.Fatalf("removing explicit config left ReducedMotion = %v, want user theme default %v", m.Theme().ReducedMotion, defaultReduced)
+			}
+			_, cmd := m.Update(failedLaunch())
+			wantFrames := 0
+			if !defaultReduced {
+				wantFrames = 1
+			}
+			if got := animationFrames(commandMessages(t, cmd)); got != wantFrames {
+				t.Fatalf("animation frames after restoring user theme default = %d, want %d", got, wantFrames)
+			}
+		})
+	}
+
 	a := motionModel(theme.Nostalgia(), ui.ANSI256, newFakeMotionClock())
 	b := motionModel(theme.Nostalgia(), ui.ANSI256, newFakeMotionClock())
 	reduced, enabled := true, false

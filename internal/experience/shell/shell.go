@@ -136,36 +136,37 @@ type Model struct {
 	// transcript is the semantic history behind transcriptBuf: one entry
 	// per logical line, oldest first, kept to restyle the lines when the
 	// kit changes. See transcript.go.
-	transcript       []entry
-	transcriptBuf    *bloom.Buffer
-	transcriptLook   transcriptLook
-	transcriptPos    bloom.ViewportPos
-	history          []string
-	historyPos       int
-	draft            string
-	apps             []appStatus
-	selected         int
-	launcherTop      int // the first card a click left in view; see launcherCards
-	shelf            bool
-	busy             bool
-	scroll           int
-	kit              ui.Kit
-	ui               *bloom.Root // this model's own root; see root()
-	uiKey            rootKey
-	motion           motionState // this model's own clocks and finite effects
-	configuredMotion *bool       // last explicit non-default config value; nil uses the theme default
-	motionOverride   *bool       // session-local motion command; outranks later config refreshes
-	presentation     *appView
-	viewEpoch        uint64
-	viewSub          *ipc.ClientSubscription
-	mode             viewMode
-	homeData         homeData
-	homeSelected     int
-	launcherQuery    string
-	paletteOpen      bool
-	paletteQuery     string
-	paletteSelected  int
-	previousMode     viewMode
+	transcript         []entry
+	transcriptBuf      *bloom.Buffer
+	transcriptLook     transcriptLook
+	transcriptPos      bloom.ViewportPos
+	history            []string
+	historyPos         int
+	draft              string
+	apps               []appStatus
+	selected           int
+	launcherTop        int // the first card a click left in view; see launcherCards
+	shelf              bool
+	busy               bool
+	scroll             int
+	kit                ui.Kit
+	ui                 *bloom.Root // this model's own root; see root()
+	uiKey              rootKey
+	motion             motionState // this model's own clocks and finite effects
+	themeMotionDefault bool        // active user or built-in theme's own ReducedMotion token
+	configuredMotion   *bool       // last explicit non-default config value; nil uses the theme default
+	motionOverride     *bool       // session-local motion command; outranks later config refreshes
+	presentation       *appView
+	viewEpoch          uint64
+	viewSub            *ipc.ClientSubscription
+	mode               viewMode
+	homeData           homeData
+	homeSelected       int
+	launcherQuery      string
+	paletteOpen        bool
+	paletteQuery       string
+	paletteSelected    int
+	previousMode       viewMode
 	// confirm is the open confirmation dialog, if any; see confirm.go.
 	confirm *confirmation
 	// procPending is set while a confirmed process stop or reap is in
@@ -340,7 +341,7 @@ func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}
 		user:          "guest",
 	}
 	m.motion.now = time.Now
-	m.setKit(ui.New(t, mode))
+	m.SetTheme(t, mode)
 	m.append(entry{"Welcome home. A familiar prompt. A whole new environment.", "accent"})
 	m.append(entry{"Type help to explore, or F2 to open your app shelf.", "muted"})
 	return m
@@ -1821,6 +1822,7 @@ func (m *Model) Theme() theme.Theme {
 
 // SetTheme updates the shell's active theme and color capability mode.
 func (m *Model) SetTheme(t theme.Theme, mode ui.ColorMode) {
+	m.themeMotionDefault = t.ReducedMotion
 	m.setKit(ui.New(t, mode))
 }
 
@@ -1831,8 +1833,8 @@ func (m *Model) SetReducedMotion(enabled bool) {
 }
 
 // applyMotionPolicy reapplies this session's preference after a theme or
-// config refresh. With neither an override nor explicit config, SetTheme's
-// ReducedMotion default remains in force.
+// config refresh. With neither an override nor explicit config, it restores
+// the recorded user or built-in theme default.
 func (m *Model) applyMotionPolicy() {
 	if m.motionOverride != nil {
 		m.SetReducedMotion(*m.motionOverride)
@@ -1840,7 +1842,9 @@ func (m *Model) applyMotionPolicy() {
 	}
 	if m.configuredMotion != nil {
 		m.SetReducedMotion(*m.configuredMotion)
+		return
 	}
+	m.SetReducedMotion(m.themeMotionDefault)
 }
 
 func (m *Model) setSessionReducedMotion(enabled bool) {
