@@ -94,11 +94,13 @@ and [docs/](docs/) for subsystem guides.
 
 ## Experimental, nonproduction window spike
 
-A deliberately unwired draft window service and bloom adapter live under
-`internal/experience/experimental/windows`. Run their standalone demonstration:
+A deliberately unwired draft window service with bloom and Gio adapters lives
+under `internal/experience/experimental/windows`. Run their standalone
+demonstrations:
 
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
+go build -tags giodemo ./internal/experience/experimental/windows/cmd/giowindowdemo
 ```
 
 It hosts the existing Screen and Pad SDK presentation fixtures in two titled
@@ -110,15 +112,15 @@ action or grid cell, and **Ctrl-W** to close the focused window. **Ctrl-C**
 exits and restores the terminal. The two drafts and semantic action requests
 remain independent, and lifecycle events use the existing typed event bus.
 
-This is not production multiwindow support, is not registered with the normal
-shell or runtime, and adds no Gio implementation or dependency. The demo keeps
-fixture actions local rather than sending app IPC, implements only the
-presentation elements its two fixtures use, and is most useful at 80×24 or
-larger. The toolkit-neutral draft, observed bloom limitations, and the approved
-unverified Gio comparison are in
-[docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred).
-Empirical Gio and cross-toolkit verification remain
-[#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
+This is not production multiwindow support and is not registered with the
+normal shell or runtime. The Gio demo's `giodemo` build tag keeps the
+cgo-bound `gioui.org/app` host out of default builds; building it verifies
+compile only, not a running window. Demos keep fixture actions local rather
+than sending app IPC, implement only the presentation elements the fixtures
+use, and the terminal demo is most useful at 80×24 or larger. The
+toolkit-neutral draft and the observed side-by-side bloom/Gio leak inventory
+are in
+[docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
 
 ## Checks
 
@@ -157,10 +159,11 @@ not treated as proof of Windows runtime behavior.
   asynchronous `clipboard/write` IPC instead. Host writes obey operator policy,
   including over SSH, and no OSC 52 fallback is used. The upstream issue remains
   an unsubmitted draft.
-- The experimental window comparison uses observed bloom behavior against the
-  documented Gio candidate baseline only. No Gio spike ran in this work;
-  empirical Gio results and cross-toolkit neutrality are unverified and tracked
-  by [#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
+- The experimental window comparison now has observed adapters for both bloom
+  and Gio (`gioui.org v0.10.3`, experimental-only). Its leak inventory is in
+  [docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred);
+  it does not cover `gioui.org/app`'s native windowing, which needs cgo on
+  macOS and display headers on Linux.
 - `status.md` remains the canonical milestone tracker. Its stale Charm baseline
   row is separate tracker maintenance in
   [#217](https://github.com/drawmeanelephant/gostalgia/issues/217), not part of
