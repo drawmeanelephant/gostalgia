@@ -137,9 +137,20 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 		t.Fatal("expected return to ModeTable after Esc")
 	}
 
-	// Stop worker with 'x'
-	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"})
-	m.Update(procActionMsg{status: "Stopped process 2"})
+	// 'x' asks before stopping the worker; Tab moves to Stop and Enter
+	// confirms. (Before #209, 'x' stopped the process immediately.)
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"}); cmd != nil || m.Focus() != FocusDialog {
+		t.Fatalf("'x' must open a confirmation, focus %v", m.Focus())
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, stop := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if stop == nil || len(client.stopped) != 0 {
+		t.Fatalf("confirming must return the stop request, stopped %v", client.stopped)
+	}
+	m.Update(stop())
+	if len(client.stopped) != 1 || client.stopped[0] != 2 {
+		t.Fatalf("stopped = %v, want [2]", client.stopped)
+	}
 	status, _ := m.tasks.Status()
 	if !strings.Contains(status, "Stopped process 2") {
 		t.Fatalf("unexpected task status: %q", status)

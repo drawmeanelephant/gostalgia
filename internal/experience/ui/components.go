@@ -198,38 +198,57 @@ type Dialog struct {
 }
 
 // Dialog returns a centered, bounded canvas, not an overlay on an existing
-// screen. The caller owns visibility, focus, and confirmation behavior.
+// screen. The caller owns visibility, focus, and confirmation behavior;
+// DialogLayer composes the same box over a screen instead.
 func (k Kit) Dialog(dialog Dialog, bounds Bounds) string {
 	if bounds.Width <= 0 || bounds.Height <= 0 {
 		return ""
 	}
-	width := min(bounds.Width, 48)
-	content := k.PanelContentBounds(Bounds{width, bounds.Height})
-	body := Wrap(Sanitize(dialog.Body), content.Width)
-	if len(dialog.Actions) > 0 {
-		bodyLines := strings.Split(body, "\n")
-		body = strings.Join(bodyLines[:min(len(bodyLines), max(0, content.Height-2))], "\n")
-		tabs := make([]Tab, len(dialog.Actions))
-		for i, action := range dialog.Actions {
-			tabs[i] = Tab(action)
-		}
-		actions := k.Tabs(tabs, dialog.Active, content.Width)
-		if content.Height >= 3 {
-			body += "\n\n" + actions
-		} else {
-			body = actions
-		}
-	}
-	height := min(bounds.Height, max(4, len(strings.Split(body, "\n"))+3))
-	panel := k.panel(Panel{Title: dialog.Title, Body: body, State: dialog.State, Focused: true},
-		Bounds{width, height}, k.theme.Borders.Dialog)
-	left, top := (bounds.Width-width)/2, (bounds.Height-height)/2
+	panel, box := k.dialogBox(dialog, bounds)
+	left, top := (bounds.Width-box.Width)/2, (bounds.Height-box.Height)/2
 	lines := strings.Split(panel, "\n")
 	for i := range lines {
 		lines[i] = strings.Repeat(" ", left) + lines[i]
 	}
 	canvas := strings.Repeat("\n", top) + strings.Join(lines, "\n")
 	return k.paint(Fit(canvas, bounds), k.theme.Palette.Text, k.theme.Palette.Canvas, false)
+}
+
+// dialogBox is the dialog's bordered box alone: at most 48 cells wide and as
+// tall as its wrapped body and actions, within bounds. box is its size.
+func (k Kit) dialogBox(dialog Dialog, bounds Bounds) (panel string, box Bounds) {
+	if bounds.Width <= 0 || bounds.Height <= 0 {
+		return "", Bounds{}
+	}
+	width := min(bounds.Width, 48)
+	content := k.PanelContentBounds(Bounds{width, bounds.Height})
+	// Word-wrap first so a confirmation never splits a word across lines;
+	// Wrap then breaks anything still too wide.
+	body := Wrap(ansi.Wrap(Sanitize(dialog.Body), content.Width, ""), content.Width)
+	if len(dialog.Actions) > 0 {
+		bodyLines := strings.Split(body, "\n")
+		// A blank row separates the actions only when the whole body fits
+		// with it; otherwise the row goes to the body.
+		gap := "\n\n"
+		if len(bodyLines) > content.Height-2 {
+			gap = "\n"
+		}
+		body = strings.Join(bodyLines[:min(len(bodyLines), max(0, content.Height-len(gap)))], "\n")
+		tabs := make([]Tab, len(dialog.Actions))
+		for i, action := range dialog.Actions {
+			tabs[i] = Tab(action)
+		}
+		actions := k.Tabs(tabs, dialog.Active, content.Width)
+		if content.Height >= 2 && body != "" {
+			body += gap + actions
+		} else {
+			body = actions
+		}
+	}
+	height := min(bounds.Height, max(4, len(strings.Split(body, "\n"))+3))
+	box = Bounds{width, height}
+	return k.panel(Panel{Title: dialog.Title, Body: body, State: dialog.State, Focused: true},
+		box, k.theme.Borders.Dialog), box
 }
 
 type Progress struct {

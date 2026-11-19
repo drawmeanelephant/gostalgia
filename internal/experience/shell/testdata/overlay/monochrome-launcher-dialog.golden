@@ -1,0 +1,24 @@
++------------------------------------------------------------------------------+
+| G O S T A L G I A  /  PERSONAL COMPUTING                                     |
+|  Home  [Apps]  Prompt   Tasks   Notifications (2)                            |
+| [OK] ONLINE   guest · C: environment drive                                   |
+|                                                                              |
+| SEARCH: o                                                                    |
+| +--------------------------------------------------------------------------+ |
+| | Notes                                                                    | |
+| | [READY] READ+----------------------------------------------+             | |
+| | com.gostalgi| > Stop Clock?                                |             | |
+| +-------------| Clock is no longer running as PID 31. App:   |-------------+ |
+| +-------------| Clock (com.gostalgia.clock).                 |-------------+ |
+| | > Clock     |                                              |             | |
+| | [OK] LIVE / | [Cancel] (Stop app)                          |             | |
+| | com.gostalgi+----------------------------------------------+             | |
+| +--------------------------------------------------------------------------+ |
+| Fixture app Clock with a description long enough to clip.                    |
+| GRANT  ipc · files                                                           |
+|                                                                              |
+|                                                                              |
+|                                                                              |
+| C:\users\guest> Clock is LIVE (PID 31). Enter relaunch, F3 stop, F4 view.    |
++------------------------------------------------------------------------------+
+Tab NEXT ACTION · Enter CHOOSE · Esc CANCEL · Ctrl-C EXIT

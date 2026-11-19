@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gostalgia/internal/experience/notifications"
@@ -54,18 +55,34 @@ func fixtureModel(th theme.Theme, mode ui.ColorMode) *Model {
 	}
 	usage := platform.ResourceUsage{Supported: true, MemoryBytes: 12 << 20, CPUUserMs: 840, CPUSysMs: 410}
 	m.tasks.SetProcesses([]taskmanager.ProcessRow{
-		{ID: 1, Name: "environment", Kind: "service", State: "running", Resources: usage},
-		{ID: 7, Name: "com.gostalgia.echo", Kind: "app", State: "running", RestartCount: 1, Resources: usage},
-		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "service", State: "restarting", RestartCount: 4},
-		{ID: 31, Name: "com.gostalgia.clock", Kind: "app", State: "failed", ExitCode: 2, RestartCount: 3, CrashLoop: true},
+		{ID: 1, Name: "environment", Kind: "inproc", State: "running", Resources: usage},
+		{ID: 7, Name: "com.gostalgia.echo", Kind: "child", State: "running", RestartCount: 1, Resources: usage},
+		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "inproc", State: "restarting", RestartCount: 4},
+		{ID: 31, Name: "com.gostalgia.clock", Kind: "child", State: "failed", ExitCode: 2, RestartCount: 3, CrashLoop: true},
 	})
 	receipt := fixtureReceipt()
 	notifs.Record(notifications.Notification{ID: "n1", Timestamp: fixtureTime, Title: "clock Crashed",
 		Message: "PID 31 exit 2 (failed)", Level: notifications.LevelError, Source: "process", PID: 31, Receipt: &receipt})
 	notifs.Record(notifications.Notification{ID: "n2", Timestamp: fixtureTime.Add(time.Minute), Title: "indexer Backoff",
 		Message: "PID 12 backoff restart 4", Level: notifications.LevelWarning, Source: "process", PID: 12})
+	// A settled session: the alerts stay unread history, but their toasts
+	// have expired, so screens show their own content. Toasts overlay the
+	// body without changing its layout; withToasts and the toast tests
+	// cover them.
+	for range 8 {
+		notifs.Tick()
+	}
 	m.transcript = append(m.transcript, entry{"> apps", "command"}, entry{"Echo, Notes and Clock are installed.", ""},
 		entry{"Unicode e\u0301 界 👩‍💻 survives wrapping.", "muted"})
+	return m
+}
+
+// withToasts records n fresh process alerts, each with an active toast.
+func withToasts(m *Model, n int) *Model {
+	for i := range n {
+		m.notifs.Record(notifications.Notification{ID: fmt.Sprintf("toast-%d", i), Timestamp: fixtureTime,
+			Title: fmt.Sprintf("worker-%d Crashed", i), Message: "exit 1", Level: notifications.LevelError, Source: "process"})
+	}
 	return m
 }
 

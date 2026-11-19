@@ -222,7 +222,12 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	if len(identity.Capabilities) != 1 || identity.Capabilities[0] != "ipc" {
 		t.Fatalf("demo grant = %v", identity.Capabilities)
 	}
-	submit("stop com.gostalgia.echo", "stop")
+	// Typed stop asks first; Tab and Enter confirm it.
+	p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "stop com.gostalgia.echo"})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyTab})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	await("stop")
 	if rt.Apps.IsRunning("com.gostalgia.echo") {
 		t.Fatal("stop left app running")
 	}
@@ -272,7 +277,9 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	// Filter the shelf to Echo: the first app by ID is not necessarily Echo.
 	p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "echo"})
 	p.Send(tea.KeyPressMsg{Code: tea.KeyF3})
-	await("shelf stop") // stop through the app shelf
+	p.Send(tea.KeyPressMsg{Code: tea.KeyTab})
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
+	await("shelf stop") // stop through the app shelf, once confirmed
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await("shelf relaunch") // relaunch through the app shelf
 	// The first Esc clears the shelf filter; the second returns to the prompt.

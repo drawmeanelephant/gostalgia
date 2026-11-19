@@ -1,0 +1,24 @@
++------------------------------------------------------------------------------+
+| G O S T A L G I A  /  PERSONAL COMPUTING                                     |
+|  Home   Apps   Prompt   Tasks   Notifications (2)  [Pad]                     |
+| [OK] ONLINE   guest · C: environment drive                                   |
+|      +----------------------------------------------------------------+      |
+| Pad  | > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
+| Tab f| >                                                              |      |
+| Masco|                                                                |      |
+| (\_/)| > [APP] Switch to Echo   com.gostalgia.echo · PID 7 (LI…       |      |
+| (o.o)|   [APP] Stop Echo  Graceful stop com.gostalgia.ec…             |      |
+| > ^ <|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already ru |      |
+| Charg|   [APP] Launch Notes  com.gostalgia.notes                      |%     |
+| Hunge|   [APP] Switch to Clock  com.gostalgia.clock · PID 31 (…       |%     |
+| > One|   [APP] Stop Clock  Graceful stop com.gostalgia.cl…            |      |
+| Text:|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already  |      |
+| [Adop|   [CMD] help  Command center help and keybin…                  |      |
+| Pad  |   [CMD] home  Switch to Home screen dashboar…                  |      |
+| [NW] +----------------------------------------------------------------+      |
+| [SW] [SE] (disabled)                                                         |
+| waiting                                                                      |
+|                                                                              |
+| PALETTE> Type to filter · ↑↓ navigate · Enter execute · Esc close            |
++------------------------------------------------------------------------------+
+Esc CLOSE · Enter EXECUTE · ↑↓ NAVIGATE · Ctrl-C EXIT

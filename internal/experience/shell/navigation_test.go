@@ -223,10 +223,15 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 	// Reset busy state to simulate command completion.
 	m.busy = false
 
-	// F3 on selected app returns stop cmd.
-	_, stopCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF3})
+	// F3 on the selected running app asks first, then Tab and Enter
+	// confirm the stop. (Before #209, F3 returned the stop command itself.)
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF3}); cmd != nil || m.Focus() != FocusDialog {
+		t.Fatalf("F3 must open a confirmation, focus %v", m.Focus())
+	}
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, stopCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if stopCmd == nil {
-		t.Fatal("expected stop command on F3")
+		t.Fatal("expected stop command on confirming F3")
 	}
 }
 
