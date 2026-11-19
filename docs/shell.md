@@ -325,6 +325,14 @@ event-type request on the returned `tea.View`.
   `HelpBar`, the Task Manager, Notification Center, palette, launcher and
   app views) enters the tree as `ui.Leaf` adapters that render into exactly
   the rectangle the layout gives them.
+- **Header counts.** The tabs carry parenthesized ASCII counts, so they
+  read without color in every theme and in Plain. `Apps (n)` counts the
+  registered apps in the accepted `app/list` snapshot that report running;
+  services and other runtime processes are not apps and are not counted.
+  `Notifications (n)` counts events the notification manager still holds as
+  unseen. Both counts disappear at zero, read only state the shell already
+  maintains (rendering starts no poll or refresh), and their width is part
+  of each tab's normal measured span, so mouse geometry stays aligned.
 - **Responsive priorities.** When the frame is short, the blank spacer rows
   give way. Tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the

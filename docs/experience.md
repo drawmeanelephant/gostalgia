@@ -499,6 +499,12 @@ scrollable table:
   Compact rows keep the same severity cue beside the title, dropping the
   custom badge and receipt tag before the title.
   - Unseen vs. Seen distinction: events arrive unread until inspected.
+    Opening the center through any existing route (F6 or its configured
+    shortcut, the Notifications tab, or the `notifications` and `alerts`
+    commands) marks the events already present seen. Rendering alone never
+    changes acknowledgement, and an event that arrives while the center is
+    open stays unseen until it is inspected or `a` marks all seen. The
+    header's `Notifications (n)` count follows that same state.
   - `↑` / `↓`: Select notifications.
   - `Enter`: Mark seen and drill down to crash receipts.
   - `d`: Dismiss selected notification.
@@ -513,6 +519,8 @@ scrollable table:
   notification center entries via `notify/post` with bounded `severity`/`title`/`body`.
   Posts are attributed to the calling app and are subject to DND and flood caps.
 - **Access**: Press `F6` or execute `notifications` or `alerts` from the prompt.
+  Entering the center acknowledges the events present at entry; later arrivals
+  remain unseen until inspected.
 
 ### Crash Receipts (`internal/experience/receipts`)
 

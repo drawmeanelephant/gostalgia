@@ -249,6 +249,19 @@ func (m *Model) frame(home homeView) bloom.Child {
 	)
 }
 
+// runningAppCount is how many registered apps the accepted app/list snapshot
+// reports running. Services and arbitrary runtime processes are not apps and
+// are not counted.
+func (m *Model) runningAppCount() int {
+	running := 0
+	for _, a := range m.apps {
+		if a.Running {
+			running++
+		}
+	}
+	return running
+}
+
 func (m *Model) tabs() ([]ui.Tab, int) {
 	active := 0
 	switch m.currentMode() {
@@ -264,13 +277,20 @@ func (m *Model) tabs() ([]ui.Tab, int) {
 	} else if m.notifView {
 		active = 4
 	}
+	// The header counts are read from state the shell already maintains:
+	// the accepted app/list snapshot and the notification manager. Rendering
+	// neither polls nor changes acknowledgement.
+	appsLabel := "Apps"
+	if n := m.runningAppCount(); n > 0 {
+		appsLabel = fmt.Sprintf("Apps (%d)", n)
+	}
 	notifLabel := "Notifications"
 	if m.notifs != nil && m.notifs.UnseenCount() > 0 {
 		notifLabel = fmt.Sprintf("Notifications (%d)", m.notifs.UnseenCount())
 	}
 	tabItems := []ui.Tab{
 		{Label: "Home"},
-		{Label: "Apps"},
+		{Label: appsLabel},
 		{Label: "Prompt"},
 		{Label: "Tasks"},
 		{Label: notifLabel},

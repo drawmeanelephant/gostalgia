@@ -196,12 +196,7 @@ func (m *Model) homeView() homeView {
 // selection; when even that does not fit, system activity collapses first,
 // then the document shortcuts, before the app list itself is windowed.
 func (m *Model) homeNode(hv homeView) bloom.Child {
-	running := 0
-	for _, a := range m.apps {
-		if a.Running {
-			running++
-		}
-	}
+	running := m.runningAppCount()
 	system := m.kit.Leaf(func(b ui.Bounds) string {
 		up := formatUptime(m.homeData.UptimeSeconds)
 		user := viewText(m.homeData.User)

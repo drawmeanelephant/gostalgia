@@ -252,10 +252,14 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 			m.setMode(modePrompt)
 		}
 	case screenNotifications:
+		wasOpen := m.notifView
 		m.notifView = !(toggle && m.notifView)
 		if m.notifView {
 			m.shelf, m.taskView = false, false
 			m.setMode(modePrompt)
+			if !wasOpen {
+				m.acknowledgeNotificationCenterEntry()
+			}
 		}
 	}
 	m.resetScroll()

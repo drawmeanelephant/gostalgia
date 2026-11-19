@@ -635,6 +635,16 @@ func (m *Model) openSelectedTask() tea.Cmd {
 	return m.fetchLogsCmd(sel.ID, sel.Name, true)
 }
 
+// acknowledgeNotificationCenterEntry marks the notifications present when the
+// center opens as seen. Callers invoke it only on the closed-to-open
+// transition: rendering never changes acknowledgement, and an arrival after
+// entry stays unseen until it is inspected.
+func (m *Model) acknowledgeNotificationCenterEntry() {
+	if m.notifs != nil {
+		m.notifs.MarkAllSeen()
+	}
+}
+
 // openSelectedNotification marks the selected notification seen and opens
 // its crash receipt, if it has one, as Enter does.
 func (m *Model) openSelectedNotification() tea.Cmd {
@@ -1224,10 +1234,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shelf = false
 			m.notifView = false
 		} else if msg.switchView == "notifications" {
+			entering := !m.notifView
 			m.notifView = true
 			m.leaveShelf()
 			m.shelf = false
 			m.taskView = false
+			if entering {
+				m.acknowledgeNotificationCenterEntry()
+			}
 		} else if msg.switchView == "shelf" || msg.switchView == "launcher" {
 			cmd = tea.Batch(cmd, m.switchScreen(screenApps, false))
 		} else if msg.switchView == "settings" {
