@@ -1692,12 +1692,17 @@ the `sound/status` probe).
 
 A version-2 snapshot carries a 16-column `Grid` of exactly 64 cells — the
 pad maximum — where cell `r{row}s{step}` declares the shared `step` action
-and a press toggles the cell (`x` on, `·` off). A version-1 snapshot gets
-the fallback instead: the four rows rendered as items with their encoded
-step strings, plus a `row_edit` field and `apply_row` action that accept
-`<row> <16 x/. glyphs>` (e.g. `lead x.x..x..x....x`) or `<row> clear`. Rows
-are named or 1-indexed: `lead`, `high`, `low`, `bass` — top to bottom,
-highest pitch to lowest.
+and a press toggles the cell. Every cell spells its row's voice as one
+character: lower-case `l`, `h`, `o`, `b` for a rest and upper-case `L`,
+`H`, `O`, `B` for a set step, top to bottom lead, high, low, bass. The
+grid label repeats that key with the voices' actual pitches in the current
+scale (`L lead 220 · H high 165 · O low 131 · B bass 110 Hz · uppercase =
+on`), so the pad stays readable without row colors and in Monochrome or
+Plain mode. A version-1 snapshot gets the fallback instead: the four rows
+rendered as items with their encoded step strings, plus a `row_edit` field
+and `apply_row` action that accept `<row> <16 x/. glyphs>` (e.g. `lead
+x.x..x..x....x`) or `<row> clear`. Rows are named or 1-indexed: `lead`,
+`high`, `low`, `bass` — top to bottom, highest pitch to lowest.
 
 Each row is a fixed voice: sawtooth lead, two square middle rows, triangle
 bass. Pitches come from a data-driven scale table — `pentatonic` (minor:
@@ -1719,8 +1724,19 @@ lasts 4 seconds, far under the 10s ceiling. There is no Stop action — the
 host player is fire-and-forget and the clip always self-terminates within a
 few seconds — and there is no loop mode, because looping would mean
 re-issuing play calls on a timer the primitive does not provide. The status
-line and the `play` route both report the single pass plainly ("playing one
-pass: N notes over Xs").
+line reports the single pass plainly.
+
+A successful `sound/play` acknowledgement also sets an in-memory pass
+deadline for exactly the duration the host acknowledged. While the clock is
+before that deadline the status line starts with a static `Playing one pass
+(Xs)` marker; there is no playhead, no column scrolling, and no timer-driven
+redraw. Pattern edits, tempo or scale changes, saves, clears, and unrelated
+action messages leave the acknowledged deadline untouched, so they neither
+clear the marker early nor stretch the pass. A busy adapter, an unsupported
+host, a missing grant, a failed call, or a reply that does not acknowledge
+playback never reports Playing, and a failed attempt during a pass keeps the
+original deadline. The deadline is not persisted, so a relaunch starts with
+no pass in flight.
 
 Playback availability is probed once per launch exactly like Dogcalc's
 bark: `session/whoami` for the `sound` grant, then `sound/status` for host
@@ -1748,8 +1764,9 @@ fs grants the app keeps working in memory and reports each failed save.
 
 Programmatic routes under `app/com.gostalgia.musictoy/`: `state` (pattern,
 settings, library, and the probed sound story), `toggle` (`{row, step}`),
-`set` (`{bpm?, scale?}`), `play` (returns `{played, notes, duration_ms}` or
-`{played:false, reason}` — the silent path is a state, not an error),
+`set` (`{bpm?, scale?}`), `play` (returns `{played, notes, duration_ms}` —
+`duration_ms` is the host-acknowledged pass length — or `{played:false,
+reason}`, because the silent path is a state, not an error),
 `save` (`{name}`), `load` (`{id}`), `delete` (`{id}`), and `list`.
 
 ## 20. Adventure: a text adventure (`com.gostalgia.adventure`)
