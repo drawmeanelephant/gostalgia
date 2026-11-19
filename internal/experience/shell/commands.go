@@ -934,7 +934,7 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		}
 		return "Shutdown requested", cwd, true, nil
 	default:
-		return fail(fmt.Errorf("unknown command %q — type help", cmd))
+		return fail(fmt.Errorf("unknown command %q %s", cmd, hint("— type help")))
 	}
 }
 

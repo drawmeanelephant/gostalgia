@@ -11,7 +11,7 @@ import (
 	"gostalgia/internal/experience/ui"
 )
 
-var monochromeOwnedUnicode = []string{"·", "↑", "↓", "←", "→", "…", "◇", "●", "─", "–"}
+var monochromeOwnedUnicode = []string{"·", "↑", "↓", "←", "→", "…", "◇", "●", "─", "–", "—"}
 
 func requireMonochromeChromeASCII(t *testing.T, screen string) {
 	t.Helper()
@@ -160,6 +160,35 @@ func TestMonochromePromptCommandChrome(t *testing.T) {
 	result := m.submit("session")().(resultMsg)
 	if !strings.Contains(result.text, "SESSION session-1 · User: 用户 · →") {
 		t.Fatalf("non-Monochrome command lost Unicode chrome or content:\n%s", result.text)
+	}
+}
+
+func TestMonochromeUnknownCommandChromePreservesInput(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		theme theme.Theme
+		want  string
+	}{
+		{name: "Monochrome", theme: theme.Monochrome(), want: `unknown command "界面" - type help`},
+		{name: "Nostalgia", theme: theme.Nostalgia(), want: `unknown command "界面" — type help`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := NewWithTheme(t.Context(), noopCaller{}, nil, tc.theme, ui.Plain)
+			result, ok := m.submit("界面")().(resultMsg)
+			if !ok || result.err == nil {
+				t.Fatalf("unknown command result = %#v, error %v", result, result.err)
+			}
+			if got := result.err.Error(); got != tc.want {
+				t.Fatalf("unknown command error = %q, want %q", got, tc.want)
+			}
+			m.Update(result)
+			if got := m.transcript[len(m.transcript)-1].text; got != tc.want {
+				t.Fatalf("transcript error = %q, want %q", got, tc.want)
+			}
+			if tc.name == "Monochrome" {
+				requireMonochromeChromeASCII(t, m.transcript[len(m.transcript)-1].text)
+			}
+		})
 	}
 }
 

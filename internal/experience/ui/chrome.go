@@ -51,6 +51,7 @@ func (k Kit) Hint(text string) string {
 		"●", "*",
 		"─", "-",
 		"–", "-",
+		"—", "-",
 	).Replace(text)
 }
 

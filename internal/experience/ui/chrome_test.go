@@ -10,7 +10,7 @@ import (
 
 func TestMonochromeChromeFallbacksAreBounded(t *testing.T) {
 	kit := New(theme.Monochrome(), Plain)
-	if got, want := kit.Hint("Tab focus · ↑↓ item · ←→ grid · Loading…"), "Tab focus | Up/Down item | Left/Right grid | Loading..."; got != want {
+	if got, want := kit.Hint("Tab focus · ↑↓ item · ←→ grid · Loading… — type help"), "Tab focus | Up/Down item | Left/Right grid | Loading... - type help"; got != want {
 		t.Fatalf("Hint = %q, want %q", got, want)
 	}
 	if got := kit.Hint("界 e\u0301 👩‍💻"); got != "界 e\u0301 👩‍💻" {
@@ -53,7 +53,7 @@ func TestHelpBarUsesOnlyThemeOwnedASCIIFallbacks(t *testing.T) {
 
 func TestPlainNonMonochromeKeepsUnicodeChrome(t *testing.T) {
 	kit := New(theme.Nostalgia(), Plain)
-	owned := "↑↓ · … ◇ ● ─ –"
+	owned := "↑↓ · … ◇ ● ─ – —"
 	if got := kit.Hint(owned); got != owned {
 		t.Fatalf("Plain changed non-Monochrome chrome: %q", got)
 	}
