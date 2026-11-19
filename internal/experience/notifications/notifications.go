@@ -36,6 +36,9 @@ type Notification struct {
 	PID       int32                  `json:"pid,omitempty"`
 	Seen      bool                   `json:"seen"`
 	Receipt   *receipts.CrashReceipt `json:"receipt,omitempty"`
+	// Badge names the notification in place of its level's label, for
+	// notices that are neither crashes nor restart backoffs.
+	Badge string `json:"badge,omitempty"`
 	// Wrap lets the notification's toast wrap its message over up to
 	// maxToastRows rows rather than cut it to one, for a message the reader
 	// needs whole, such as how to change a policy.
@@ -51,11 +54,12 @@ type Toast struct {
 	CreatedAt time.Time `json:"created_at"`
 	TicksLeft int       `json:"ticks_left"`
 	PID       int32     `json:"pid,omitempty"`
+	Badge     string    `json:"badge,omitempty"`
 	Wrap      bool      `json:"wrap,omitempty"`
 }
 
 // maxToastRows is the most rows a wrapping toast takes.
-const maxToastRows = 4
+const maxToastRows = 5
 
 // Manager maintains notification history, active transient toasts, and Do-Not-Disturb preferences.
 type Manager struct {
@@ -127,17 +131,7 @@ func (m *Manager) Record(n Notification) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.nextID++
-	if n.ID == "" {
-		n.ID = fmt.Sprintf("ntf-%d-%d", m.nextID, time.Now().UnixNano())
-	}
-	if n.Timestamp.IsZero() {
-		n.Timestamp = time.Now()
-	}
-	n.Title = ui.Sanitize(n.Title)
-	n.Message = ui.Sanitize(n.Message)
-	n.Source = ui.Sanitize(n.Source)
-	n.Seen = false // Explicitly unread / unseen upon arrival
+	n = m.prepareLocked(n)
 
 	// Prepend to history (newest first)
 	m.history = append([]Notification{n}, m.history...)
@@ -150,6 +144,39 @@ func (m *Manager) Record(n Notification) bool {
 		m.selected = max(0, len(m.history)-1)
 	}
 
+	return m.toastLocked(n)
+}
+
+// Flash shows n as a toast without recording it in history, for feedback
+// that matters only as it happens, such as a copy that worked. Under DND it
+// shows nothing.
+func (m *Manager) Flash(n Notification) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.toastLocked(m.prepareLocked(n))
+}
+
+// prepareLocked gives n an ID and time if it has none, sanitizes its text
+// and marks it unseen.
+func (m *Manager) prepareLocked(n Notification) Notification {
+	m.nextID++
+	if n.ID == "" {
+		n.ID = fmt.Sprintf("ntf-%d-%d", m.nextID, time.Now().UnixNano())
+	}
+	if n.Timestamp.IsZero() {
+		n.Timestamp = time.Now()
+	}
+	n.Title = ui.Sanitize(n.Title)
+	n.Message = ui.Sanitize(n.Message)
+	n.Source = ui.Sanitize(n.Source)
+	n.Badge = ui.Sanitize(n.Badge)
+	n.Seen = false // Explicitly unread / unseen upon arrival
+	return n
+}
+
+// toastLocked shows n as a toast unless DND is on, and reports whether it
+// did.
+func (m *Manager) toastLocked(n Notification) bool {
 	// Transient toast generation with flood bounding and DND suppression
 	if m.dnd {
 		// DND suppresses interruption without destroying history
@@ -170,6 +197,7 @@ func (m *Manager) Record(n Notification) bool {
 		CreatedAt: n.Timestamp,
 		TicksLeft: m.defaultToastTicks,
 		PID:       n.PID,
+		Badge:     n.Badge,
 		Wrap:      n.Wrap,
 	})
 	return true
@@ -328,26 +356,29 @@ func (m *Manager) SelectPrev() {
 
 // RenderToasts formats active toasts into bounded lines suitable for overlay or prompt integration.
 func (m *Manager) RenderToasts(kit ui.Kit, width int) string {
+	toasts, notice := m.ToastRows(kit, width)
+	var rows []string
+	for _, t := range toasts {
+		rows = append(rows, t...)
+	}
+	if notice != "" {
+		rows = append(rows, notice)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// ToastRows formats the active toasts oldest first, each as its rows at
+// width, and the flood-bounding notice, if any, that goes beneath them.
+func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	if len(m.toasts) == 0 || m.dnd || width <= 0 {
-		return ""
+		return nil, ""
 	}
 
-	var rows []string
 	for _, t := range m.toasts {
-		st := theme.Normal
-		badgeText := "INFO"
-		switch t.Level {
-		case LevelError:
-			st = theme.Error
-			badgeText = "CRASH"
-		case LevelWarning:
-			st = theme.Busy
-			badgeText = "BACKOFF"
-		}
-
+		badgeText, st := badgeFor(t.Level, t.Badge)
 		badge := kit.Badge(badgeText, st, width)
 		title := kit.Heading(t.Title)
 		msg := kit.Text(t.Message)
@@ -359,18 +390,32 @@ func (m *Manager) RenderToasts(kit ui.Kit, width int) string {
 				wrapped = wrapped[:maxToastRows]
 				wrapped[maxToastRows-1] = ui.Truncate(wrapped[maxToastRows-1]+"…", width)
 			}
-			rows = append(rows, wrapped...)
+			toasts = append(toasts, wrapped)
 			continue
 		}
-		rows = append(rows, ui.Truncate(line, width))
+		toasts = append(toasts, []string{ui.Truncate(line, width)})
 	}
 
 	if m.droppedToasts > 0 {
-		notice := kit.Muted(fmt.Sprintf("(+%d alerts suppressed by flood bounding)", m.droppedToasts))
-		rows = append(rows, ui.Truncate(notice, width))
+		notice = ui.Truncate(kit.Muted(fmt.Sprintf("(+%d alerts suppressed by flood bounding)", m.droppedToasts)), width)
 	}
+	return toasts, notice
+}
 
-	return strings.Join(rows, "\n")
+// badgeFor is the badge label and state of a notification at level, named
+// label when it has its own.
+func badgeFor(level Level, label string) (string, theme.State) {
+	text, st := "INFO", theme.Normal
+	switch level {
+	case LevelError:
+		text, st = "CRASH", theme.Error
+	case LevelWarning:
+		text, st = "BACKOFF", theme.Busy
+	}
+	if label != "" {
+		text = label
+	}
+	return text, st
 }
 
 // RenderPanel formats the full notification history panel. The list windows
@@ -422,16 +467,7 @@ func (m *Manager) RenderPanel(kit ui.Kit, bounds ui.Bounds) string {
 		n := m.history[i]
 		focused := i == m.selected
 
-		badgeState := theme.Normal
-		badgeLabel := "INFO"
-		switch n.Level {
-		case LevelError:
-			badgeState = theme.Error
-			badgeLabel = "CRASH"
-		case LevelWarning:
-			badgeState = theme.Busy
-			badgeLabel = "BACKOFF"
-		}
+		badgeLabel, badgeState := badgeFor(n.Level, n.Badge)
 
 		timeStr := n.Timestamp.Format("15:04:05")
 		badge := kit.Badge(badgeLabel, badgeState, w)

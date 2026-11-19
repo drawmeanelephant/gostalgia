@@ -136,6 +136,16 @@ func (m *Model) View() tea.View {
 			// Selectable text asks for mouse reports by itself; with the
 			// mouse off the terminal keeps them, for its own selection.
 			v.MouseMode, v.OnMouse = tea.MouseModeNone, nil
+		} else if route := v.OnMouse; route != nil {
+			// Bubble Tea runs the OnMouse of the last frame drawn, before
+			// Update, so a report that arrives after mouse off but before
+			// the next frame would still reach a wheel or click handler.
+			v.OnMouse = func(msg tea.MouseMsg) tea.Cmd {
+				if m.mouseOff {
+					return nil
+				}
+				return route(msg)
+			}
 		}
 	}
 	v.AltScreen = true
@@ -284,17 +294,30 @@ func (m *Model) badge(b ui.Bounds) string {
 // bottom-right corner over whatever the body shows there. The body is laid
 // out the same with or without it: toasts never take rows from the screen
 // beneath. The stack covers at most a third of the body, keeping the newest
-// toasts when they do not all fit, so even the 30×10 frame keeps most of its
-// body readable. The layer only draws the manager's active toasts; their
-// lifetime, caps and DND stay with notifications.Manager and its ticks.
+// whole toasts when they do not all fit, so even the 30×10 frame keeps most
+// of its body readable. The newest toast is never cut to fit that third: a
+// wrapped one, such as how to allow a blocked copy, is only useful whole,
+// so it may cover all but a row of the body until it expires. The layer only
+// draws the manager's active toasts; their lifetime, caps and DND stay with
+// notifications.Manager and its ticks.
 func (m *Model) toastLayer(w, h int) bloom.LayerNode {
 	width := min(w, toastWidth)
-	lines := strings.Split(m.notifs.RenderToasts(m.kit, width), "\n")
-	if room := max(1, h/3); len(lines) > room {
-		if m.notifs.DroppedToasts() > 0 {
-			lines = lines[:len(lines)-1]
+	toasts, notice := m.notifs.ToastRows(m.kit, width)
+	room := max(1, h/3)
+	var lines []string
+	if n := len(toasts); n > 0 {
+		newest := toasts[n-1]
+		lines = newest[:min(len(newest), max(room, h-1))]
+		if len(lines) < len(newest) {
+			lines[len(lines)-1] = ui.Truncate(lines[len(lines)-1]+"…", width)
 		}
-		lines = lines[max(0, len(lines)-room):]
+		kept := 1
+		for ; kept < n && len(lines)+len(toasts[n-1-kept]) <= room; kept++ {
+			lines = append(append([]string(nil), toasts[n-1-kept]...), lines...)
+		}
+		if notice != "" && kept == n && len(lines) < room {
+			lines = append(lines, notice)
+		}
 	}
 	stack := m.kit.Leaf(func(ui.Bounds) string { return strings.Join(lines, "\n") })
 	return bloom.Layer(stack).Anchor(bloom.End, bloom.End).Size(width, len(lines)).ID(layerToasts)

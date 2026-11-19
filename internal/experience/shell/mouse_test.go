@@ -1172,8 +1172,22 @@ func TestMouseSelectionCopiesToTheHostClipboardThroughPolicy(t *testing.T) {
 			if content := m.View().Content; strings.Contains(content, "\x1b]52") {
 				t.Fatal("OSC 52 on screen")
 			}
-			if got := m.notifs.History()[0].Message; tc.err != nil && strings.Contains(got, "policy_denied:") {
-				t.Fatalf("the notification shows the raw error %q", got)
+			if strings.Contains(toastText(m), "BACKOFF") || !strings.Contains(toastText(m), "COPY") {
+				t.Fatalf("the copy's toast is badged as something else: %q", toastText(m))
+			}
+			// A failure stays in the Notification Center; a routine copy
+			// that worked does not crowd it.
+			var kept []notifications.Notification
+			for _, n := range m.notifs.History() {
+				if n.Source == "clipboard" {
+					kept = append(kept, n)
+				}
+			}
+			if tc.err == nil && len(kept) != 0 {
+				t.Fatalf("a copy that worked went to the history: %+v", kept)
+			}
+			if tc.err != nil && (len(kept) != 1 || kept[0].Badge != "COPY" || strings.Contains(kept[0].Message, "policy_denied:")) {
+				t.Fatalf("the failure's history entry is %+v", kept)
 			}
 		})
 	}
@@ -1380,6 +1394,289 @@ func TestMouseOffDropsAGestureInProgress(t *testing.T) {
 	clickAt(t, m, card)
 	if n := len(calls(rec, "app/launch")); n != 1 {
 		t.Fatalf("a double click with the mouse back on launched %d times", n)
+	}
+}
+
+// onFrame delivers msgs as Bubble Tea does to the frame v drew, whatever
+// the model has done since: to v's OnMouse, then to Update.
+func onFrame(t *testing.T, m *Model, v tea.View, msgs ...tea.Msg) {
+	t.Helper()
+	for _, msg := range msgs {
+		if v.OnMouse != nil {
+			drive(t, m, v.OnMouse(msg.(tea.MouseMsg)))
+		}
+		_, cmd := m.Update(msg)
+		drive(t, m, cmd)
+	}
+}
+
+func click(p image.Point) []tea.Msg {
+	return []tea.Msg{tea.MouseClickMsg{X: p.X, Y: p.Y, Button: tea.MouseLeft}, tea.MouseReleaseMsg{X: p.X, Y: p.Y, Button: tea.MouseLeft}}
+}
+
+// A click acts on what its target is when the click arrives, as Enter
+// would then, not on what the frame under the pointer showed.
+func TestMouseTargetsThatChangeAfterTheFrameAreRechecked(t *testing.T) {
+	for _, size := range geometrySizes {
+		t.Run(sizeName(size), func(t *testing.T) {
+			// A process that exits after the frame showed its row.
+			m, rec := mouseModel(t, size[0], size[1])
+			m.taskView = true
+			body := rectOf(t, m, slotBody)
+			rows := m.tasks.TableRows(m.kit, ui.Bounds{Width: body.Dx(), Height: body.Dy()})
+			if len(rows) == 0 {
+				t.Fatal("no process rows on screen")
+			}
+			row := rows[len(rows)-1]
+			at := body.Min.Add(image.Pt(row.X+1, row.Y))
+			v := m.View()
+			var left []taskmanager.ProcessRow
+			for _, p := range m.tasks.Processes() {
+				if p.ID != row.PID {
+					left = append(left, p)
+				}
+			}
+			m.tasks.SetProcesses(left)
+			before := stateOf(m)
+			onFrame(t, m, v, click(at)...)
+			if stateOf(m) != before || len(rec.all()) != 0 {
+				t.Fatalf("a click on exited PID %d acted: %v", row.PID, rec.all())
+			}
+
+			// A row clicked as a command starts waits for it, as Enter does.
+			m, rec = mouseModel(t, size[0], size[1])
+			m.taskView = true
+			v = m.View()
+			m.busy = true
+			onFrame(t, m, v, click(at)...)
+			if m.tasks.Mode() != taskmanager.ModeTable || len(rec.all()) != 0 {
+				t.Fatal("a click acted while a command ran")
+			}
+			m.busy = false
+			clickAt(t, m, at)
+			if m.tasks.Mode() == taskmanager.ModeTable {
+				t.Fatal("the click did nothing once the command finished")
+			}
+
+			// A notification dismissed after the frame.
+			m, rec = mouseModel(t, size[0], size[1])
+			m.notifView = true
+			spans := m.notifs.EntrySpans(m.kit, ui.Bounds{Width: body.Dx(), Height: body.Dy()})
+			if len(spans) == 0 {
+				t.Fatal("no notifications on screen")
+			}
+			s := spans[0]
+			v = m.View()
+			m.notifs.Dismiss(s.ID)
+			before, unseen := stateOf(m), m.notifs.UnseenCount()
+			onFrame(t, m, v, click(body.Min.Add(image.Pt(s.X+1, s.Y)))...)
+			if stateOf(m) != before || m.notifs.UnseenCount() != unseen || len(rec.all()) != 0 {
+				t.Fatal("a click on a dismissed notification acted")
+			}
+
+			// An app uninstalled after the frame showed its card.
+			m, rec = mouseModel(t, size[0], size[1])
+			m.setMode(modeLauncher)
+			gone := m.apps[0].Manifest.ID
+			r, ok := m.solve().Rect(launcherCard(gone))
+			if !ok {
+				return
+			}
+			v = m.View()
+			m.apps = slices.Clone(m.apps[1:])
+			before = stateOf(m)
+			onFrame(t, m, v, append(click(r.Min), click(r.Min)...)...)
+			if stateOf(m) != before || len(rec.all()) != 0 {
+				t.Fatalf("a double click on uninstalled %s acted: %v", gone, rec.all())
+			}
+		})
+	}
+}
+
+// Bubble Tea routes a report through the last frame drawn, before Update:
+// one that arrives after mouse off, before the next frame, does nothing.
+func TestMouseOffStopsReportsAimedAtTheLastFrame(t *testing.T) {
+	m, rec := mouseModel(t, 80, 24)
+	m.setMode(modePrompt)
+	for i := range 100 {
+		m.append(entry{fmt.Sprintf("line %03d", i), "output"})
+	}
+	center := rectOf(t, m, slotBody).Min.Add(image.Pt(4, 4))
+	up := tea.MouseWheelMsg{X: center.X, Y: center.Y, Button: tea.MouseWheelUp}
+	onFrame(t, m, m.View(), up)
+	if m.transcriptPos.AtEnd() {
+		t.Fatal("the wheel did not scroll the transcript with the mouse on")
+	}
+	m.transcriptPos = bloom.ViewportEnd
+	v := m.View()
+	m.setMouse(false)
+	onFrame(t, m, v, up)
+	if !m.transcriptPos.AtEnd() {
+		t.Fatal("a wheel report after mouse off scrolled the transcript")
+	}
+
+	m.setMouse(true)
+	m.taskView = true
+	m.tasks.ShowLogs(7, "com.gostalgia.echo", numberedLog("log", 1, 90))
+	down := tea.MouseWheelMsg{X: center.X, Y: center.Y, Button: tea.MouseWheelDown}
+	v = m.View()
+	before := m.tasks.LogsPos()
+	m.setMouse(false)
+	onFrame(t, m, v, down, down)
+	if m.tasks.LogsPos() != before {
+		t.Fatal("a wheel report after mouse off scrolled the log tail")
+	}
+
+	m.taskView = false
+	m.setMouse(true)
+	tab := mustFind(t, m, rectOf(t, m, slotTabs), "Apps")
+	v = m.View()
+	m.setMouse(false)
+	was := stateOf(m)
+	onFrame(t, m, v, click(tab)...)
+	if stateOf(m) != was || len(rec.all()) != 0 {
+		t.Fatal("a click report after mouse off switched screens")
+	}
+}
+
+// Each shell has its own mouse: its gestures, selection and mode.
+func TestMouseStateBelongsToEachShell(t *testing.T) {
+	rec := &recordingCaller{}
+	a := sized(fixtureModel(theme.Nostalgia(), ui.Plain), 80, 24)
+	b := sized(fixtureModel(theme.Nostalgia(), ui.Plain), 80, 24)
+	a.client, b.client = rec, rec
+	a.setMode(modeLauncher)
+	b.setMode(modeLauncher)
+	id := a.apps[1].Manifest.ID
+	// A click in each shell is a single click in each, not a double click.
+	clickAt(t, a, rectOf(t, a, launcherCard(id)).Min)
+	clickAt(t, b, rectOf(t, b, launcherCard(id)).Min)
+	if a.selected != 1 || b.selected != 1 || len(calls(rec, "app/launch")) != 0 {
+		t.Fatalf("selected %d and %d, launched %v", a.selected, b.selected, calls(rec, "app/launch"))
+	}
+	// Text selected in one is not selected in the other.
+	a.setMode(modePrompt)
+	b.setMode(modePrompt)
+	selectText(t, a, mustFind(t, a, rectOf(t, a, slotBody), "Notes"), 5)
+	if got := copied(t, rec); len(got) != 1 || got[0] != "Notes" {
+		t.Fatalf("the selection copied %q", got)
+	}
+	if text, ok := b.root().Selection(); ok {
+		t.Fatalf("the other shell has selection %q", text)
+	}
+	// Mouse off in one leaves the other's on.
+	act(t, a, typed("mouse off"))
+	act(t, a, enterKey)
+	if va, vb := a.View(), b.View(); va.MouseMode != tea.MouseModeNone || vb.MouseMode == tea.MouseModeNone {
+		t.Fatalf("mouse modes %v and %v after mouse off in the first", va.MouseMode, vb.MouseMode)
+	}
+	b.setMode(modeHome)
+	clickAt(t, b, mustFind(t, b, rectOf(t, b, slotTabs), "Apps"))
+	if b.currentMode() != modeLauncher {
+		t.Fatal("the other shell's tab click did nothing")
+	}
+}
+
+// A tooltip follows the line it belongs to as the launcher is resized,
+// filtered and scrolled, and shows the text that line then holds.
+func TestMouseTooltipsFollowResizeFilterAndScroll(t *testing.T) {
+	long := func(name string) string {
+		return name + " has a description long enough to be cut in a narrow launcher, which ends here."
+	}
+	m := sized(fixtureModel(theme.Nostalgia(), ui.Plain), 40, 24)
+	for i := range m.apps {
+		m.apps[i].Manifest.Description = long(m.apps[i].Manifest.Name)
+	}
+	m.setMode(modeLauncher)
+	hover := func(step, want string) {
+		t.Helper()
+		r := rectOf(t, m, launcherDescription)
+		mouse(t, m, tea.MouseMotionMsg{X: r.Min.X + 2, Y: r.Min.Y})
+		tip, ok := m.root().Tooltip()
+		if want == "" && ok {
+			t.Fatalf("%s: text that fits shows tooltip %q", step, tip)
+		}
+		if want != "" && (!ok || tip != want) {
+			t.Fatalf("%s: tooltip %q (%v), want %q", step, tip, ok, want)
+		}
+		mouse(t, m, tea.MouseMotionMsg{X: 0, Y: 0})
+		if _, ok := m.root().Tooltip(); ok {
+			t.Fatalf("%s: the tooltip outlived the pointer leaving", step)
+		}
+	}
+	hover("40x24", long(m.apps[0].Manifest.Name))
+	m.Update(tea.WindowSizeMsg{Width: 64, Height: 20})
+	hover("64x20", long(m.apps[0].Manifest.Name))
+	body := rectOf(t, m, slotBody)
+	wheelAt(t, m, image.Pt(body.Min.X+2, body.Min.Y+2), 1)
+	if m.selected != 1 {
+		t.Fatalf("the wheel selected %d", m.selected)
+	}
+	hover("scrolled", long(m.apps[1].Manifest.Name))
+	act(t, m, typed(strings.ToLower(m.apps[2].Manifest.Name)))
+	if f := m.filteredApps(); len(f) != 1 || f[0].Manifest.ID != m.apps[2].Manifest.ID {
+		t.Fatalf("the filter left %d apps", len(f))
+	}
+	hover("filtered", long(m.apps[2].Manifest.Name))
+	m.Update(tea.WindowSizeMsg{Width: 200, Height: 60})
+	hover("200x60", "")
+}
+
+func TestCtrlYGivesWayToAShortcutOnIt(t *testing.T) {
+	byKey, _ := mouseModel(t, 80, 24)
+	m, rec := mouseModel(t, 80, 24)
+	m.shortcuts = map[string]string{"launcher": "ctrl+y"}
+	act(t, m, tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	act(t, byKey, key(tea.KeyF2))
+	if m.currentMode() != byKey.currentMode() || len(copied(t, rec)) != 0 {
+		t.Fatalf("Ctrl-Y bound to the launcher went to mode %v and copied %q", m.currentMode(), copied(t, rec))
+	}
+}
+
+// A blocked copy's toast keeps its title and where to read how to allow it
+// even in the smallest terminal, and gives the whole guidance where there
+// is room; the mouse command gives it at any size.
+func TestMouseCopyDenialStaysReadableInASmallTerminal(t *testing.T) {
+	denied := copyMsg{chars: 5, err: errors.New("ipc: policy_denied: integration is disabled by operator policy: host clipboard integration is disabled")}
+	guidance := []string{"clipboard.enabled", "clipboard.allow_host_write", "sys/policy/update"}
+	for _, size := range [][2]int{{30, 10}, {40, 12}, {80, 24}} {
+		t.Run(sizeName(size), func(t *testing.T) {
+			m := sized(fixtureModel(theme.Nostalgia(), ui.Plain), size[0], size[1])
+			// Older toasts give way to it.
+			m.notifs.Record(notifications.Notification{Title: "older", Message: "an older toast"})
+			m.Update(denied)
+			lines := screenText(m.View())
+			stack := rectOf(t, m, layerToasts)
+			var rows []string
+			for _, line := range lines[stack.Min.Y:stack.Max.Y] {
+				rows = append(rows, ansi.Cut(line, stack.Min.X, stack.Max.X))
+			}
+			shown := strings.Join(strings.Fields(strings.Join(rows, " ")), " ")
+			for _, want := range []string{"COPY Copy blocked", "Type mouse for how to allow it"} {
+				if !strings.Contains(shown, want) {
+					t.Fatalf("the toast shows %q, without %q", shown, want)
+				}
+			}
+			if size[0] >= toastWidth {
+				for _, want := range guidance {
+					if !strings.Contains(shown, want) {
+						t.Fatalf("the toast shows %q, without %q", shown, want)
+					}
+				}
+			}
+			if body := rectOf(t, m, slotBody); stack.Dy() >= body.Dy() {
+				t.Fatalf("the toast covers all %d rows of the body", body.Dy())
+			}
+			m.setMode(modePrompt)
+			act(t, m, typed("mouse"))
+			act(t, m, enterKey)
+			said := m.transcript[len(m.transcript)-1].text
+			for _, want := range guidance {
+				if !strings.Contains(said, want) {
+					t.Fatalf("mouse says %q, without %q", said, want)
+				}
+			}
+		})
 	}
 }
 

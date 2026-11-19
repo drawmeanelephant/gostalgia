@@ -904,7 +904,13 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.copyCmd(msg.Text)
 	case copyMsg:
 		m.initExperience()
-		m.notifs.Record(copyNotice(msg))
+		if msg.err == nil {
+			// Routine success needs no history entry; a failure stays
+			// there for whoever was away, or under Do-Not-Disturb.
+			m.notifs.Flash(copyNotice(msg))
+		} else {
+			m.notifs.Record(copyNotice(msg))
+		}
 		return m, nil
 	case configUpdateMsg:
 		var themeCmd tea.Cmd
@@ -1244,17 +1250,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.taskView && m.tasks.Searching() {
 			return m.handleLogSearchKey(msg)
 		}
-		if keyStr == "ctrl+y" {
-			// Copy, the keyboard's way to what selecting with the mouse
-			// copies. It only reads the screen, so it works while a
-			// command runs.
-			cmd, ok := m.copyInView()
-			if !ok {
-				m.initExperience()
-				m.notifs.Record(nothingToCopy)
-			}
-			return m, cmd
-		}
 		if m.isShortcut("home", keyStr) {
 			return m, m.switchScreen(screenHome, true)
 		}
@@ -1284,6 +1279,17 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.selectedView()
 			}
 			return m, nil
+		}
+		if keyStr == "ctrl+y" {
+			// Copy, the keyboard's way to what selecting with the mouse
+			// copies. It only reads the screen, so it works while a
+			// command runs. A shortcut configured on Ctrl-Y wins, above.
+			cmd, ok := m.copyInView()
+			if !ok {
+				m.initExperience()
+				m.notifs.Flash(nothingToCopy)
+			}
+			return m, cmd
 		}
 
 		switch keyStr {

@@ -47,13 +47,21 @@ func (m *Model) applyMouseConfig(v *bool) {
 	}
 }
 
-// mouseState describes this shell's mouse input for the mouse command.
+// mouseState describes this shell's mouse input for the mouse command,
+// with the copy policy a blocked copy's toast sends the reader here for: a
+// toast in a small terminal has no room for it.
 func (m *Model) mouseState() string {
+	state := "Mouse is on: click, scroll, hover, and select text to copy it. Type mouse off to let the terminal select text."
 	if m.mouseOff {
-		return "Mouse is off: the terminal selects text itself. Type mouse on for clicks, the wheel and copy."
+		state = "Mouse is off: the terminal selects text itself. Type mouse on for clicks, the wheel and copy."
 	}
-	return "Mouse is on: click, scroll, hover, and select text to copy it. Type mouse off to let the terminal select text."
+	return state + "\n" + copyPolicy
 }
+
+// copyPolicy is what decides whether a copy reaches the host clipboard.
+const copyPolicy = "Copies (a mouse selection, or Ctrl-Y) go to the clipboard of the computer the runtime runs on, " +
+	"only while its operator policy allows it: an operator sets clipboard.enabled and clipboard.allow_host_write " +
+	"with sys/policy/update. The shell never writes the terminal's clipboard."
 
 // baseAct runs act for a click or wheel step on the screen beneath the
 // modal layers. The mouse may have been turned off, or a palette or
@@ -564,9 +572,12 @@ func (m *Model) copyCmd(text string) tea.Cmd {
 
 // copyNotice is the notification for the answer to a copy. A denial says
 // which operator policy settings would allow it: the shell cannot grant
-// them.
+// them. IPC errors reach the shell as text only, so the kinds of denial are
+// told apart by the runtime's wording, which
+// TestMouseSelectionCopiesToTheHostClipboardThroughPolicy pins against the
+// real clipboard service.
 func copyNotice(msg copyMsg) notifications.Notification {
-	n := notifications.Notification{Level: notifications.LevelInfo, Source: "clipboard", Wrap: true}
+	n := notifications.Notification{Level: notifications.LevelInfo, Source: "clipboard", Badge: "COPY", Wrap: true}
 	switch err := msg.err; {
 	case err == nil:
 		n.Title = "Copied"
@@ -574,11 +585,11 @@ func copyNotice(msg copyMsg) notifications.Notification {
 	case strings.Contains(err.Error(), "policy_denied") && strings.Contains(err.Error(), "writing is disabled"):
 		n.Level = notifications.LevelWarning
 		n.Title = "Copy blocked"
-		n.Message = "Policy turns host clipboard writes off. An operator can set clipboard.allow_host_write with sys/policy/update."
+		n.Message = "Type mouse for how to allow it. Policy turns host clipboard writes off. An operator can set clipboard.allow_host_write with sys/policy/update."
 	case strings.Contains(err.Error(), "policy_denied"):
 		n.Level = notifications.LevelWarning
 		n.Title = "Copy blocked"
-		n.Message = "Policy keeps the host clipboard off (the default). An operator can set clipboard.enabled and clipboard.allow_host_write with sys/policy/update."
+		n.Message = "Type mouse for how to allow it. Policy keeps the host clipboard off. An operator can set clipboard.enabled and clipboard.allow_host_write with sys/policy/update."
 	case strings.Contains(err.Error(), "clipboard integration is unsupported"):
 		n.Level = notifications.LevelWarning
 		n.Title = "Copy failed"
@@ -594,7 +605,7 @@ func copyNotice(msg copyMsg) notifications.Notification {
 // nothingToCopy is the notification for Ctrl-Y where there is nothing to
 // copy.
 var nothingToCopy = notifications.Notification{
-	Level: notifications.LevelInfo, Source: "clipboard", Wrap: true, Title: "Nothing to copy",
+	Level: notifications.LevelInfo, Source: "clipboard", Badge: "COPY", Wrap: true, Title: "Nothing to copy",
 	Message: "Ctrl-Y copies the text selected with the mouse, or the transcript or log lines in view.",
 }
 

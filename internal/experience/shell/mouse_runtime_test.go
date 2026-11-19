@@ -191,9 +191,9 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 		msg := wait(step, m.copies)
 		var toast string
 		probe(func(m *Model) {
-			// The newest notification is the copy's; its toast is on screen.
-			if n := m.notifs.History(); len(n) > 0 && strings.Contains(toastText(m), n[0].Title) {
-				toast = n[0].Title + " · " + n[0].Message
+			// The newest toast is the copy's, and it is on screen.
+			if ts := m.notifs.ActiveToasts(); len(ts) > 0 && strings.Contains(toastText(m), ts[len(ts)-1].Title) {
+				toast = ts[len(ts)-1].Title + " · " + ts[len(ts)-1].Message
 			}
 		})
 		return msg, toast

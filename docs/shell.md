@@ -412,7 +412,7 @@ confirmations. Borders, headings, blank cells and the active tab do nothing.
 |---|---|
 | Click a tab | F1 Home, F2 Apps, Esc Prompt, F5 Tasks, F6 Notifications (or their `shortcuts.*` keys). The click always shows the tab's screen, where a key pressed on its own screen goes back to the prompt or the screen beneath. |
 | Click a launcher card | ↑/↓ to select it |
-| Double-click a launcher card | Select it and Enter: launches it once. The cards stay in place while the clicked one is in view, so the second click lands on the same card. |
+| Double-click a launcher card | Select it and Enter: launches it once. The cards stay in place while the clicked one is in view, so the second click lands on the same card; they stay there as ↑/↓ move the selection within them, and scroll once it leaves them. |
 | Click a palette item | ↑/↓ to it, Enter |
 | Click a running app or document on Home | ↑/↓ to it, Enter |
 | Click a Task Manager row | ↑/↓ to it, Enter: its crash receipt if one is recorded, else its log tail |
@@ -428,10 +428,13 @@ confirmations. Borders, headings, blank cells and the active tab do nothing.
 text with bloom's public selection (`bloom.SelectionMsg`). When the drag
 ends, the shell copies the selection; Ctrl-Y copies it again, or with no
 selection, the transcript or log tail lines on screen, and says "Nothing to
-copy" elsewhere. A copy is an asynchronous command calling the runtime's
-authenticated `clipboard/write` with `{"text": …, "target": "host"}`; its
-answer comes back as a toast, and a slow answer never holds up keys, resize
-or exit.
+copy" elsewhere. A `shortcuts.*` key set to Ctrl-Y wins over copying. A copy
+is an asynchronous command calling the runtime's authenticated
+`clipboard/write` with `{"text": …, "target": "host"}`; its answer comes
+back as a toast badged COPY, and a slow answer never holds up keys, resize
+or exit. "Copied" and "Nothing to copy" are toasts only; a blocked or failed
+copy is also kept in the Notification Center, where it is the only trace
+under Do-Not-Disturb.
 
 - **Policy.** The runtime's clipboard service decides. The host clipboard is
   off by default: a copy then fails with `policy_denied` and changes no
@@ -441,6 +444,11 @@ or exit.
   is on but writes are off). The shell cannot grant either. "Copied"
   reports a write the service accepted, and "Copy failed" a host without a
   clipboard or any other error.
+- **Small terminals.** The blocked toast starts "Type mouse for how to allow
+  it", and `mouse` prints the policy settings in the transcript, which wraps.
+  The newest toast is never cut to fit the third of the body older toasts
+  get: it may cover all but one body row until it expires, and where even
+  that is too few rows (30×10) it keeps its first rows, ending in "…".
 - **Host, not auto.** The shell asks for `target: "host"` because `auto`
   falls back to the environment's internal clipboard when policy denies the
   host, and reports success: a denied copy would look like a host copy. A
