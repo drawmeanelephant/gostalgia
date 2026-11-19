@@ -22,8 +22,13 @@ Apps still expose environment contracts, not terminal views.
 
 `theme.Nostalgia()` is the default cream/sand surface, slate text, and amber
 accent/header palette. `theme.Midnight()` is an explicitly selected slate
-alternative. Both use thick panel borders, double dialog borders, filled title
-rows, one-cell horizontal panel padding, and a visible focus marker.
+alternative with a deep teal header fill, a bright teal accent, and an inverse
+focus highlight; its header and accent keep their intended hue after ANSI256
+downsampling as well as in TrueColor. Both use thick panel borders, double
+dialog borders, filled title rows, one-cell horizontal panel padding, and a
+visible focus marker. Header labels and panel titles are painted with
+`HeaderText` on `Header`, so every theme stays readable even when its header
+and canvas use opposite lightness.
 
 `theme.Monochrome()` provides an accessible no-color mode featuring pure ASCII
 borders (`+`, `-`, `|`), standard ASCII focus markers (`>`), and explicit bracketed

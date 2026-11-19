@@ -88,12 +88,15 @@ func Nostalgia() Theme {
 	return makeTheme("nostalgia", p, lipgloss.Color("#426640"), lipgloss.Color("#A33632"))
 }
 
-// Midnight is an explicitly selected slate theme, not an adaptive color.
+// Midnight is an explicitly selected slate theme, not an adaptive color. Its
+// header and accent stay in the teal family: the old gray header collapsed to
+// a neutral ANSI256 index and the amber accent read as a second warm theme.
+// These values keep their teal intent in both ANSI256 and TrueColor.
 func Midnight() Theme {
 	p := Palette{
 		Canvas: lipgloss.Color("#202B33"), Surface: lipgloss.Color("#2D3942"), Text: lipgloss.Color("#FFF4DC"),
-		Muted: lipgloss.Color("#C0B6A3"), Accent: lipgloss.Color("#F2BE63"), Border: lipgloss.Color("#9B8C75"),
-		Header: lipgloss.Color("#475664"), HeaderText: lipgloss.Color("#FFF4DC"),
+		Muted: lipgloss.Color("#C0B6A3"), Accent: lipgloss.Color("#9FE4E4"), Border: lipgloss.Color("#9B8C75"),
+		Header: lipgloss.Color("#1B6076"), HeaderText: lipgloss.Color("#FFF4DC"),
 	}
 	return makeTheme("midnight", p, lipgloss.Color("#ACCE92"), lipgloss.Color("#FFABA0"))
 }

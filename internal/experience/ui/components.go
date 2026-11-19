@@ -113,7 +113,9 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 	parts := make([]string, len(tabs))
 	for i, tab := range tabs {
 		text := k.Truncate(label(tab.Label), max(0, width-2))
-		fg, bg := k.theme.Palette.Text, k.theme.Palette.Header
+		// Header labels use the header foreground token, not body text:
+		// HighContrast's header is light with dark text, unlike its canvas.
+		fg, bg := k.theme.Palette.HeaderText, k.theme.Palette.Header
 		if tab.Disabled {
 			text = "(" + text + ")"
 			s := k.theme.Status(theme.Disabled)
@@ -150,7 +152,7 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 		used += cells
 	}
 	return k.paint(Fit(strings.Join(visible, gap), Bounds{width, 1}),
-		k.theme.Palette.Text, k.theme.Palette.Header, false), spans
+		k.theme.Palette.HeaderText, k.theme.Palette.Header, false), spans
 }
 
 // Badge uses an explicit symbol and label so state isn't communicated by color
