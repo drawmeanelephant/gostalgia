@@ -625,7 +625,12 @@ the full visible line range and positions before, during, and after the toast.
 The Ctrl-C scenario partitions the live reel timeline at the actual literal or
 Kitty-encoded Ctrl-C input and verifies alternate-screen, cursor, style, mouse,
 paste, and keyboard-enhancement resets only in the post-input output suffix;
-it also exports an asciicast for terminal evidence.
+it also exports an asciicast for terminal evidence. On Windows, ConPTY emits
+the equivalent zero-parameter style reset as `ESC[m` and filters unsupported
+normal-mouse mode 1000 in both directions. The scenario accounts for those two
+concrete transformations without skipping Windows; emulator mode assertions
+still require normal-mouse state to be reset, and every supported raw reset is
+still checked.
 
 Static steep snapshots live in
 `internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. ANSI styling is

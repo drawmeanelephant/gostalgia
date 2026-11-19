@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -482,11 +483,15 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	if len(raw) == 0 {
 		t.Fatal("Ctrl-C recording contains no terminal output after Ctrl-C")
 	}
-	missing := false
-	for name, sequence := range map[string]string{
+	styleReset := "\x1b[0m"
+	if goruntime.GOOS == "windows" {
+		// ConPTY writes the equivalent zero-parameter SGR reset as ESC[m.
+		styleReset = "\x1b[m"
+	}
+	expected := map[string]string{
 		"alternate screen reset": "\x1b[?1049l",
 		"cursor visible":         "\x1b[?25h",
-		"style reset":            "\x1b[0m",
+		"style reset":            styleReset,
 		"mouse 1000 reset":       "\x1b[?1000l",
 		"mouse 1002 reset":       "\x1b[?1002l",
 		"mouse 1003 reset":       "\x1b[?1003l",
@@ -494,7 +499,15 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 		"bracketed paste reset":  "\x1b[?2004l",
 		"kitty keyboard reset":   "\x1b[<1u",
 		"modifyOtherKeys reset":  "\x1b[>4m",
-	} {
+	}
+	if goruntime.GOOS == "windows" {
+		// ConPTY filters unsupported normal-mouse mode 1000 in both
+		// directions. The scenario's ModeSetting assertions still prove that
+		// its emulator state was restored; every supported reset is required.
+		delete(expected, "mouse 1000 reset")
+	}
+	missing := false
+	for name, sequence := range expected {
 		if !bytes.Contains(raw, []byte(sequence)) {
 			missing = true
 			t.Errorf("post-Ctrl-C output lacks %s (%q)", name, sequence)
