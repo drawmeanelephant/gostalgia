@@ -350,6 +350,18 @@ the shell's additive mouse input; copies bypass bloom's clipboard, which
 would also send OSC 52, and go through the runtime's `clipboard/write` under
 operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)).
 
+**steep (Issue #212).** `getsteep.dev/steep` and its separate
+`getsteep.dev/steep/reel` module are direct **test-only** dependencies, both
+pinned to exactly `v0.0.0-alpha.12`. steep supplies an emulated terminal and
+input decoder; reel provides terminal recordings and protocol assertions. They
+may be imported only by test files under `internal/experience/` or `test/`.
+Production packages, the runtime, the SDK, applications, and `gctl` must not
+import either module. steep is also pre-1.0: its harness, snapshot, and recording
+APIs may change between releases. Upgrades therefore require an explicit pin
+change, a review of upstream changes, inspection of every snapshot diff, and a
+fresh three-OS run. Snapshots are updated only when a developer explicitly sets
+`UPDATE_SNAPSHOTS=true`; CI always performs read-only comparisons.
+
 `go list -deps gostalgia/internal/runtime gostalgia/sdk` contains only Gostalgia
 and standard-library packages. Automated tests in `test/e2e/dependencies_test.go`
 enforce that boundary, verify that Charm and bloom (every `bloomfx.dev/`
@@ -427,6 +439,7 @@ The canonical tracker for all 25 issues lives in [status.md](../status.md).
 |---|---|---|
 | Windowing toolkit choice | rework of desktop layer | design window service API first; toolkit behind adapter; spike Gio early |
 | Pre-1.0 bloom (single maintainer, breaking changes expected) | experience-layer rework on upgrade | exact pin, experience-only fence, deliberate upgrades that rerun the profile proofs (§4.1) |
+| Pre-1.0 steep/reel test APIs | terminal-test rework on upgrade | exact alpha.12 pins, test-only import fence, explicit snapshot review, three-OS verification (§4.1) |
 | Goroutine-vs-process confusion | wrong abstractions, false security | explicit `Kind` everywhere; docs state isolation level per kind |
 | Windows divergence (named pipes vs AF_UNIX, path quirks, case-insensitivity) | broken parity | platform/ adapters + CI matrix + behavior tests, not just compilation |
 | VFS symlink/TOCTOU escape | containment failure | confinement via `os.Root` now; per-app views in Milestone 4 (#37); honest docs |
