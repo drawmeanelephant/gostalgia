@@ -338,8 +338,11 @@ event-type request on the returned `tea.View`.
   stop at the last running app and Enter opens it. In the Task Manager
   table, `RESTARTS` collapses first, then `MEMORY`, `CPU` and `STATE`;
   `PID` and `NAME` never collapse, and the `PID` column widens so no ID is
-  cut. Below six body rows the table drops its border and footer and shows
-  a header plus the rows around the selected process.
+  cut. When no process in the table reports supported resource metrics, the
+  `CPU` and `MEMORY` columns are omitted rather than filled with dashes,
+  and their width goes to `NAME`. Below six body rows the table drops its
+  border and footer and shows a header plus the rows around the selected
+  process.
 - **Compact diagnostic views.** The Notification Center, the task log tail
   and the crash receipt are bordered panels when there is room. In a body
   too short for that panel to show its content (the 30×10 frame leaves

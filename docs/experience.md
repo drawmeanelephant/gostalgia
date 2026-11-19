@@ -452,7 +452,9 @@ directly into the shell via dedicated tabs, commands, and overlay notifications:
 The live Task Manager displays real-time supervised process state and metrics in a
 scrollable table:
 - **Columns**: Selection pointer, `PID`, `NAME`, `STATE`, `CPU` (user/system usage),
-  `RAM` (resident memory), `RESTARTS`, and `EXIT` code / runtime duration.
+  `MEMORY` (resident memory), and `RESTARTS`. When no process in the table
+  reports supported resource metrics, `CPU` and `MEMORY` are omitted rather
+  than shown as dashes, and their width goes to `NAME`.
 - **Navigation & Controls**:
   - `↑` / `↓` / `k` / `j`: Navigate through processes.
   - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`), which
