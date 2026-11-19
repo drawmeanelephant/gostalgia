@@ -133,7 +133,7 @@ type Model struct {
 	// kit changes. See transcript.go.
 	transcript      []entry
 	transcriptBuf   *bloom.Buffer
-	transcriptStyle string
+	transcriptLook  transcriptLook
 	transcriptPos   bloom.ViewportPos
 	history         []string
 	historyPos      int

@@ -17,6 +17,19 @@ var (
 	keyPgDown = tea.KeyPressMsg{Code: tea.KeyPgDown}
 )
 
+// styleTranscriptLine is e's line as the kit itself paints its kind.
+func styleTranscriptLine(k ui.Kit, e entry) string {
+	switch e.kind {
+	case "accent", "command":
+		return k.Heading(e.text)
+	case "muted":
+		return k.Muted(e.text)
+	case "error":
+		return k.StatusText(e.text, theme.Error)
+	}
+	return k.Text(e.text)
+}
+
 // scrollTranscript scrolls the transcript rows up from where the frame at
 // the model's size shows it.
 func scrollTranscript(m *Model, rows int) {
@@ -126,6 +139,34 @@ func TestTranscriptStylesEachKindOnAppend(t *testing.T) {
 		}
 		if m.transcriptBuf.Text(i) != want.text || m.transcript[i] != want {
 			t.Fatalf("%q kept %q / %+v", kind, m.transcriptBuf.Text(i), m.transcript[i])
+		}
+	}
+}
+
+// The styles worked out once per kit paint every sanitized line as the kit
+// itself does, in every built-in theme and color mode.
+func TestTranscriptLookMatchesKit(t *testing.T) {
+	samples := []string{
+		"plain words",
+		"  leading and trailing  ",
+		"界面 he\u0301llo wörld 日本語",
+		"emoji 👩‍💻 flag 🇨🇦",
+		"tab\there",
+		"x",
+		"\x1b[31mred\x1b[0m and \x1b]8;;http://x\x07link\x1b]8;;\x07",
+	}
+	for _, th := range []theme.Theme{theme.Nostalgia(), theme.Midnight(), theme.Monochrome(), theme.HighContrast(), theme.HighContrastLight()} {
+		for _, mode := range []ui.ColorMode{ui.Plain, ui.ANSI16, ui.ANSI256, ui.TrueColor} {
+			k := ui.New(th, mode)
+			look := transcriptLookOf(k)
+			for _, kind := range []string{"output", "muted", "accent", "error", "command", ""} {
+				for _, s := range samples {
+					e := entry{safe(s), kind}
+					if got, want := look.style(e), styleTranscriptLine(k, e); got != want {
+						t.Fatalf("%s/%d %q %q: %q, kit paints %q", th.Name, mode, kind, s, got, want)
+					}
+				}
+			}
 		}
 	}
 }

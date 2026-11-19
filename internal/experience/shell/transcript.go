@@ -35,7 +35,7 @@ func (m *Model) append(e entry) {
 	styled := make([]string, len(lines))
 	for i, line := range lines {
 		m.transcript = append(m.transcript, entry{line, e.kind})
-		styled[i] = styleTranscriptLine(m.kit, m.transcript[len(m.transcript)-1])
+		styled[i] = m.transcriptLook.style(m.transcript[len(m.transcript)-1])
 	}
 	buf.Append(styled...)
 	if over := len(m.transcript) - maxTranscript; over > 0 {
@@ -61,7 +61,6 @@ func (m *Model) append(e entry) {
 func (m *Model) transcriptBuffer() *bloom.Buffer {
 	if m.transcriptBuf == nil {
 		m.transcriptBuf = bloom.NewBuffer("")
-		m.transcriptStyle = transcriptStyleOf(m.kit)
 	}
 	return m.transcriptBuf
 }
@@ -81,43 +80,74 @@ func (m *Model) resetScroll() {
 	m.transcriptPos = bloom.ViewportEnd
 }
 
-// styleTranscriptLine is e's line in k's style for its kind.
-func styleTranscriptLine(k ui.Kit, e entry) string {
-	switch e.kind {
-	case "accent", "command":
-		return k.Heading(e.text)
-	case "muted":
-		return k.Muted(e.text)
-	case "error":
-		return k.StatusText(e.text, theme.Error)
-	}
-	return k.Text(e.text)
+// transcriptLook is how a kit styles each kind of transcript line, the
+// way its Heading, Muted, StatusText and Text do, as the SGR codes around
+// a line of each kind. They are worked out once per kit: restyling
+// thousands of lines with the kit itself resolves the same colors and
+// measures each line again for every one of them.
+type transcriptLook struct {
+	heading, muted, fail, text wrap
+	// id is the look's lines of every kind: two looks with the same id
+	// style each line the same.
+	id string
 }
 
-// transcriptStyleOf identifies how k styles every kind of transcript line:
-// two kits with the same one style each line the same.
-func transcriptStyleOf(k ui.Kit) string {
+// wrap is what a style writes before and after a line.
+type wrap struct{ before, after string }
+
+func transcriptLookOf(k ui.Kit) transcriptLook {
+	// A sanitized logical line holds no newline, tab, carriage return or
+	// escape sequence, and these styles set only colors and bold, so the
+	// kit paints any such line as it paints "x": the same codes around it.
+	wrapOf := func(paint func(string) string) wrap {
+		before, after, _ := strings.Cut(paint("x"), "x")
+		return wrap{before, after}
+	}
+	l := transcriptLook{
+		heading: wrapOf(k.Heading),
+		muted:   wrapOf(k.Muted),
+		fail:    wrapOf(func(s string) string { return k.StatusText(s, theme.Error) }),
+		text:    wrapOf(k.Text),
+	}
 	var b strings.Builder
 	for _, kind := range []string{"accent", "command", "muted", "error", "output"} {
-		b.WriteString(styleTranscriptLine(k, entry{"x", kind}))
+		b.WriteString(l.style(entry{"x", kind}))
 		b.WriteByte(0)
 	}
-	return b.String()
+	l.id = b.String()
+	return l
+}
+
+// style is e's line, sanitized, in the look's style for its kind.
+func (l transcriptLook) style(e entry) string {
+	if e.text == "" {
+		return ""
+	}
+	w := l.text
+	switch e.kind {
+	case "accent", "command":
+		w = l.heading
+	case "muted":
+		w = l.muted
+	case "error":
+		w = l.fail
+	}
+	return w.before + e.text + w.after
 }
 
 // setKit changes the shell's kit. Lines already in the transcript take the
 // new kit's styles, from their kept text and kind, without moving.
 func (m *Model) setKit(k ui.Kit) {
 	m.kit = k
-	style := transcriptStyleOf(k)
-	if m.transcriptBuf == nil || style == m.transcriptStyle {
-		m.transcriptStyle = style
+	look := transcriptLookOf(k)
+	same := look.id == m.transcriptLook.id
+	m.transcriptLook = look
+	if m.transcriptBuf == nil || same {
 		return
 	}
-	m.transcriptStyle = style
 	lines := make([]string, len(m.transcript))
 	for i, e := range m.transcript {
-		lines[i] = styleTranscriptLine(k, e)
+		lines[i] = look.style(e)
 	}
 	m.transcriptBuf.SetLines(lines...)
 }
