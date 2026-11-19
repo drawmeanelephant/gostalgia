@@ -1154,7 +1154,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rootCmd = m.root().Update(msg)
 	}
 	model, cmd := m.update(msg)
-	return model, tea.Batch(rootCmd, cmd, m.updateMotion(msg))
+	// Toast arrivals are recorded by services in the shared manager, so the
+	// shell consumes a new identity on its next message. No command is
+	// scheduled for an identity it has already seen.
+	toastCmd := m.syncToastMotion()
+	return model, tea.Batch(rootCmd, cmd, toastCmd, m.updateMotion(msg))
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1564,10 +1568,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isShortcut("palette", keyStr) || keyStr == "super+space" {
 			if m.paletteOpen {
 				m.closePalette()
-			} else {
-				m.openPalette()
+				return m, nil
 			}
-			return m, nil
+			return m, m.openPalette()
 		}
 		if m.paletteOpen {
 			return m.handlePaletteKey(msg)
@@ -1677,6 +1680,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.viewKey(msg)
 		}
 		if m.taskView {
+			var confirmCmd tea.Cmd
 			switch msg.String() {
 			case "up", "k":
 				m.tasks.SelectPrev()
@@ -1710,15 +1714,15 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "x":
 				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
 					if sel := m.tasks.SelectedProcess(); sel != nil {
-						m.openConfirm(confirmation{kind: confirmStopProcess, pid: sel.ID, name: sel.Name})
+						confirmCmd = m.openConfirm(confirmation{kind: confirmStopProcess, pid: sel.ID, name: sel.Name})
 					}
 				}
 			case "r":
 				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
-					m.openConfirm(confirmation{kind: confirmReap})
+					confirmCmd = m.openConfirm(confirmation{kind: confirmReap})
 				}
 			}
-			return m, nil
+			return m, confirmCmd
 		}
 		if m.notifView {
 			switch msg.String() {
@@ -1905,8 +1909,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Text-bearing keys insert before control-chord handling so Windows
 		// AltGr chords (Ctrl+Alt with text) reach the input.
 		if len(m.input) == 0 && text == "/" {
-			m.openPalette()
-			return m, nil
+			return m, m.openPalette()
 		}
 		m.insertPromptText(text)
 		return m, nil
@@ -1957,8 +1960,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if strings.EqualFold(line, "palette") {
 			m.input = nil
 			m.cursor = 0
-			m.openPalette()
-			return m, nil
+			return m, m.openPalette()
 		}
 		return m, m.run(line)
 	case tea.KeyBackspace:

@@ -349,12 +349,15 @@ panel geometry. The usage rules are in
 the shell's additive mouse input; copies bypass bloom's clipboard, which
 would also send OSC 52, and go through the runtime's `clipboard/write` under
 operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)). Since #213
-finite motion is also model-local: the only attached effect is a 160 ms
-failed-launch badge shake, with the same per-model clock injected into
-`bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or copy
-flash and schedules no animation frames; `anim.SetMotion` is never used, and
-idle shells retain only their existing functional polling
-([experience.md](experience.md#finite-per-session-motion-issue-213)). Since #214 the
+finite motion is also model-local: the attached effects are a 160 ms
+failed-launch badge shake, a 140 ms palette/dialog opening reveal, and a
+160 ms entrance for the newest toast, with the same per-model clock injected
+into `bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or
+copy flash and schedules no animation frames; enabling it mid-effect
+snap-cancels the effect and invalidates its outstanding frame generation.
+`anim.SetMotion` is never used, and idle shells retain only their existing
+functional polling
+([experience.md](experience.md#finite-per-session-motion-issues-213-239)). Since #214 the
 Home dashboard also uses `bloom/fig`: the bundled `big` FIGlet font (with two
 tracking cells) falls back to bundled `mini` and then the spaced title according
 to solved content cells. Both fonts are ASCII and are licensed under

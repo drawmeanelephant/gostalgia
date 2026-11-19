@@ -200,18 +200,33 @@ autodetection or host environment heuristics:
     and schedules zero animation-frame commands. Turning it on during an effect also
     cancels subsequent animation updates without changing the static frame.
 
-### Finite per-session motion (Issue #213)
+### Finite per-session motion (Issues #213, #239)
 
 The contract permits only event-triggered transitions of **200 ms or less**, with frame
-commands scheduled only while an effect is active. The implemented subset is deliberately
-one candidate from the approved list: a **160 ms `fx.Shake` of the status badge when an
-application launch fails**, whether the failure comes from a typed `launch`/`run` command,
-the launcher, or a palette action. It starts at progress zero, finishes at progress one,
-and then removes the transition node. Palette/dialog transitions, toast entrances,
-collapsible-layout animation, and all other effects remain unattached.
+commands scheduled only while an effect is active. Three event-owned effects implement it:
 
-Each shell model owns its motion value and clock. The same injected clock goes to
-`bloom.WithClock` for the model's root and `anim.Clock` for the badge value; production uses
+- A **160 ms `fx.Shake` of the status badge when an application launch fails**, whether
+  the failure comes from a typed `launch`/`run` command, the launcher, or a palette
+  action.
+- A **140 ms `fx.Iris` opening reveal for the command palette and for every confirmation
+  dialog**. Every opening path returns the scheduling command: the Ctrl-P and Super+Space
+  shortcuts, `/` at the prompt, `/` on Home, the `palette` and palette-item actions, F3 in
+  the launcher, typed `shutdown`/`reap`/`stop <id>`, palette stop/shutdown items, and the
+  Tasks `x`/`r` actions. The underlying palette input and the dialog's actions stay
+  authoritative throughout the reveal.
+- A **160 ms `fx.Wipe` entrance for a newly arrived toast**, keyed to the newest toast
+  identity. Only the incoming toast animates; older toasts already in the stack render
+  settled. The shell observes the shared manager's active toasts on its next message, so a
+  service-written notification starts its entrance then, not from a background loop.
+
+Each effect starts at progress zero, renders its final static frame at progress one, and
+then removes the transition node. No decorative follow-up is scheduled. An unchanged
+notification identity, a resize, a theme change, a config poll, and functional polling all
+schedule nothing, so the entrance never replays for an already-seen toast. A new toast
+cancels any older entrance before starting its own.
+
+Each shell model owns its motion values and clock. One injected clock goes to
+`bloom.WithClock` for the model's root and `anim.Clock` for its values; production uses
 `time.Now`, while tests advance both deterministic time sources explicitly. No code calls
 the process-global `anim.SetMotion`, so concurrent local or SSH-attached shells can retain
 opposite policies and change them independently. `motion on` means ReducedMotion is enabled;
@@ -222,10 +237,16 @@ setting applies; when no non-default layer sets it, the active theme's default
 applies. The built-in `false` config default therefore cannot re-enable motion
 in Monochrome, HighContrast, or HighContrastLight.
 
+ReducedMotion attaches no transition, returns no animation-frame command, and renders every
+effect at its settled state. Enabling it during a palette, dialog, toast, or shake effect
+snap-cancels that effect; the `Set` that cancels it also invalidates the outstanding
+generation, so an already-scheduled frame can neither revive the effect nor schedule
+another. Re-enabling motion later does not replay an effect that was only being rendered.
+
 An idle shell starts no decorative goroutine, clock, spinner, permanent animation loop, or
 new frame command. The existing 500 ms process/configuration/log refresh and notification
-expiry ticks remain functional polling, not animation. A completed failed-launch shake does
-not restart on later renders or polls.
+expiry ticks remain functional polling, not animation. A completed effect does not restart
+on later renders or polls.
 
 ## Components
 
@@ -247,8 +268,8 @@ Focus is independent of status; disabled panels/tabs do not appear focused.
 Symbols and words communicate states without relying on color alone. These
 components render state, not behavior: the caller must enforce disabled actions.
 There are no decorative goroutines, spinners, or permanently running animation
-loops. The only finite transition clock is the event-owned failed-launch effect
-described above.
+loops. The only finite transition clocks are the event-owned failed-launch shake,
+palette/dialog opening reveal, and new-toast entrance described above.
 
 The current prompt/home and app shelf share panel/title, tabs, status badge,
 focus, and help vocabulary. Shelf app cards expose running PID vs. ready status;
@@ -495,8 +516,11 @@ scrollable table:
   owns toast lifetime: each toast expires after the manager's tick count
   (8 by default), and the caps, flood bounding, and DND are the manager's
   too. Drawing toasts, or opening and closing the palette or a dialog, never
-  advances or restarts a countdown. The Notification Center lists the same
-  events itself, so no toasts are drawn over it.
+  advances or restarts a countdown. A newly arrived toast plays a finite
+  entrance keyed to its identity; only the incoming toast animates, and the
+  same identity never replays on a re-render, poll, resize, or theme change.
+  The Notification Center lists the same events itself, so no toasts are drawn
+  over it.
 - **Severity Treatment**: Toasts and Notification Center rows share one
   mandatory cue per level: `INFO`, `WARN`, or `ERROR` with its own symbol and
   the theme's state colors. Monochrome and Plain render the literal `[INFO]`,
@@ -791,7 +815,11 @@ Static steep snapshots live in
 in `testdata/TestSteepMotionScenarios/` show the failed launch at 0 ms, its shifted
 badge at 20 ms, and the restored static frame at 160 ms, plus immediate ReducedMotion
 output. `TestSteepMotionScenarios` boots the same real runtime and injects both clocks;
-captured frame messages and explicit clock advances replace wall-clock sleeps. Static
+captured frame messages and explicit clock advances replace wall-clock sleeps. Its
+overlay scenario opens the palette with Ctrl-P and the dialog with a typed command,
+checks a midpoint frame, and compares the settled reveal with routed Down/Esc and
+Cancel input; its toast scenario records a notification, advances the entrance, and
+checks the settled stack plus an idle functional tick. Static
 failed-launch goldens in `testdata/motion/` preserve pre-#213 output for Nostalgia with
 ReducedMotion and the three default-reduced themes. ANSI styling is removed for
 reviewable steep text. Only runtime-assigned PID digits and elapsed uptime are

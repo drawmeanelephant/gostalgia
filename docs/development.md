@@ -55,8 +55,9 @@ drive the production shell through an emulated terminal. They cover Home,
 launcher launch/stop, the palette, prompt echo, below-minimum resize and
 recovery, bracketed paste, decoded mouse input, toast geometry, and Ctrl-C
 terminal restoration. The motion scenarios additionally advance both injected
-clocks through a real failed launch, capturing 0/20/160 ms frames and immediate
-ReducedMotion output without wall-clock sleeps. Checked-in snapshots are
+clocks through a real failed launch, capturing 0/20/160 ms frames, and drive the
+palette/dialog opening reveal and a new toast entrance to a settled snapshot
+without wall-clock sleeps. Checked-in snapshots are
 compared read-only by default; see
 [experience.md](experience.md#verification-and-snapshots) for deliberate updates.
 

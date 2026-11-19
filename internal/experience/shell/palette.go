@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"bloomfx.dev/bloom"
+	"bloomfx.dev/bloom/fx"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
 )
@@ -37,8 +38,7 @@ func (m *Model) paletteItems() []paletteItem {
 				Title:  "Stop " + name,
 				Detail: fmt.Sprintf("Graceful stop %s (PID %d)", id, app.PID),
 				Action: func(m *Model) tea.Cmd {
-					m.openConfirm(stopAppConfirmation(app))
-					return nil
+					return m.openConfirm(stopAppConfirmation(app))
 				},
 			})
 			items = append(items, paletteItem{
@@ -139,7 +139,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Tag:    "CMD",
 			Title:  "shutdown",
 			Detail: "Shut down Gostalgia environment",
-			Action: func(m *Model) tea.Cmd { m.openConfirm(confirmation{kind: confirmShutdown}); return nil },
+			Action: func(m *Model) tea.Cmd { return m.openConfirm(confirmation{kind: confirmShutdown}) },
 		},
 		paletteItem{
 			Tag:    "CMD",
@@ -248,13 +248,17 @@ func (m *Model) runPaletteItem(key string) tea.Cmd {
 	return nil
 }
 
-func (m *Model) openPalette() {
+// openPalette opens the palette and starts its finite opening reveal. Every
+// entry path returns the command so the event that opened it schedules the
+// frames; ReducedMotion renders it settled with no command.
+func (m *Model) openPalette() tea.Cmd {
 	m.paletteOpen = true
 	m.paletteQuery = ""
 	m.paletteSelected = 0
 	m.previousMode = m.currentMode()
 	// The layer replaces the screen beneath it; no old cue may survive.
 	m.clearHoverAll()
+	return m.startOverlayEntrance()
 }
 
 func (m *Model) closePalette() {
@@ -273,13 +277,19 @@ func paletteRect(w, h int) (y, width, height int) {
 	return 1 + (rows-height)/2, width, height
 }
 
-// paletteLayer is the open palette as a modal layer over the screen.
+// paletteLayer is the open palette as a modal layer over the screen. While
+// its opening reveal is active the layer draws with that progress; the layer
+// stays modal throughout, so input guards never depend on the visual mask.
 func (m *Model) paletteLayer() bloom.LayerNode {
 	y, w, h := paletteRect(m.width, m.height)
 	box := m.withMouseAllowed(ui.Sized(func(b ui.Bounds) string { return m.renderPalette(b.Width, b.Height) }),
 		m.paletteHits, m.paletteScroll, m.paletteMouseAllowed)
-	return bloom.Layer(box).Anchor(bloom.Center, bloom.Start).Offset(0, y).Size(w, h).
+	layer := bloom.Layer(box).Anchor(bloom.Center, bloom.Start).Offset(0, y).Size(w, h).
 		Modal().Backdrop(m.backdrop()...).ID(layerPalette)
+	if progress, ok := m.overlayProgress(); ok {
+		layer = layer.Transition(progress, fx.Iris{})
+	}
+	return layer
 }
 
 // renderPalette is the palette's box at exactly paletteW×paletteH.

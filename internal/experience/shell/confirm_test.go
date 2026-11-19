@@ -76,11 +76,13 @@ var (
 
 // act sends k through the shell's public Update and runs the command it
 // returns, as Bubble Tea would, feeding the result back. Commands here are
-// one-shot requests; nothing in these paths schedules a timer.
+// one-shot requests plus any finite entrance effect the event scheduled; the
+// effect is settled so these tests assert the finished screen.
 func act(t *testing.T, m *Model, k tea.Msg) {
 	t.Helper()
 	_, cmd := m.Update(k)
 	runCmd(t, m, cmd)
+	settleFiniteMotion(m)
 }
 
 func runCmd(t *testing.T, m *Model, cmd tea.Cmd) {
@@ -456,6 +458,7 @@ func TestDisabledConfirmationNeverRuns(t *testing.T) {
 	t.Run("disabled active index", func(t *testing.T) {
 		m, rec := recordingFixture(t)
 		m.openConfirm(confirmation{kind: confirmShutdown})
+		settleFiniteMotion(m)
 		m.busy = true
 		m.confirm.active = confirmProceed
 		if d := m.confirmDialog(); !d.Actions[confirmProceed].Disabled {

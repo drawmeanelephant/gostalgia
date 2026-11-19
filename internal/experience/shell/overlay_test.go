@@ -249,13 +249,15 @@ func basicSGR(s string) bool {
 	return true
 }
 
-// openOverlay opens the palette or a confirmation over m.
+// openOverlay opens the palette or a confirmation over m, settled: these
+// tests assert the static overlay composition, not its entrance frames.
 func openOverlay(m *Model, kind string) {
 	if kind == "palette" {
 		m.openPalette()
-		return
+	} else {
+		m.openConfirm(confirmation{kind: confirmShutdown})
 	}
-	m.openConfirm(confirmation{kind: confirmShutdown})
+	settleFiniteMotion(m)
 }
 
 // overlayRect is the box an overlay draws on the screen.
@@ -387,6 +389,7 @@ func TestToastsOverlayWithoutMovingTheTranscript(t *testing.T) {
 					}, 0},
 				} {
 					step.change()
+					settleFiniteMotion(m)
 					if n := len(m.notifs.ActiveToasts()); n != step.toasts {
 						t.Fatalf("%s: %d active toasts, want %d", step.name, n, step.toasts)
 					}
@@ -528,6 +531,7 @@ func overlayDialog(t *testing.T, m *Model, underlay string) {
 		act(t, m, enterKey)
 	default:
 		m.openConfirm(confirmation{kind: confirmShutdown})
+		settleFiniteMotion(m)
 	}
 }
 

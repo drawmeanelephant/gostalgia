@@ -81,18 +81,21 @@ func stopAppConfirmation(a appStatus) confirmation {
 // line is destructive.
 func (m *Model) run(line string) tea.Cmd {
 	if c, ok := m.destructiveLine(line); ok {
-		m.openConfirm(c)
-		return nil
+		return m.openConfirm(c)
 	}
 	return m.submit(line)
 }
 
-func (m *Model) openConfirm(c confirmation) {
+// openConfirm opens the dialog and starts its finite opening reveal. Every
+// opening path returns the command, so the event schedules the frames;
+// ReducedMotion renders it settled without one.
+func (m *Model) openConfirm(c confirmation) tea.Cmd {
 	c.active = confirmCancel
 	c.polls = m.procSent
 	m.confirm = &c
 	// The dialog covers the screen, so no underlying pointer cue survives.
 	m.clearHoverAll()
+	return m.startOverlayEntrance()
 }
 
 // stoppable reports whether a process in state can still be stopped: it

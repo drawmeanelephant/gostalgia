@@ -43,7 +43,11 @@ func mouse(t *testing.T, m *Model, msg tea.Msg) []string {
 	t.Helper()
 	m.View()
 	_, cmd := m.Update(msg)
-	return drive(t, m, cmd)
+	sent := drive(t, m, cmd)
+	// These flows assert settled overlays; a finite entrance scheduled by
+	// the event completes immediately rather than on real timers.
+	settleFiniteMotion(m)
+	return sent
 }
 
 // drive runs cmd as Bubble Tea would, feeding its messages back through
@@ -1279,6 +1283,7 @@ func TestMouseWheelRevealsRowsThatClicksThenFind(t *testing.T) {
 	// The palette's last item, brought into view with the wheel.
 	m, rec := mouseModel(t, 80, 24)
 	m.openPalette()
+	settleFiniteMotion(m)
 	items := m.filteredPaletteItems()
 	last := items[len(items)-1]
 	if strings.Contains(ansi.Strip(m.View().Content), "["+last.Tag+"] "+last.Title) {
@@ -1678,6 +1683,7 @@ func TestMouseCopyDenialStaysReadableInASmallTerminal(t *testing.T) {
 			// Older toasts give way to it.
 			m.notifs.Record(notifications.Notification{Title: "older", Message: "an older toast"})
 			m.Update(denied)
+			settleFiniteMotion(m)
 			lines := screenText(m.View())
 			stack := rectOf(t, m, layerToasts)
 			var rows []string

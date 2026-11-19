@@ -141,6 +141,9 @@ func newSteepRuntime(t *testing.T, opts ...steep.Option) (*steep.Harness, *ipc.C
 var steepPIDPattern = regexp.MustCompile(`PID [0-9]+`)
 
 func steepSnapshot(h *steep.Harness, name string) {
+	// Finite entrances settle within their ≤200 ms budget; a reviewed static
+	// golden must never capture a partial reveal.
+	h.WaitSettle()
 	h.RequireSnapshot(
 		snapshot.WithSuffix(name),
 		snapshot.WithANSI(false),

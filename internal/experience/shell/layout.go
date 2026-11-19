@@ -222,8 +222,14 @@ func (m *Model) layout() bloom.Child {
 }
 
 // dialogLayer is the open confirmation as a modal layer over the screen.
+// While its opening reveal is active the dialog draws with that progress;
+// modal and focus guards are independent of the visual mask.
 func (m *Model) dialogLayer() bloom.LayerNode {
-	return m.kit.DialogLayer(m.confirmDialog()).Backdrop(m.backdrop()...).ID(layerDialog)
+	layer := m.kit.DialogLayer(m.confirmDialog()).Backdrop(m.backdrop()...).ID(layerDialog)
+	if progress, ok := m.overlayProgress(); ok {
+		layer = layer.Transition(progress, fx.Iris{})
+	}
+	return layer
 }
 
 func (m *Model) frame(home homeView) bloom.Child {
@@ -328,25 +334,45 @@ func (m *Model) badge(b ui.Bounds) string {
 // notifications.Manager and its ticks.
 func (m *Model) toastLayer(w, h int) bloom.LayerNode {
 	width := min(w, toastWidth)
-	toasts, notice := m.notifs.ToastRows(m.kit, width)
+	blocks, notice := m.notifs.ToastBlocks(m.kit, width)
 	room := max(1, h/3)
-	var lines []string
-	if n := len(toasts); n > 0 {
-		newest := toasts[n-1]
-		lines = newest[:min(len(newest), max(room, h-1))]
-		if len(lines) < len(newest) {
+	// Each entry is one toast's rows (the notice is its own last entry).
+	var entries [][]string
+	var ids []string
+	total := 0
+	if n := len(blocks); n > 0 {
+		newest := blocks[n-1]
+		lines := newest.Rows[:min(len(newest.Rows), max(room, h-1))]
+		if len(lines) < len(newest.Rows) {
 			lines[len(lines)-1] = m.kit.Truncate(lines[len(lines)-1]+m.kit.Hint("…"), width)
 		}
+		entries = append(entries, lines)
+		ids = append(ids, newest.ID)
+		total = len(lines)
 		kept := 1
-		for ; kept < n && len(lines)+len(toasts[n-1-kept]) <= room; kept++ {
-			lines = append(append([]string(nil), toasts[n-1-kept]...), lines...)
+		for ; kept < n && total+len(blocks[n-1-kept].Rows) <= room; kept++ {
+			older := blocks[n-1-kept]
+			entries = append([][]string{older.Rows}, entries...)
+			ids = append([]string{older.ID}, ids...)
+			total += len(older.Rows)
 		}
-		if notice != "" && kept == n && len(lines) < room {
-			lines = append(lines, notice)
+		if notice != "" && kept == n && total < room {
+			entries = append(entries, []string{notice})
+			ids = append(ids, "")
+			total++
 		}
 	}
-	stack := m.kit.Leaf(func(ui.Bounds) string { return strings.Join(lines, "\n") })
-	return bloom.Layer(stack).Anchor(bloom.End, bloom.End).Size(width, len(lines)).ID(layerToasts)
+	rows := make([]bloom.Child, 0, len(entries))
+	for i, lines := range entries {
+		block := m.kit.Leaf(func(ui.Bounds) string { return strings.Join(lines, "\n") })
+		var child bloom.Child = bloom.Fixed(len(lines), block)
+		if progress, ok := m.toastProgress(ids[i]); ok {
+			child = bloom.Fixed(len(lines), bloom.Transition(progress, block, fx.Wipe{From: bloom.Bottom}))
+		}
+		rows = append(rows, child)
+	}
+	stack := bloom.Column(rows...)
+	return bloom.Layer(stack).Anchor(bloom.End, bloom.End).Size(width, total).ID(layerToasts)
 }
 
 func (m *Model) toastLines() int {

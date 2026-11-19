@@ -432,18 +432,26 @@ event-type request on the returned `tea.View`.
   `BackgroundColorMsg` and `ColorProfileMsg` replies never reach the root.
   Separate models, such as concurrent SSH attaches in one process, never
   share a root.
-- **Finite failed-launch feedback (Issue #213).** The only attached transition
-  is a 160 ms badge `fx.Shake` after a failed app launch. Its `anim.Value` and
-  the root receive the same per-model clock through `anim.Clock` and
+- **Finite event motion (Issues #213, #239).** The attached transitions are a
+  160 ms badge `fx.Shake` after a failed app launch, a 140 ms `fx.Iris` opening
+  reveal for the palette and confirmation dialogs, and a 160 ms `fx.Wipe`
+  entrance for the newest toast identity. Every opening entry point and toast
+  arrival returns the scheduling command; the effects remove their transition
+  node at progress one and schedule no follow-up. Their `anim.Value`s and the
+  root receive the same per-model clock through `anim.Clock` and
   `bloom.WithClock`; tests advance both without wall-clock sleeps. No
-  `anim.SetMotion`, palette/dialog/toast/layout transition, or idle animation
-  is attached. ReducedMotion removes the value and transition, returns no
-  animation-frame command even when enabled during an active shake, keeps
-  `WithCopyFlash(false)`, and preserves the pre-#213 static goldens. Session
-  `motion` overrides survive later polls and theme changes. Without one,
+  `anim.SetMotion`, layout transition, or idle animation is attached.
+  ReducedMotion attaches none of them, returns no animation-frame command,
+  snap-cancels an active effect when enabled mid-effect, keeps
+  `WithCopyFlash(false)`, and preserves the static goldens. Its `Set` also
+  invalidates the outstanding generation, so a stale frame cannot revive or
+  extend an effect or restart it after motion returns. Session `motion`
+  overrides survive later polls and theme changes. Without one,
   explicit non-default config wins; otherwise the theme default wins, so the
   built-in `false` default cannot enable motion in a default-reduced theme.
-  Existing process/config/log polling and notification expiry remain functional work.
+  Unchanged polls, resizes, theme changes, and repeated renders never replay
+  an entrance. Existing process/config/log polling and notification expiry
+  remain functional work.
 
 ### Home wordmark and ASCII chrome (Issue #214)
 
