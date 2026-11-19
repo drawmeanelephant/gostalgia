@@ -40,12 +40,15 @@ type sysStatusData struct {
 	ServicesCount int
 }
 
+// openAppsPrefix marks a command result whose text is followed by the
+// Apps listing and that leaves the shell on the Apps shelf.
+const openAppsPrefix = "__OPEN_APPS__"
+
 type resultMsg struct {
 	text             string
 	err              error
 	failedLaunch     bool
 	cwd              string
-	apps             []appStatus
 	status           sysStatusData
 	documents        []docShortcut
 	hasStatus        bool
@@ -76,7 +79,7 @@ type resultMsg struct {
 }
 
 const helpText = `COMMAND CENTER
-  apps                     installed apps and their grants
+  apps                     open the app shelf (also lists grants)
   pkg / package            list, inspect, install, update, uninstall, rollback
   backup                   export, inspect, preview, restore portable backups
   launch / run APP-ID       start a manifest-declared app
@@ -175,6 +178,9 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 	} else if strings.HasPrefix(result.text, "__SWITCH_VIEW__:") {
 		result.switchView = strings.TrimPrefix(result.text, "__SWITCH_VIEW__:")
 		result.text = ""
+	} else if strings.HasPrefix(result.text, openAppsPrefix) {
+		result.switchView = "shelf"
+		result.text = strings.TrimPrefix(strings.TrimPrefix(result.text, openAppsPrefix), "\n")
 	} else if strings.HasPrefix(result.text, "__SHOW_RECEIPT__:") {
 		var pid int32
 		fmt.Sscan(strings.TrimPrefix(result.text, "__SHOW_RECEIPT__:"), &pid)
@@ -225,15 +231,6 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		result.text = fmt.Sprintf("Switched to profile %s", targetID)
 	}
 	if !quit {
-		var apps []appStatus
-		if refreshErr := c.Call(ctx, "app/list", nil, &apps); refreshErr != nil {
-			if result.err == nil {
-				result.err = fmt.Errorf("refresh apps: %w", refreshErr)
-			}
-		} else {
-			result.apps = apps
-		}
-
 		var status struct {
 			UptimeSeconds float64 `json:"uptime_seconds"`
 			User          string  `json:"user"`
@@ -283,6 +280,25 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 	return result
 }
 
+// commandChangesApps reports whether line names a command that can change
+// which apps exist or run. The shell refreshes the app registry after such a
+// command instead of carrying the registry in its result, so a slow command
+// answer cannot overwrite a newer shelf refresh. Failed commands change
+// nothing and need no refresh.
+func commandChangesApps(line string) bool {
+	args, err := words(line)
+	if err != nil || len(args) == 0 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "launch", "run", "stop", "call", "open", "pkg", "package", "backup", "recovery":
+		return true
+	}
+	return false
+}
+
+// command executes line and reports its output. App state lives in the
+// shelf's own app/list refresh, not in this result.
 func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(string) string) (string, string, bool, error) {
 	ok := func(s string) (string, string, bool, error) { return s, cwd, false, nil }
 	fail := func(err error) (string, string, bool, error) { return "", cwd, false, err }
@@ -535,7 +551,10 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 			}
 			rows = append(rows, fmt.Sprintf("%s  %s v%s\n  %s%scaps: %s", safe(a.Manifest.ID), safe(a.Manifest.Name), safe(a.Manifest.Version), state, separator, strings.Join(a.Manifest.Permissions, ", ")))
 		}
-		return ok(strings.Join(rows, "\n"))
+		// The command opens the Apps shelf too; the listing stays in the
+		// transcript behind it. openAppsPrefix tells execute to switch view
+		// without parsing the command line again.
+		return ok(openAppsPrefix + "\n" + strings.Join(rows, "\n"))
 	case "launch", "run", "stop":
 		if len(args) != 1 {
 			return fail(fmt.Errorf("usage: %s APP-ID", cmd))

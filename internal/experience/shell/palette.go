@@ -79,7 +79,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Tag:    "CMD",
 			Title:  "apps",
 			Detail: "Search and launch applications (F2)",
-			Action: func(m *Model) tea.Cmd { m.setMode(modeLauncher); return nil },
+			Action: func(m *Model) tea.Cmd { return m.switchScreen(screenApps, false) },
 		},
 		paletteItem{
 			Tag:    "CMD",

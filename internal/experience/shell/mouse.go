@@ -221,6 +221,7 @@ var tabScreens = []screen{screenHome, screenApps, screenPrompt, screenTasks, scr
 // clicked, as it is the active one.
 func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 	cancel := m.dismissView()
+	var refresh tea.Cmd
 	switch to {
 	case screenHome, screenApps:
 		mode := modeHome
@@ -232,6 +233,11 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 			m.setMode(modePrompt)
 		} else {
 			m.setMode(mode)
+		}
+		if to == screenApps && m.currentMode() == modeLauncher {
+			// Entering the shelf reads the registry again, so an app
+			// stopped or started by another client shows its real state.
+			refresh = m.refreshAppsCmd()
 		}
 	case screenPrompt:
 		m.taskView, m.notifView = false, false
@@ -250,7 +256,7 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 		}
 	}
 	m.resetScroll()
-	return cancel
+	return tea.Batch(cancel, refresh)
 }
 
 // tabsNode is the tab row. Clicking a tab other than the active one shows

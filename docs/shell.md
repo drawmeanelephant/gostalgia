@@ -21,7 +21,7 @@ runtime (`gostalgia boot --root /tmp/gs`). Shell attachment is not implemented.
 | Command | Meaning |
 |---|---|
 | `help`, `?` | Command reference |
-| `apps` | IDs, versions, live/ready states, manifest grants |
+| `apps` | Open the Apps shelf; the listing it leaves in the transcript carries IDs, versions, live/ready states and manifest grants |
 | `launch ID`, `run ID` | Launch a registered app; single-instance errors are visible |
 | `stop ID` | Wait for app cleanup and retract routes |
 | `echo MESSAGE` | Invoke the sole demo app (must be running) |
@@ -49,7 +49,12 @@ JSON is preserved, not passed through path/quote parsing.
 - **F2**: switch between prompt and app shelf. **↑/↓** selects an app;
   **Enter** launches it; **F3** stops it after a confirmation; **Esc** returns
   to the prompt. The
-  shelf displays description and manifest permissions.
+  shelf displays description and manifest permissions. Opening the shelf by
+  F2, its tab, the `apps` command or the palette reads `app/list` again in the
+  background, so an app stopped or launched by another client shows its
+  current state and PID without running a command. The answer never holds up
+  typing, selection or leaving the shelf, and only the newest answer is
+  shown.
 - **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
   busy work or returns to the prompt. F2 returns to the shelf. See
@@ -506,7 +511,7 @@ confirmations. Borders, headings, blank cells and the active tab do nothing.
 | Wheel over the transcript | PgUp/PgDown. Scrolled up, it stays put as output arrives; back at the end it follows again. |
 | Wheel over a log tail | ↑/↓ and PgUp/PgDown. Wheeling never starts following; press **f**. |
 | Wheel over the launcher, palette, Home, Task Manager table or Notification Center | ↑/↓, one row a step, stopping at the ends; the wheel never opens anything |
-| Hover a cut app description or `GRANT` line in the launcher | A wider terminal shows it uncut; `apps` lists every app's grants |
+| Hover a cut app description or `GRANT` line in the launcher | A wider terminal shows it uncut; the `apps` command lists every app's grants in the transcript |
 | Drag over transcript or log tail text | Ctrl-Y copies the lines on screen |
 
 **Selection and copy.** Dragging over the transcript or a log tail selects

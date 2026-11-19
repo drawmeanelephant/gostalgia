@@ -80,6 +80,18 @@ type procTracking struct {
 }
 
 type tickMsg time.Time
+
+// appListMsg is an app/list answer for the request numbered seq. Refreshes
+// overlap, so the shell only shows the answer to its newest request: a slow
+// older snapshot arriving first or later cannot restore stale running
+// processes or PIDs. The refresh is independent of command lifecycle, so
+// keyboard and mouse input stay live while it is in flight.
+type appListMsg struct {
+	seq  uint64
+	apps []appStatus
+	err  error
+}
+
 type procUpdateMsg struct {
 	procs []taskmanager.ProcessRow
 	err   error
@@ -136,14 +148,17 @@ type Model struct {
 	// transcript is the semantic history behind transcriptBuf: one entry
 	// per logical line, oldest first, kept to restyle the lines when the
 	// kit changes. See transcript.go.
-	transcript         []entry
-	transcriptBuf      *bloom.Buffer
-	transcriptLook     transcriptLook
-	transcriptPos      bloom.ViewportPos
-	history            []string
-	historyPos         int
-	draft              string
-	apps               []appStatus
+	transcript     []entry
+	transcriptBuf  *bloom.Buffer
+	transcriptLook transcriptLook
+	transcriptPos  bloom.ViewportPos
+	history        []string
+	historyPos     int
+	draft          string
+	apps           []appStatus
+	// appsSent numbers app/list refreshes as they are sent; only the answer
+	// to the newest request is applied. See appListMsg.
+	appsSent           uint64
 	selected           int
 	launcherTop        int // the first card a click left in view; see launcherCards
 	shelf              bool
@@ -767,9 +782,7 @@ func (m *Model) Init() tea.Cmd {
 	refresh := func() tea.Msg {
 		ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 		defer cancel()
-		var apps []appStatus
-		err := m.client.Call(ctx, "app/list", nil, &apps)
-		msg := resultMsg{apps: apps, cwd: cwd, err: err}
+		msg := resultMsg{cwd: cwd}
 
 		var status struct {
 			UptimeSeconds float64 `json:"uptime_seconds"`
@@ -870,7 +883,7 @@ func (m *Model) Init() tea.Cmd {
 		}
 		return closedMsg{}
 	}
-	return tea.Batch(refresh, watch, tickCmd(), m.pollProcessesCmd(), m.fetchConfigCmd())
+	return tea.Batch(refresh, m.refreshAppsCmd(), watch, tickCmd(), m.pollProcessesCmd(), m.fetchConfigCmd())
 }
 
 func (m *Model) submit(line string) tea.Cmd {
@@ -890,6 +903,56 @@ func (m *Model) submit(line string) tea.Cmd {
 		defer cancel()
 		return execute(ctx, m.client, cwd, line, hint)
 	}
+}
+
+// refreshAppsCmd asks app/list off the event loop, numbering the request.
+// Every Apps-entry path and every completed command sends one. The answer
+// carries no command lifecycle state, so typing, selection and leaving Apps
+// do not wait for it, and only the newest request's answer is applied.
+func (m *Model) refreshAppsCmd() tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	client, ctx := m.client, m.ctx
+	m.appsSent++
+	seq := m.appsSent
+	return func() tea.Msg {
+		c, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		var apps []appStatus
+		err := client.Call(c, "app/list", nil, &apps)
+		return appListMsg{seq: seq, apps: apps, err: err}
+	}
+}
+
+// applyAppList replaces the shelf with apps, keeping the selected app
+// selected by ID when it is still listed. An accepted empty list is data:
+// the shelf shows its empty state rather than stale cards.
+func (m *Model) applyAppList(apps []appStatus) {
+	id := ""
+	if filtered := m.filteredApps(); m.selected >= 0 && m.selected < len(filtered) {
+		id = filtered[m.selected].Manifest.ID
+	}
+	m.apps = apps
+	if id == "" || !m.selectApp(id) {
+		m.selected = min(m.selected, max(0, len(m.filteredApps())-1))
+	}
+}
+
+// refreshFailed reports a failed app/list refresh as readable feedback while
+// leaving the last accepted shelf in place. The toast is not recorded in
+// notification history: it describes a transient background failure.
+func (m *Model) refreshFailed(err error) {
+	text := safe(err.Error())
+	m.append(entry{"Could not refresh apps: " + text, "error"})
+	m.flash(notifications.Notification{
+		Level:   notifications.LevelWarning,
+		Source:  "apps",
+		Badge:   "APPS",
+		Wrap:    true,
+		Title:   "Shelf refresh failed",
+		Message: "Showing the last known state. " + text,
+	})
 }
 
 // Update passes msg to the bloom root, except the terminal's own colors and
@@ -993,7 +1056,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.initialConfigLoaded {
 			m.initialConfigLoaded = true
 			if msg.startupView == "launcher" || msg.startupView == "shelf" {
-				m.setMode(modeLauncher)
+				themeCmd = tea.Batch(themeCmd, m.switchScreen(screenApps, false))
 			} else if msg.startupView == "prompt" {
 				m.setMode(modePrompt)
 			} else if msg.startupView == "home" {
@@ -1013,6 +1076,18 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.unresolvedTheme = msg.name
 		}
+		return m, nil
+	case appListMsg:
+		m.initExperience()
+		if msg.seq < m.appsSent {
+			// A newer refresh is already in flight; this snapshot predates it.
+			return m, nil
+		}
+		if msg.err != nil {
+			m.refreshFailed(msg.err)
+			return m, nil
+		}
+		m.applyAppList(msg.apps)
 		return m, nil
 	case procUpdateMsg:
 		m.initExperience()
@@ -1064,10 +1139,6 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.cwd != "" {
 			m.cwd = msg.cwd
 		}
-		if msg.apps != nil {
-			m.apps = msg.apps
-			m.selected = min(m.selected, max(0, len(m.apps)-1))
-		}
 		if msg.hasStatus {
 			m.homeData.UptimeSeconds = msg.status.UptimeSeconds
 			m.homeData.User = msg.status.User
@@ -1086,9 +1157,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shelf = false
 			m.taskView = false
 		} else if msg.switchView == "shelf" || msg.switchView == "launcher" {
-			m.setMode(modeLauncher)
-			m.taskView = false
-			m.notifView = false
+			cmd = tea.Batch(cmd, m.switchScreen(screenApps, false))
 		} else if msg.switchView == "settings" {
 			return m, m.openAppByID("com.gostalgia.settings")
 		}
@@ -1235,6 +1304,11 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}, nil)
 			}
 			return m, tea.Quit
+		}
+		if msg.err == nil && msg.switchView != "shelf" && msg.switchView != "launcher" && commandChangesApps(msg.executedLine) {
+			// The command changed which apps run or exist (or may have);
+			// refresh the registry without tying it to this result.
+			cmd = tea.Batch(cmd, m.refreshAppsCmd())
 		}
 		return m, cmd
 	case themeSavedMsg:
@@ -1675,8 +1749,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if strings.EqualFold(line, "launcher") || strings.EqualFold(line, "shelf") {
 			m.input = nil
 			m.cursor = 0
-			m.setMode(modeLauncher)
-			return m, nil
+			return m, m.switchScreen(screenApps, false)
 		}
 		if strings.EqualFold(line, "palette") {
 			m.input = nil
