@@ -11,7 +11,7 @@ import (
 )
 
 // launchShakeDuration is the entire failed-launch effect. It is deliberately
-// below the experience contract's 200 ms ceiling and has no idle loop.
+// below the experience contract's 400 ms ceiling and has no idle loop.
 const launchShakeDuration = 160 * time.Millisecond
 
 // motionState belongs to one shell model. In particular, it is not package
