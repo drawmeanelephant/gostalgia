@@ -44,6 +44,12 @@ and `..` work inside the VFS. Quote paths/messages containing spaces; use single
 or double quotes. Backslashes remain literal in path arguments. Raw `call`
 JSON is preserved, not passed through path/quote parsing.
 
+An unknown command name suggests bounded next steps: the closest accepted
+command names within a small edit distance, and `launch <app-id>` when the
+input matches an installed app's friendly name or full ID. A distant token
+keeps the plain `type help` fallback. A hint never runs a command or launches
+an app by itself; Monochrome renders the shell-owned hint text in ASCII.
+
 ## Keyboard
 
 - **F2**: switch between prompt and app shelf. **↑/↓** selects an app;
