@@ -64,6 +64,11 @@ const (
 	frameTitle     = "G O S T A L G I A  /  PERSONAL COMPUTING"
 )
 
+// launcherCompactHintsWidth is the narrowest frame that can show
+// "Esc PROMPT · Enter RUN · F3 STOP" (32 cells). Narrower frames keep the
+// shelf's three primary hints whole by using the shorter PROMPT label.
+const launcherCompactHintsWidth = 32
+
 // rootKey is everything a bloom root is built from. A kit change that keeps
 // it equal keeps the root.
 type rootKey struct {
@@ -493,11 +498,18 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)
+		back := "PROMPT"
+		if m.width < launcherCompactHintsWidth {
+			// "Esc PROMPT · Enter RUN · F3 STOP" needs 32 cells. The 30-cell
+			// frame shows all three primaries with the shorter label, and the
+			// help bar drops any binding that would not fit whole.
+			back = "BACK"
+		}
 		return []ui.Binding{
-			{Key: "Esc", Help: "PROMPT"},
+			{Key: "Esc", Help: back},
 			{Key: "Enter", Help: "RUN", Disabled: m.busy || len(filtered) == 0},
 			{Key: "F3", Help: "STOP", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
-			{Key: "F4", Help: "VIEW", Disabled: m.busy || len(filtered) == 0},
+			{Key: "F4", Help: "VIEW", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
 			{Key: "F5", Help: "TASKS"},
 			{Key: "↑↓", Help: "SELECT", Disabled: m.busy || len(filtered) == 0},
 			{Key: "Ctrl-P", Help: "PALETTE"},

@@ -54,7 +54,10 @@ JSON is preserved, not passed through path/quote parsing.
   background, so an app stopped or launched by another client shows its
   current state and PID without running a command. The answer never holds up
   typing, selection or leaving the shelf, and only the newest answer is
-  shown.
+  shown. At the 30×10 minimum the selected card keeps its name and its
+  `LIVE`/`READY` state, even beside a launch rejection, and the help row uses
+  the shorter `Esc BACK` label so `Enter RUN` and `F3 STOP` fit as complete
+  hints. Growing the terminal restores the full cards and wording.
 - **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
   busy work or returns to the prompt. F2 returns to the shelf. See

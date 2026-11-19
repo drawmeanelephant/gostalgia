@@ -141,11 +141,43 @@ func TestFocusDisabledTabsAndDialogActions(t *testing.T) {
 
 func TestCompactAppCardKeepsNameAndStatus(t *testing.T) {
 	k := New(theme.Nostalgia(), Plain)
-	for _, height := range []int{2, 3} {
-		view := k.AppCard(AppCard{Name: "Echo", Status: "LIVE / PID 7", State: theme.Success, Focused: true}, Bounds{24, height})
-		assertRectangle(t, view, Bounds{24, height})
-		if !strings.Contains(view, "› Echo") || !strings.Contains(view, "LIVE / PID 7") {
-			t.Fatalf("compact card hid name or actual status:\n%s", view)
+	for _, height := range []int{1, 2, 3} {
+		for _, state := range []struct {
+			status string
+			state  theme.State
+		}{{"LIVE / PID 7", theme.Success}, {"READY", theme.Normal}} {
+			view := k.AppCard(AppCard{Name: "Echo", Status: state.status, State: state.state, Focused: true}, Bounds{24, height})
+			assertRectangle(t, view, Bounds{24, height})
+			if !strings.Contains(view, "› Echo") || !strings.Contains(view, state.status) {
+				t.Fatalf("%d-row compact card hid name or actual status:\n%s", height, view)
+			}
+		}
+	}
+	// A name longer than the cells the state leaves is cut, but the state
+	// keeps its whole label.
+	view := k.AppCard(AppCard{Name: "A very long application name", Status: "LIVE / PID 1234", State: theme.Success}, Bounds{24, 1})
+	if !strings.Contains(view, "LIVE / PID 1234") || strings.Contains(view, "application name") {
+		t.Fatalf("one-row card did not prioritize state:\n%s", view)
+	}
+}
+
+// HelpBar draws whole key/action hints only: a binding that does not fit is
+// dropped, never cut mid-action.
+func TestHelpBarDropsHintsThatWouldBeCut(t *testing.T) {
+	k := New(theme.Nostalgia(), Plain)
+	bindings := []Binding{{Key: "Esc", Help: "BACK"}, {Key: "Enter", Help: "RUN"}, {Key: "F3", Help: "STOP"}}
+	whole := []string{"Esc BACK", "Enter RUN", "F3 STOP"}
+	for width := 1; width <= 40; width++ {
+		var want string
+		for n := len(whole); n >= 0; n-- {
+			candidate := strings.Join(whole[:n], k.Separator())
+			if ansi.StringWidth(candidate) <= width {
+				want = candidate
+				break
+			}
+		}
+		if got := strings.TrimRight(k.HelpBar(bindings, width), " "); got != want {
+			t.Fatalf("width %d: HelpBar = %q, want whole hints %q", width, got, want)
 		}
 	}
 }
