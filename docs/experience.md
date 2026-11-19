@@ -619,9 +619,13 @@ emulated terminal. Its scenarios cover Home readiness, launcher launch/stop,
 Ctrl-P palette filtering, prompt echo, resize below 30×10 and recovery,
 bracketed paste, decoded mouse navigation, stable toast geometry through
 appearance/expiry, and Ctrl-C protocol restoration. Runtime state assertions
-use authenticated IPC; no runtime caller or transport is mocked. The Ctrl-C
-scenario also decodes a reel asciicast to verify alternate-screen, cursor,
-style, mouse, paste, and keyboard-enhancement resets.
+use authenticated IPC; no runtime caller or transport is mocked. The toast
+fixture overflows the transcript with numbered real echo results and compares
+the full visible line range and positions before, during, and after the toast.
+The Ctrl-C scenario partitions the live reel timeline at the actual literal or
+Kitty-encoded Ctrl-C input and verifies alternate-screen, cursor, style, mouse,
+paste, and keyboard-enhancement resets only in the post-input output suffix;
+it also exports an asciicast for terminal evidence.
 
 Static steep snapshots live in
 `internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. ANSI styling is

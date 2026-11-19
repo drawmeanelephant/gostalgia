@@ -336,10 +336,14 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 	t.Run("toast_stable", func(t *testing.T) {
 		h, client := newSteepRuntime(t)
 		steepLaunchNotifier(t, h)
-		h.Type("echo TOAST-ANCHOR").Key("enter").Wait("[echo #1]")
-		steepEchoCount(t, client, 1)
+		for i := 1; i <= 12; i++ {
+			h.Type(fmt.Sprintf("echo TOAST-LINE-%02d", i)).Key("enter").Wait(fmt.Sprintf("[echo #%d]", i))
+		}
+		h.Type("echo TOAST-ANCHOR").Key("enter").Wait("[echo #13]")
+		steepEchoCount(t, client, 13)
 		h.RequireNot("STEEP TOAST")
-		beforeAnchor := h.Locate(reel.Contains("TOAST-ANCHOR"))
+		beforeTranscript := steepToastTranscriptLines(t, h)
+		beforeAnchor := h.Locate(reel.Contains("TOAST-ANCHOR   [echo #13]"))
 		beforeHelp := h.Locate(reel.Contains("Ctrl-C EXIT"))
 		beforeCursor := h.CursorPosition()
 		steepSnapshot(h, "before")
@@ -358,10 +362,12 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		h.Wait([]string{"STEEP TOAST", "real application"})
 		steepSnapshot(h, "visible")
 		assertSteepScreenAnchor(t, h, beforeAnchor, beforeHelp, beforeCursor)
+		assertSteepToastTranscript(t, h, beforeTranscript)
 
 		h.WaitNot("STEEP TOAST")
 		steepSnapshot(h, "expired")
 		assertSteepScreenAnchor(t, h, beforeAnchor, beforeHelp, beforeCursor)
+		assertSteepToastTranscript(t, h, beforeTranscript)
 	})
 
 	t.Run("ctrl_c_protocol_restore", func(t *testing.T) {
@@ -391,14 +397,56 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 				t.Errorf("terminal mode %v = %v after Ctrl-C, want reset", mode, got)
 			}
 		}
+		timeline := h.Timeline()
 		h.Close()
-		assertSteepRestorationOutput(t, castPath)
+		assertSteepRestorationOutput(t, timeline)
 	})
+}
+
+type steepToastTranscriptLine struct {
+	text  string
+	point image.Point
+}
+
+func steepToastTranscriptLines(t *testing.T, h *steep.Harness) []steepToastTranscriptLine {
+	t.Helper()
+	var visible []steepToastTranscriptLine
+	for y, line := range strings.Split(h.View(), "\n") {
+		for i := 1; i <= 12; i++ {
+			marker := fmt.Sprintf("TOAST-LINE-%02d   [echo #%d]", i, i)
+			if strings.Contains(line, marker) {
+				visible = append(visible, steepToastTranscriptLine{text: marker, point: image.Pt(strings.Index(line, marker), y)})
+			}
+		}
+		if marker := "TOAST-ANCHOR   [echo #13]"; strings.Contains(line, marker) {
+			visible = append(visible, steepToastTranscriptLine{text: marker, point: image.Pt(strings.Index(line, marker), y)})
+		}
+	}
+	if len(visible) < 4 {
+		t.Fatalf("toast transcript is not scrollable: only %d numbered result lines visible\n%s", len(visible), h.View())
+	}
+	if !strings.HasPrefix(visible[len(visible)-1].text, "TOAST-ANCHOR") {
+		t.Fatalf("bottom toast anchor is not visible: %+v", visible)
+	}
+	return visible
+}
+
+func assertSteepToastTranscript(t *testing.T, h *steep.Harness, want []steepToastTranscriptLine) {
+	t.Helper()
+	got := steepToastTranscriptLines(t, h)
+	if len(got) != len(want) {
+		t.Fatalf("visible transcript line count changed from %d to %d\nbefore: %+v\nafter: %+v", len(want), len(got), want, got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("visible transcript line %d moved/changed from %+v to %+v", i, want[i], got[i])
+		}
+	}
 }
 
 func assertSteepScreenAnchor(t *testing.T, h *steep.Harness, anchor, help steep.Location, cursor image.Point) {
 	t.Helper()
-	if got := h.Locate(reel.Contains("TOAST-ANCHOR")); got.X != anchor.X || got.Y != anchor.Y {
+	if got := h.Locate(reel.Contains("TOAST-ANCHOR   [echo #13]")); got.X != anchor.X || got.Y != anchor.Y {
 		t.Errorf("transcript anchor moved from (%d,%d) to (%d,%d)", anchor.X, anchor.Y, got.X, got.Y)
 	}
 	if got := h.Locate(reel.Contains("Ctrl-C EXIT")); got.X != help.X || got.Y != help.Y {
@@ -409,21 +457,30 @@ func assertSteepScreenAnchor(t *testing.T, h *steep.Harness, anchor, help steep.
 	}
 }
 
-func assertSteepRestorationOutput(t *testing.T, castPath string) {
+func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	t.Helper()
-	data, err := os.ReadFile(castPath)
-	if err != nil {
-		t.Fatalf("read Ctrl-C terminal recording: %v", err)
-	}
-	timeline, err := reel.ReadTimeline(bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("decode Ctrl-C terminal recording: %v", err)
-	}
 	var raw []byte
+	var inputEncodings []string
+	ctrlCSeen := false
 	for event := range timeline.Events() {
-		if out, ok := event.(reel.Output); ok {
-			raw = append(raw, out.Data...)
+		switch event := event.(type) {
+		case reel.Input:
+			inputEncodings = append(inputEncodings, fmt.Sprintf("%q", event.Data))
+			if bytes.Equal(event.Data, []byte{0x03}) || bytes.Equal(event.Data, []byte("\x1b[99;5u")) {
+				ctrlCSeen = true
+				raw = nil
+			}
+		case reel.Output:
+			if ctrlCSeen {
+				raw = append(raw, event.Data...)
+			}
 		}
+	}
+	if !ctrlCSeen {
+		t.Fatalf("Ctrl-C recording contains no literal or Kitty Ctrl-C input event; inputs: %v", inputEncodings)
+	}
+	if len(raw) == 0 {
+		t.Fatal("Ctrl-C recording contains no terminal output after Ctrl-C")
 	}
 	for name, sequence := range map[string]string{
 		"alternate screen reset": "\x1b[?1049l",
@@ -438,7 +495,7 @@ func assertSteepRestorationOutput(t *testing.T, castPath string) {
 		"modifyOtherKeys reset":  "\x1b[>4m",
 	} {
 		if !bytes.Contains(raw, []byte(sequence)) {
-			t.Errorf("Ctrl-C output lacks %s (%q)", name, sequence)
+			t.Errorf("post-Ctrl-C output lacks %s (%q)", name, sequence)
 		}
 	}
 }
