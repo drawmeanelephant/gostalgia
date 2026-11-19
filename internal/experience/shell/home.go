@@ -105,7 +105,14 @@ const (
 	homeSystemID
 	homeAppsID
 	homeDocsID
+	homeCompositionID
 )
+
+// homeMaxContentWidth bounds Home's composition at large sizes. The large
+// wordmark is 80 cells wide, and the section rows fit within it. A wider
+// body centers that column instead of spreading the dashboard over the whole
+// frame and leaving it pinned to the upper-left.
+const homeMaxContentWidth = 80
 
 const homeSpacedTitle = "G O S T A L G I A"
 
@@ -213,14 +220,26 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	docs := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows),
 		func(b ui.Bounds) []hit { return m.homeDocHits(b, hv, running) }, nil)
 	return m.withMouse(ui.SizedNode(func(ctx bloom.Context) bloom.Child {
-		mark := selectHomeWordmarkForBounds(ctx.Width, ctx.Height)
+		// Bound the composition, then center that column on bodies wider
+		// than it. At 80x24 and 30x10 the column still takes the whole body,
+		// so the established composition and collapse priorities hold.
+		width := min(ctx.Width, homeMaxContentWidth)
+		mark := selectHomeWordmarkForBounds(width, ctx.Height)
 		wordmark := m.kit.Leaf(func(ui.Bounds) string { return m.kit.Heading(mark.text) })
-		return bloom.Column(
+		content := bloom.Column(
 			bloom.Fixed(mark.height, wordmark).ID(homeWordmarkID),
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
 			bloom.Auto(apps).Min(1).ID(homeAppsID),
 			bloom.Auto(docs).Min(min(2, docsRows)).Collapsible(prioHomeDocuments).ID(homeDocsID),
-		).Gap(1)
+		).Gap(1).ID(homeCompositionID)
+		if width >= ctx.Width {
+			return content
+		}
+		return bloom.Row(
+			bloom.Fixed((ctx.Width-width)/2, nil),
+			bloom.Fixed(width, content),
+			bloom.Fill(nil),
+		)
 	}), nil, m.homeScroll)
 }
 

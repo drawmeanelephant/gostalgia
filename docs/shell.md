@@ -469,6 +469,13 @@ Home goldens cover all five built-in themes at 30×10, 80×24, and 200×60 in
 `internal/experience/shell/testdata/home-wordmark/`, with focused tests around
 the actual big/mini/spaced thresholds and short-height fallback.
 
+Bodies wider than 80 content cells center Home's wordmark and sections as one
+80-cell column (Issue #232). The bound is a layout node, not string padding:
+element identities, section rows, and their solved mouse coordinates move with
+it. At 80×24 and smaller the column still takes the full body width, so the
+existing compact collapse priorities are unchanged. The centering is static and
+adds no ambient content, timer, or idle redraw work.
+
 ### Mouse and clipboard (Issue #211)
 
 Mouse input is additive: every click, wheel step and copy has a keyboard
