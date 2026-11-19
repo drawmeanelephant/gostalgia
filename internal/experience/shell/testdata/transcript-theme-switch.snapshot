@@ -1,0 +1,95 @@
+BEFORE: nostalgia/ansi256
+kit: nostalgia/ansi256
+escapes: true
+row 00: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m\x1b[38;5;94;1m› C:\\users\\guest> echo \"hello\"\x1b[38;5;59;22m                                              \x1b[38;5;101m\x1b[m"
+row 01: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m  hello                                                                     \x1b[38;5;101m\x1b[m"
+row 02: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m\x1b[38;5;131m! unknown command \"ehco\"; did you mean: echo?\x1b[38;5;59m                               \x1b[38;5;101m\x1b[m"
+row 03: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m  A result long enough to wrap over a row so the gutter marks only the first\x1b[38;5;101m\x1b[m"
+row 04: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m   row, never the continuation, and the logical text stays whole.           \x1b[38;5;101m\x1b[m"
+row 05: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m\x1b[38;5;131m! red  hostile\x1b[38;5;59m                                                              \x1b[38;5;101m\x1b[m"
+row 06: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 07: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 08: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 09: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 10: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 11: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 12: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 13: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+row 14: "\x1b[38;5;101;48;5;230m\x1b[38;5;59m                                                                            \x1b[38;5;101m\x1b[m"
+
+AFTER: midnight/truecolor
+kit: midnight/truecolor
+escapes: true
+row 00: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m\x1b[38;2;159;228;228;1m› C:\\users\\guest> echo \"hello\"\x1b[38;2;255;244;220;22m                                              \x1b[38;2;155;140;117m\x1b[m"
+row 01: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m  hello                                                                     \x1b[38;2;155;140;117m\x1b[m"
+row 02: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m\x1b[38;2;255;171;160m! unknown command \"ehco\"; did you mean: echo?\x1b[38;2;255;244;220m                               \x1b[38;2;155;140;117m\x1b[m"
+row 03: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m  A result long enough to wrap over a row so the gutter marks only the first\x1b[38;2;155;140;117m\x1b[m"
+row 04: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m   row, never the continuation, and the logical text stays whole.           \x1b[38;2;155;140;117m\x1b[m"
+row 05: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m\x1b[38;2;255;171;160m! red  hostile\x1b[38;2;255;244;220m                                                              \x1b[38;2;155;140;117m\x1b[m"
+row 06: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 07: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 08: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 09: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 10: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 11: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 12: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 13: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+row 14: "\x1b[38;2;155;140;117;48;2;45;57;66m\x1b[38;2;255;244;220m                                                                            \x1b[38;2;155;140;117m\x1b[m"
+
+AFTER: midnight/plain
+kit: midnight/plain
+escapes: false
+row 00: "› C:\\users\\guest> echo \"hello\""
+row 01: "  hello"
+row 02: "! unknown command \"ehco\"; did you mean: echo?"
+row 03: "  A result long enough to wrap over a row so the gutter marks only the first"
+row 04: "   row, never the continuation, and the logical text stays whole."
+row 05: "! red  hostile"
+row 06: ""
+row 07: ""
+row 08: ""
+row 09: ""
+row 10: ""
+row 11: ""
+row 12: ""
+row 13: ""
+row 14: ""
+
+AFTER: monochrome/plain
+kit: monochrome/plain
+escapes: false
+row 00: "> C:\\users\\guest> echo \"hello\""
+row 01: "  hello"
+row 02: "! unknown command \"ehco\"; did you mean: echo?"
+row 03: "  A result long enough to wrap over a row so the gutter marks only the first"
+row 04: "   row, never the continuation, and the logical text stays whole."
+row 05: "! red  hostile"
+row 06: ""
+row 07: ""
+row 08: ""
+row 09: ""
+row 10: ""
+row 11: ""
+row 12: ""
+row 13: ""
+row 14: ""
+
+AFTER: high-contrast/ansi256
+kit: high-contrast/ansi256
+escapes: true
+row 00: "\x1b[38;5;231;48;5;16m\x1b[38;5;226;1m» C:\\users\\guest> echo \"hello\"\x1b[38;5;231;22m                                              \x1b[m"
+row 01: "\x1b[38;5;231;48;5;16m  hello                                                                     \x1b[m"
+row 02: "\x1b[38;5;231;48;5;16m\x1b[38;5;203m! unknown command \"ehco\"; did you mean: echo?\x1b[38;5;231m                               \x1b[m"
+row 03: "\x1b[38;5;231;48;5;16m  A result long enough to wrap over a row so the gutter marks only the first\x1b[m"
+row 04: "\x1b[38;5;231;48;5;16m   row, never the continuation, and the logical text stays whole.           \x1b[m"
+row 05: "\x1b[38;5;231;48;5;16m\x1b[38;5;203m! red  hostile\x1b[38;5;231m                                                              \x1b[m"
+row 06: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 07: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 08: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 09: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 10: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 11: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 12: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 13: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+row 14: "\x1b[38;5;231;48;5;16m                                                                            \x1b[m"
+

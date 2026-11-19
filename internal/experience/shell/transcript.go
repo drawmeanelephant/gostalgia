@@ -149,6 +149,30 @@ func (m *Model) setKit(k ui.Kit) {
 	m.transcriptBuf.SetLines(lines...)
 }
 
+// transcriptCueWidth is the column of semantic cues kept left of every
+// transcript line. The cues are a gutter: the viewport draws them beside
+// its text, and selecting, copying and wrapping read the logical lines
+// without them.
+const transcriptCueWidth = 2
+
+// transcriptCue is the cue for a transcript line, drawn in its gutter. An
+// echo carries the theme's prompt marker, an error a bang, and ordinary
+// output a blank column: the glyphs, not the colors alone, tell the kinds
+// apart, so Monochrome and Plain keep the distinction. A line that wraps
+// is cued once, on its first row.
+func (m *Model) transcriptCue(row bloom.GutterRow) string {
+	if row.Continued || row.Line < 0 || row.Line >= len(m.transcript) {
+		return m.kit.Text("  ")
+	}
+	switch m.transcript[row.Line].kind {
+	case "command":
+		return m.kit.Heading(m.kit.Theme().Focus.Marker + " ")
+	case "error":
+		return m.kit.StatusText("! ", theme.Error)
+	}
+	return m.kit.Text("  ")
+}
+
 // transcriptNode is the transcript viewport. It follows new output while
 // it is at its end, and wraps lines at the cell. The wheel scrolls it as
 // PgUp and PgDn do, following again once it reaches the end, and the mouse
@@ -156,6 +180,7 @@ func (m *Model) setKit(k ui.Kit) {
 func (m *Model) transcriptNode() bloom.Child {
 	return bloom.Viewport(m.transcriptBuf).At(m.transcriptPos).Follow().
 		Wrap(bloom.WrapChars).Style(m.kit.TextStyle()).ID(viewTranscript).Selectable().
+		Gutter(transcriptCueWidth, m.transcriptCue).
 		OnScroll(func(pos bloom.ViewportPos) tea.Cmd {
 			return m.baseAct(func() tea.Cmd {
 				m.transcriptPos = pos

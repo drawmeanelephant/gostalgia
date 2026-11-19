@@ -3,21 +3,21 @@
 |  Home   Apps (2)  [Prompt]  Tasks   Notifications (2)                        |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
-| trans| > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
-| trans| >                                                              |      |
-| trans|                                                                |      |
-| trans| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |      |
-| trans|   [APP] Stop Echo  Graceful stop com.gostalgia....             |      |
-| trans|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |      |
-| trans|   [APP] Launch Notes  com.gostalgia.notes                      |      |
-| trans|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |      |
-| trans|   [APP] Stop Clock  Graceful stop com.gostalgia....            |      |
-| trans|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |      |
-| trans|   [CMD] help  Command center help and keyb...                  |      |
-| trans|   [CMD] home  Switch to Home screen dashbo...                  |      |
-| trans+----------------------------------------------------------------+      |
-| transcript line 25                                                           |
-| transcript line 26                                                           |
+|   tra| > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
+|   tra| >                                                              |      |
+|   tra|                                                                |      |
+|   tra| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |      |
+|   tra|   [APP] Stop Echo  Graceful stop com.gostalgia....             |      |
+|   tra|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |      |
+|   tra|   [APP] Launch Notes  com.gostalgia.notes                      |      |
+|   tra|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |      |
+|   tra|   [APP] Stop Clock  Graceful stop com.gostalgia....            |      |
+|   tra|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |      |
+|   tra|   [CMD] help  Command center help and keyb...                  |      |
+|   tra|   [CMD] home  Switch to Home screen dashbo...                  |      |
+|   tra+----------------------------------------------------------------+      |
+|   transcript line 25                                                         |
+|   transcript line 26                                                         |
 |                                                                              |
 | PALETTE> Type to filter | Up/Down navigate | Enter execute | Esc close       |
 +------------------------------------------------------------------------------+

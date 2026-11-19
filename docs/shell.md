@@ -95,7 +95,10 @@ an app by itself; Monochrome renders the shell-owned hint text in ASCII.
 - **Left/Right, Home/End, Ctrl-A/E**: move cursor. Backspace/Delete edits;
   Ctrl-U clears input. Unicode and bracketed paste are supported.
 - **PgUp/PgDown**: page the transcript by its height. The transcript keeps
-  the newest 10,000 lines, and each result is capped at 12,000 runes. Long
+  the newest 10,000 lines, and each result is capped at 12,000 runes. Echoed
+  commands, ordinary output and errors carry left-edge cues (the prompt
+  marker, a blank column, and `!`): Monochrome and Plain read the kinds
+  without color, and copied text leaves the cues out. Long
   lines wrap; a resize keeps the line at the top of the transcript in place.
   At the end the transcript follows new output; paged back, it stays put
   while output arrives, and paging down to the end follows again. Running a

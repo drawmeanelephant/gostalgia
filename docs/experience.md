@@ -68,6 +68,15 @@ inspect terminal state, select adaptive colors, consult `NO_COLOR`/`COLORFGBG`, 
 modify Lip Gloss's global renderer. Plain output contains
 no ANSI styling, but retains borders and state/focus symbols.
 
+The transcript draws a two-cell semantic cue column beside its lines: the
+theme's focus marker for a prompt echo, `!` for an error, and two spaces for
+ordinary output. The cues are a viewport gutter, so they identify echo,
+output and error without color in Monochrome and Plain, while colored themes
+also paint each kind with its semantic style. Selecting and copying read the
+logical lines, so cues never appear in copied text and wrapping never repeats
+a cue on a continuation row. A theme or color-profile change restyles the
+records already kept and redraws their cues from the same logical kinds.
+
 `shell.New` selects Nostalgia and ANSI256. `shell.NewWithTheme` accepts the theme
 and mode explicitly for alternate views and deterministic testing. Shell users
 can dynamically switch themes with `theme [NAME]` or toggle reduced motion with
