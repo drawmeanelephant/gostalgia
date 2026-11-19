@@ -595,7 +595,8 @@ Checked-in goldens cover the component vocabulary, focus and all named states,
 custom tokens, both standard palettes, accessible themes (`accessible-monochrome.golden`,
 `accessible-high-contrast.golden`), and all explicit color modes. ANSI snapshots
 spell escapes as `\x1b` for readable diffs. `.gitattributes` preserves LF endings
-in golden fixtures, including Windows checkouts with `core.autocrlf=true`.
+in golden and steep snapshot fixtures, including Windows checkouts with
+`core.autocrlf=true`.
 Shell goldens cover home, populated shelf, empty shelf, busy/error, app
 presentation views, and accessible views (`monochrome-prompt.golden`,
 `monochrome-home.golden`, `high-contrast-prompt.golden`). Overlay goldens in
@@ -612,9 +613,39 @@ Other tests cover clipping/wrapping, combining/CJK/emoji text, narrow action/tab
 visibility, progress clamping, control filtering (CSI, OSC, DCS, C1 controls),
 host-environment independence, theme-copy isolation, and concurrent rendering.
 The actual Bubble Tea program test drives app lifecycle and VFS commands over
-authenticated IPC.
+authenticated IPC. `TestSteepRuntimeScenarios` additionally boots a disposable
+real runtime and drives the production `shell.Run` path through steep's
+emulated terminal. Its scenarios cover Home readiness, launcher launch/stop,
+Ctrl-P palette filtering, prompt echo, resize below 30×10 and recovery,
+bracketed paste, decoded mouse navigation, stable toast geometry through
+appearance/expiry, and Ctrl-C protocol restoration. Runtime state assertions
+use authenticated IPC; no runtime caller or transport is mocked. The toast
+fixture overflows the transcript with numbered real echo results and compares
+the full visible line range and positions before, during, and after the toast.
+The Ctrl-C scenario partitions the live reel timeline at the actual literal or
+Kitty-encoded Ctrl-C input and verifies alternate-screen, cursor, style, mouse,
+paste, and keyboard-enhancement resets only in the post-input output suffix;
+it also exports an asciicast for terminal evidence. On Windows, ConPTY emits
+the equivalent zero-parameter style reset as `ESC[m` and filters unsupported
+normal-mouse mode 1000 in both directions. The scenario accounts for those two
+concrete transformations without skipping Windows; emulator mode assertions
+still require normal-mouse state to be reset, and every supported raw reset is
+still checked.
 
-Regenerate goldens deliberately, then inspect their diff:
+Static steep snapshots live in
+`internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. ANSI styling is
+removed for reviewable text. Only runtime-assigned PID digits and elapsed uptime
+are normalized, without changing display-cell widths. Snapshot updates are
+never automatic in CI. Regenerate them deliberately, inspect every changed file,
+and then run the normal comparison twice without the update environment:
+
+```sh
+UPDATE_SNAPSHOTS=true go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+go test -count=1 ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+```
+
+Regenerate component goldens deliberately, then inspect their diff:
 
 ```sh
 go test ./internal/experience/ui -run 'Test.*Snapshots' -update

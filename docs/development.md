@@ -39,6 +39,37 @@ gctl --root /tmp/gs shutdown             # clean shutdown
 Shut down with Ctrl-C in the boot terminal instead, if you prefer; both paths
 run the same graceful shutdown.
 
+## Terminal end-to-end checks
+
+Replace manual PTY smoke repetition for shell behavior with the steep scenario
+suite:
+
+```sh
+go test -count=1 -v ./internal/experience/shell -run '^TestSteepRuntimeScenarios$'
+go test -count=1 -v ./test/e2e -run '^(TestCharmRestrictedToExperience|TestSteepImportFence|TestApprovedCharmBaseline)$'
+```
+
+The scenarios boot a disposable real runtime, authenticate an IPC client, and
+drive the production shell through an emulated terminal. They cover Home,
+launcher launch/stop, the palette, prompt echo, below-minimum resize and
+recovery, bracketed paste, decoded mouse input, toast geometry, and Ctrl-C
+terminal restoration. Checked-in snapshots are compared read-only by default;
+see [experience.md](experience.md#verification-and-snapshots) for deliberate
+updates.
+
+Terminal emulation does not replace host integration checks. When changing
+terminal ownership, detach, or SSH transport, also run the SSH integration tests
+and exercise a real local PTY and the real OpenSSH client against `boot --ssh`
+with a disposable root and keys:
+
+```sh
+go test -count=1 -v ./internal/experience/sshx -run '^TestSSHSessionAttachesShell$'
+```
+
+Record resize/recovery, paste, mouse, toast invariance, detach survival, and
+restored terminal modes for those host checks. Do not substitute mocked callers
+or transports for the runtime under test.
+
 ## Repository layout
 
 ```text
@@ -59,8 +90,10 @@ status.md          living status + the canonical milestone tracker
 ## Conventions
 
 - Core, SDK, and demo apps are stdlib-only. The experience layer has the
-  approved Bubble Tea / Lip Gloss exception plus their required transitives;
-  no other direct external dependencies. See docs/architecture.md §4.1.
+  approved Bubble Tea / Lip Gloss / bloom exception plus their required
+  transitives. steep and reel are exact-pin, test-only dependencies confined to
+  test files under `internal/experience/` and `test/`. See
+  docs/architecture.md §4.1.
 - Write apps using [the SDK specification](applications.md); do not import
   internal runtime packages, host APIs, or Charm into apps.
 - No `GOOS` conditionals outside `platform/`.

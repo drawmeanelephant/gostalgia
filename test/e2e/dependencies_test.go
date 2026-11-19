@@ -58,11 +58,16 @@ func TestCharmRestrictedToExperience(t *testing.T) {
 		}
 
 		// bloom (any package of the bloomfx.dev module) is an experience-only
-		// layout/compositing dependency, including from tests.
-		for _, list := range parts[1:] {
+		// layout/compositing dependency, including from tests. Steep and reel
+		// are narrower: even in experience or test, only test imports are allowed.
+		for listIndex, list := range parts[1:] {
 			for _, imp := range strings.Split(list, ",") {
-				if isBloomImport(strings.TrimSpace(imp)) && !inExperience {
+				imp = strings.TrimSpace(imp)
+				if isBloomImport(imp) && !inExperience {
 					t.Errorf("package %s imports bloom package %s (restricted to internal/experience/)", pkgPath, imp)
+				}
+				if isSteepImport(imp) && !steepImportAllowed(pkgPath, listIndex > 0) {
+					t.Errorf("package %s imports steep package %s outside _test.go under internal/experience/ or test/", pkgPath, imp)
 				}
 			}
 		}
@@ -71,6 +76,45 @@ func TestCharmRestrictedToExperience(t *testing.T) {
 
 func isBloomImport(imp string) bool {
 	return strings.HasPrefix(imp, "bloomfx.dev/")
+}
+
+func isSteepImport(imp string) bool {
+	return imp == "getsteep.dev/steep" || strings.HasPrefix(imp, "getsteep.dev/steep/")
+}
+
+func steepImportAllowed(pkgPath string, testImport bool) bool {
+	inAllowedTree := strings.HasPrefix(pkgPath, "gostalgia/internal/experience/") ||
+		pkgPath == "gostalgia/test" || strings.HasPrefix(pkgPath, "gostalgia/test/")
+	return testImport && inAllowedTree
+}
+
+func TestSteepImportFence(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		imp        string
+		pkgPath    string
+		testImport bool
+		match      bool
+		allowed    bool
+	}{
+		{name: "root", imp: "getsteep.dev/steep", pkgPath: "gostalgia/internal/experience/shell", testImport: true, match: true, allowed: true},
+		{name: "subpackage", imp: "getsteep.dev/steep/reel/vt", pkgPath: "gostalgia/test/e2e", testImport: true, match: true, allowed: true},
+		{name: "lookalike", imp: "getsteep.dev/steepfake", pkgPath: "gostalgia/test/e2e", testImport: true},
+		{name: "production experience", imp: "getsteep.dev/steep", pkgPath: "gostalgia/internal/experience/shell", match: true},
+		{name: "test outside trees", imp: "getsteep.dev/steep", pkgPath: "gostalgia/internal/runtime", testImport: true, match: true},
+		{name: "production outside trees", imp: "getsteep.dev/steep", pkgPath: "gostalgia/cmd/gostalgia", match: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSteepImport(tc.imp); got != tc.match {
+				t.Fatalf("isSteepImport(%q) = %v, want %v", tc.imp, got, tc.match)
+			}
+			if tc.match {
+				if got := steepImportAllowed(tc.pkgPath, tc.testImport); got != tc.allowed {
+					t.Fatalf("steepImportAllowed(%q, %v) = %v, want %v", tc.pkgPath, tc.testImport, got, tc.allowed)
+				}
+			}
+		})
+	}
 }
 
 func TestBloomImportMatcher(t *testing.T) {
@@ -143,6 +187,11 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		// deliberately. Its go.mod sets the Bubble Tea v2.1.1, x/ansi v0.11.9
 		// and Go 1.27.3 floors above.
 		"bloomfx.dev/bloom": "v0.0.0-alpha.6",
+		// steep and its terminal/input capture module are exact-pinned,
+		// test-only dependencies. TestSteepImportFence and the import scan
+		// above confine both to _test.go in internal/experience/ or test/.
+		"getsteep.dev/steep":      "v0.0.0-alpha.12",
+		"getsteep.dev/steep/reel": "v0.0.0-alpha.12",
 	}
 
 	seen := map[string]bool{}

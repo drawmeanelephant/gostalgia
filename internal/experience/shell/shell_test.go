@@ -148,31 +148,54 @@ func (b *lockedBuffer) Write(p []byte) (int, error) {
 }
 func (b *lockedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.buf.String() }
 
+// bootShellTestRuntime starts a real disposable runtime and authenticates a
+// socket client for both the ordinary Bubble Tea integration and steep's
+// helper process. No caller or transport is mocked.
+func bootShellTestRuntime(root string, opts runtime.Options) (*runtime.Runtime, *ipc.Client, error) {
+	opts.Root = root
+	opts.LogOutput = io.Discard
+	rt, err := runtime.Boot(context.Background(), opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := dialShellTestRuntime(root)
+	if err != nil {
+		rt.Shutdown("shell test setup failed")
+		return nil, nil, err
+	}
+	return rt, client, nil
+}
+
+func dialShellTestRuntime(root string) (*ipc.Client, error) {
+	data, err := os.ReadFile(filepath.Join(root, "runtime.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read runtime metadata: %w", err)
+	}
+	var info struct {
+		Endpoint string `json:"endpoint"`
+		Token    string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &info); err != nil {
+		return nil, fmt.Errorf("parse runtime metadata: %w", err)
+	}
+	conn, err := platform.DialIPC(info.Endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("dial runtime: %w", err)
+	}
+	client, err := ipc.NewClient(conn, info.Token)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("authenticate runtime client: %w", err)
+	}
+	return client, nil
+}
+
 func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
-	root := t.TempDir()
-	rt, err := runtime.Boot(context.Background(), runtime.Options{Root: root, LogOutput: io.Discard})
+	rt, client, err := bootShellTestRuntime(t.TempDir(), runtime.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { rt.Shutdown("shell test cleanup") })
-	data, err := os.ReadFile(filepath.Join(root, "runtime.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var info struct {
-		Token string `json:"token"`
-	}
-	if err := json.Unmarshal(data, &info); err != nil {
-		t.Fatal(err)
-	}
-	conn, err := platform.DialIPC(rt.Endpoint())
-	if err != nil {
-		t.Fatal(err)
-	}
-	client, err := ipc.NewClient(conn, info.Token)
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() { client.Close() })
 	// Issue #132: one 15s budget for the whole lifecycle starved later
 	// awaits whenever a loaded CI runner burned the budget early. Instead,

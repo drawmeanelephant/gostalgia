@@ -151,6 +151,16 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 			return copyMsg{}
 		}
 	}
+	waitOutput := func(needle string) {
+		t.Helper()
+		deadline := time.Now().Add(perStep)
+		for !strings.Contains(output.String(), needle) {
+			if time.Now().After(deadline) {
+				t.Fatalf("renderer did not draw %q", needle)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	probe := func(fn func(*Model)) {
 		t.Helper()
 		p.Send(probeMsg{fn})
@@ -175,6 +185,10 @@ func TestMouseSelectionCopiesThroughTheRuntimesPolicy(t *testing.T) {
 	case <-time.After(perStep):
 		t.Fatal("echo timed out")
 	}
+	// Mouse events are routed through Bubble Tea's last drawn frame. The
+	// result message proves the model changed, but not that the renderer has
+	// drawn it yet; wait for that frame before locating text for a gesture.
+	waitOutput("[echo #1]")
 
 	const word = "copy-me-please"
 	selectWord := func(step string) (copyMsg, string) {
