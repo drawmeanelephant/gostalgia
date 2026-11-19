@@ -17,7 +17,7 @@ import (
 func (m *Model) View() tea.View {
 	base := bloom.Box(m.kit.TextStyle(), bloom.Column(
 		bloom.Fill(bloom.Text(m.kit.Text(ui.Sanitize("EXPERIMENTAL WINDOW SPIKE\n"+m.status))).Style(m.kit.TextStyle())),
-		bloom.Fixed(1, bloom.Text(m.kit.Text("F6 focus  Ctrl-W close  Tab controls  type/edit  Enter act  drag title  Ctrl-C exit"))),
+		bloom.Fixed(1, bloom.Text(m.kit.Text("F6 focus  Alt-arrows move  Ctrl-W close  Tab controls  Enter act  Ctrl-C exit"))),
 	))
 	layers := make([]bloom.LayerNode, 0, len(m.service.Order()))
 	for _, w := range m.service.Windows() {
@@ -106,9 +106,7 @@ func (m *Model) drag(id windows.ID, e on.Event) {
 		b := drag.origin
 		b.X += motion.X - drag.start.X
 		b.Y += motion.Y - drag.start.Y
-		b.X = max(0, min(b.X, m.width-b.Width))
-		b.Y = max(0, min(b.Y, m.height-1-b.Height))
-		m.service.Move(id, b)
+		m.service.Move(id, m.clampBounds(b))
 	}
 	if e.Done {
 		delete(m.drags, id)

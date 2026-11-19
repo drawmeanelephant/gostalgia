@@ -92,15 +92,17 @@ func (m *Model) moveCell(p *presentationState, msg tea.Msg) {
 	if !ok || control.kind != "cell" {
 		return
 	}
+	m.syncGridFocus()
 	delta := 1
 	if isKey(msg, "left", "shift+left") {
 		delta = -1
 	}
-	p.cell = max(0, min(len(p.view.Grid.Cells)-1, p.cell+delta))
-	target := controlID{window: control.window, kind: "cell", id: p.view.Grid.Cells[p.cell].ID}
-	if !p.view.Grid.Cells[p.cell].Disabled {
-		m.focus.Set(target)
+	next := max(0, min(len(p.view.Grid.Cells)-1, p.cell+delta))
+	if next == p.cell || p.view.Grid.Cells[next].Disabled {
+		return
 	}
+	p.cell = next
+	m.focus.Set(controlID{window: control.window, kind: "cell", id: p.view.Grid.Cells[p.cell].ID})
 }
 
 func (m *Model) activateCell(id windows.ID, cell sdk.Cell) {

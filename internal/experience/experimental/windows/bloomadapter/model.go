@@ -94,6 +94,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.ClearScreen
 			}
 			return m, nil
+		case "alt+left", "alt+right", "alt+up", "alt+down":
+			m.keyboardMove(msg.String())
+			return m, nil
 		}
 	case tea.BackgroundColorMsg, tea.ForegroundColorMsg, tea.ColorProfileMsg:
 		// Explicit theme policy wins even if a host sends an unsolicited reply.
@@ -102,6 +105,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	rootCmd := m.root.Update(msg)
 	focusCmd, handled := m.focus.Update(msg, m.root.Frame())
+	m.syncGridFocus()
 	if handled {
 		return m, tea.Batch(rootCmd, focusCmd)
 	}
@@ -132,6 +136,7 @@ func (m *Model) activate(id windows.ID, control controlID) {
 	}
 	m.service.Focus(id)
 	m.syncFocus(id, control)
+	m.syncGridFocus()
 }
 
 func (m *Model) syncFocus(id windows.ID, control controlID) {
@@ -178,12 +183,59 @@ func (m *Model) clampWindows() {
 		return
 	}
 	for _, w := range m.service.Windows() {
-		b := w.Bounds
-		b.Width = min(b.Width, m.width)
-		b.Height = min(b.Height, m.height-1)
-		b.X = max(0, min(b.X, m.width-b.Width))
-		b.Y = max(0, min(b.Y, m.height-1-b.Height))
-		m.service.Move(w.ID, b)
+		m.service.Move(w.ID, m.clampBounds(w.Bounds))
+	}
+}
+
+func (m *Model) clampBounds(b windows.Bounds) windows.Bounds {
+	if m.width <= 0 || m.height <= 1 {
+		return b
+	}
+	b.Width = min(b.Width, m.width)
+	b.Height = min(b.Height, m.height-1)
+	b.X = max(0, min(b.X, m.width-b.Width))
+	b.Y = max(0, min(b.Y, m.height-1-b.Height))
+	return b
+}
+
+func (m *Model) keyboardMove(key string) {
+	id, ok := m.service.Focused()
+	if !ok {
+		return
+	}
+	w, ok := m.service.Get(id)
+	if !ok {
+		return
+	}
+	b := w.Bounds
+	switch key {
+	case "alt+left":
+		b.X--
+	case "alt+right":
+		b.X++
+	case "alt+up":
+		b.Y--
+	case "alt+down":
+		b.Y++
+	}
+	m.service.Move(id, m.clampBounds(b))
+}
+
+func (m *Model) syncGridFocus() {
+	id, ok := m.service.Focused()
+	if !ok {
+		return
+	}
+	p := m.presentations[id]
+	control, ok := m.focus.Current()
+	if p == nil || p.view.Grid == nil || !ok || control.window != id || control.kind != "cell" {
+		return
+	}
+	for i, cell := range p.view.Grid.Cells {
+		if cell.ID == control.id {
+			p.cell = i
+			return
+		}
 	}
 }
 
@@ -199,6 +251,11 @@ func (m *Model) dispatch(id windows.ID, action, cellID string) {
 	for _, a := range w.Presentation.Actions {
 		if a.ID == action && a.Disabled {
 			return
+		}
+	}
+	if cellID == "" && p.view.Grid != nil && p.cell >= 0 && p.cell < len(p.view.Grid.Cells) {
+		if cell := p.view.Grid.Cells[p.cell]; !cell.Disabled {
+			cellID = cell.ID
 		}
 	}
 	request := p.request(w.Presentation, action, cellID)

@@ -102,8 +102,9 @@ go run ./internal/experience/experimental/windows/cmd/windowdemo
 ```
 
 It hosts the existing Screen and Pad SDK presentation fixtures in two titled
-windows with border `[X]` close controls. Drag a title to move one window, click
-a window to raise/focus it, use **F6** to switch focus, **Tab/Shift-Tab** to move
+windows with border `[X]` close controls. Drag a title or use **Alt-arrows** to
+move one window, click a window to raise/focus it, use **F6** to switch focus,
+**Tab/Shift-Tab** to move
 between that window's controls, type in its field, **Enter** to activate an
 action or grid cell, and **Ctrl-W** to close the focused window. **Ctrl-C**
 exits and restores the terminal. The two drafts and semantic action requests

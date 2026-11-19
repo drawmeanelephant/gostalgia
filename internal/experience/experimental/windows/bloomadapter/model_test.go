@@ -187,9 +187,63 @@ func TestFocusScopesKeepDraftsAndSemanticActionsIndependent(t *testing.T) {
 	if len(padActions) != 1 || padActions[0].Action != "press" || padActions[0].CellID != "nw" || padActions[0].Values["text"] != "pad" || padActions[0].Version != 2 {
 		t.Fatalf("pad semantic requests = %+v", padActions)
 	}
+	focus(model, controlID{window: padID, kind: "cell", id: "ne"})
+	focus(model, controlID{window: padID, kind: "action", id: "adopt"})
+	update(model, tea.KeyPressMsg{Code: tea.KeyEnter})
+	padActions = model.Actions(padID)
+	if len(padActions) != 2 || padActions[1].Action != "adopt" || padActions[1].CellID != "ne" || padActions[1].Values["text"] != "pad" {
+		t.Fatalf("top-level action lost selected grid cell: %+v", padActions)
+	}
 	model.activateCell(padID, sdk.Cell{ID: "se", Label: "SE", Action: "press", Disabled: true})
-	if len(model.Actions(padID)) != 1 {
+	if len(model.Actions(padID)) != 2 {
 		t.Fatal("disabled cell emitted an action")
+	}
+}
+
+func TestKeyboardMoveUsesSameBoundsTransition(t *testing.T) {
+	model, service, _, envelopes := newFixtureModel(t, ui.Plain)
+	model.activate(screenID, controlID{})
+	before, _ := service.Get(screenID)
+	otherBefore, _ := service.Get(padID)
+	*envelopes = nil
+	update(model, tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModAlt})
+	after, _ := service.Get(screenID)
+	otherAfter, _ := service.Get(padID)
+	want := before.Bounds
+	want.X++
+	if after.Bounds != want {
+		t.Fatalf("Alt-Right bounds = %+v, want %+v", after.Bounds, want)
+	}
+	if otherAfter.Bounds != otherBefore.Bounds {
+		t.Fatalf("Alt-Right moved other window: %+v", otherAfter.Bounds)
+	}
+	if len(*envelopes) != 1 {
+		t.Fatalf("Alt-Right published %d events, want one move", len(*envelopes))
+	}
+	moved, ok := (*envelopes)[0].Payload.(windows.Moved)
+	if !ok || moved.ID != screenID || moved.From != before.Bounds || moved.To != want {
+		t.Fatalf("Alt-Right event = %#v", (*envelopes)[0].Payload)
+	}
+}
+
+func TestGridArrowNavigationTracksTabFocusAndDisabledCells(t *testing.T) {
+	model, _, _, _ := newFixtureModel(t, ui.Plain)
+	focus(model, controlID{window: padID, kind: "cell", id: "nw"})
+	update(model, tea.KeyPressMsg{Code: tea.KeyTab})
+	if control, _ := model.focus.Current(); control.id != "ne" || model.presentations[padID].cell != 1 {
+		t.Fatalf("Tab did not synchronize NE: control %+v, index %d", control, model.presentations[padID].cell)
+	}
+	update(model, tea.KeyPressMsg{Code: tea.KeyRight})
+	if control, _ := model.focus.Current(); control.id != "sw" || model.presentations[padID].cell != 2 {
+		t.Fatalf("Right from NE did not select SW: control %+v, index %d", control, model.presentations[padID].cell)
+	}
+	update(model, tea.KeyPressMsg{Code: tea.KeyRight})
+	if control, _ := model.focus.Current(); control.id != "sw" || model.presentations[padID].cell != 2 {
+		t.Fatalf("disabled SE desynchronized selection: control %+v, index %d", control, model.presentations[padID].cell)
+	}
+	update(model, tea.KeyPressMsg{Code: tea.KeyLeft})
+	if control, _ := model.focus.Current(); control.id != "ne" || model.presentations[padID].cell != 1 {
+		t.Fatalf("Left after disabled target did not return to NE: control %+v, index %d", control, model.presentations[padID].cell)
 	}
 }
 
@@ -268,11 +322,27 @@ func TestLifecycleEventsAndRenderingIsInert(t *testing.T) {
 }
 
 func TestResizeClampsWindowsWithoutLosingDrafts(t *testing.T) {
-	model, service, _, _ := newFixtureModel(t, ui.Plain)
+	model, service, _, envelopes := newFixtureModel(t, ui.Plain)
 	field := controlID{window: padID, kind: "field", id: "text"}
 	focus(model, field)
 	update(model, tea.KeyPressMsg{Code: tea.KeyExtended, Text: "kept"})
+	*envelopes = nil
 	update(model, tea.WindowSizeMsg{Width: 30, Height: 10})
+	if len(*envelopes) != 2 {
+		t.Fatalf("resize clamp published %d events, want two moves", len(*envelopes))
+	}
+	for i, id := range []windows.ID{screenID, padID} {
+		moved, ok := (*envelopes)[i].Payload.(windows.Moved)
+		if !ok || moved.ID != id {
+			t.Fatalf("resize event %d = %#v", i, (*envelopes)[i].Payload)
+		}
+	}
+	beforeRender := len(*envelopes)
+	model.View()
+	model.View()
+	if len(*envelopes) != beforeRender {
+		t.Fatal("repeated rendering after resize published events")
+	}
 	for _, id := range []windows.ID{screenID, padID} {
 		w, ok := service.Get(id)
 		if !ok {

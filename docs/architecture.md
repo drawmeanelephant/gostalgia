@@ -438,7 +438,10 @@ Bubble Tea, `Edge`, or drag-message types. A `Window` carries an unchanged
 `window.opened`, `window.focused`, `window.moved`, and `window.closed` payloads
 with a nonempty source through the existing `events.Bus`. Opening focuses the
 new window; focusing raises it; closing the focused window publishes its close
-before the next focus transition. Layout and rendering publish nothing.
+before the next focus transition. Constructing and drawing a frame publishes
+nothing. A real `tea.WindowSizeMsg` can clamp bounds through `Move`, so a resize
+that changes bounds intentionally publishes `window.moved`; repeated `View`
+calls alone never do.
 
 The demonstration opens the existing version-1 **Screen** item/form/action
 fixture and version-2 **Pad** block/meter/grid fixture side by side. Focused Go
@@ -469,7 +472,9 @@ none is hidden behind a claim of universal neutrality:
 - **Focus needs adapter policy.** Nonmodal layers have no `Scope` method in
   alpha.6, so each window is an `Auto(...).ID(...).Scope()` slot with a retained
   `bloom.Focus`. The adapter pushes/pops scopes, remembers each window's
-  control, and supplies F6/Ctrl-W routing. `Focus.Update` handles Tab and
+  control, and supplies F6/Ctrl-W routing. Alt-arrows provide the keyboard
+  equivalent of title dragging through the same clamped `Move` transition.
+  `Focus.Update` handles Tab and
   Press activation, not text editing or window switching. Click-focus is
   initially confined to the old scope, so control-local mouse handlers restore
   the clicked control while activating its window; otherwise the first click

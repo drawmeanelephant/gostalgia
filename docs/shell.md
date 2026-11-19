@@ -143,8 +143,9 @@ go run ./internal/experience/experimental/windows/cmd/windowdemo
 ```
 
 It opens the existing Screen and Pad presentation fixtures in two bloom layers.
-Drag titles to move them, click to focus and raise, press F6 to switch focus,
-Tab/Shift-Tab through the focused window's controls, Enter to emit its semantic
+Drag titles or use Alt-arrows to move them, click to focus and raise, press F6
+to switch focus, Tab/Shift-Tab through the focused window's controls, Enter to
+emit its semantic
 SDK action, Ctrl-W or its border `[X]` to close it, and Ctrl-C to exit. Each
 window retains its own draft. Typed open/focus/move/close events go through the
 existing event bus; drawing publishes no events.
