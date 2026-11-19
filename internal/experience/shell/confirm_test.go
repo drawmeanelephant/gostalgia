@@ -120,6 +120,12 @@ func dialogWords(m *Model) string {
 	return strings.Join(words, " ")
 }
 
+// deliverPoll delivers rows as the result of a process poll sent now.
+func deliverPoll(m *Model, rows []taskmanager.ProcessRow) {
+	m.procSent++
+	m.Update(procUpdateMsg{procs: rows, seq: m.procSent})
+}
+
 // selectPID moves the Task Manager selection to pid.
 func selectPID(t *testing.T, m *Model, pid int32) {
 	t.Helper()
@@ -322,7 +328,7 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 			if m.confirm.active != confirmProceed {
 				t.Fatal("stop was not confirmable before the relaunch")
 			}
-			m.Update(procUpdateMsg{procs: poll.rows(m.tasks.Processes())})
+			deliverPoll(m, poll.rows(m.tasks.Processes()))
 			if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
 				t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
 			}
@@ -340,7 +346,7 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 		m, rec := recordingFixture(t)
 		rows := m.tasks.Processes()
 		rows[1].ID = 3
-		m.Update(procUpdateMsg{procs: rows})
+		deliverPoll(m, rows)
 		m.setMode(modeLauncher)
 		m.selected = 0
 		act(t, m, key(tea.KeyF3))
@@ -350,11 +356,40 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 			t.Fatalf("live app's stop sent %v", got)
 		}
 	})
+	// Polls overlap: a slow result sent before a newer one never replaces
+	// it, and one sent before the dialog opened proves nothing missing.
+	t.Run("overlapping polls", func(t *testing.T) {
+		m, rec := recordingFixture(t)
+		m.setMode(modeLauncher)
+		m.selected = 0
+		old := m.tasks.Processes()
+		stale := append(append([]taskmanager.ProcessRow(nil), old[:1]...), old[2:]...)
+		m.procSent++ // a poll in flight as the dialog opens
+		early := m.procSent
+		act(t, m, key(tea.KeyF3))
+		act(t, m, tabKey)
+		m.Update(procUpdateMsg{procs: stale, seq: early})
+		if m.confirm.active != confirmProceed || m.confirmBlocked(*m.confirm) != "" {
+			t.Fatalf("a poll sent before the dialog disabled it:\n%s", dialogText(m))
+		}
+		slow, newer := m.procSent+1, m.procSent+2 // slow is overtaken by newer
+		m.procSent += 2
+		relaunched := append(append([]taskmanager.ProcessRow(nil), stale...), taskmanager.ProcessRow{ID: 45, Name: "com.gostalgia.echo", Kind: "child", State: "running"})
+		m.Update(procUpdateMsg{procs: relaunched, seq: newer})
+		m.Update(procUpdateMsg{procs: old, seq: slow})
+		if rows := m.tasks.Processes(); rows[len(rows)-1].ID != 45 {
+			t.Fatalf("an older poll replaced a newer one: %+v", rows)
+		}
+		act(t, m, enterKey)
+		if got := rec.destructive(); len(got) != 0 {
+			t.Fatalf("stale confirmation sent %v", got)
+		}
+	})
 	// An older instance's ended row beside the live one disables nothing.
 	t.Run("ended rows of older instances", func(t *testing.T) {
 		m, rec := recordingFixture(t)
 		rows := append(m.tasks.Processes(), taskmanager.ProcessRow{ID: 3, Name: "com.gostalgia.echo", Kind: "child", State: "stopped"})
-		m.Update(procUpdateMsg{procs: rows})
+		deliverPoll(m, rows)
 		m.setMode(modeLauncher)
 		m.selected = 0
 		act(t, m, key(tea.KeyF3))
@@ -386,7 +421,7 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 		act(t, m, tabKey)
 		rows := m.tasks.Processes()
 		rows[1].State = "stopped"
-		m.Update(procUpdateMsg{procs: rows})
+		deliverPoll(m, rows)
 		act(t, m, enterKey)
 		if got := rec.destructive(); len(got) != 0 {
 			t.Fatalf("confirmed a stopped process: %v", got)
@@ -402,7 +437,7 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 		act(t, m, typed("x"))
 		rows := m.tasks.Processes()
 		rows = append([]taskmanager.ProcessRow{{ID: 3, Name: "newcomer", State: "running"}}, rows...)
-		m.Update(procUpdateMsg{procs: rows})
+		deliverPoll(m, rows)
 		if sel := m.tasks.SelectedProcess(); sel == nil || sel.ID == 7 {
 			t.Fatalf("fixture did not move the selection off PID 7: %+v", sel)
 		}
@@ -494,6 +529,16 @@ func TestDisabledConfirmationNeverRuns(t *testing.T) {
 		act(t, m, enterKey)
 		if got := rec.destructive(); len(got) != 0 {
 			t.Fatalf("stopped a stopped or unknown app: %v", got)
+		}
+	})
+	t.Run("busy shell keeps the app's PID in view", func(t *testing.T) {
+		m, _ := recordingFixture(t)
+		m.setMode(modeLauncher)
+		m.selected = 0
+		act(t, m, key(tea.KeyF3))
+		m.busy = true
+		if words := dialogWords(m); !strings.Contains(words, "Another command is still running.") || !strings.Contains(words, "PID 7. Unsaved work may be lost.") {
+			t.Fatalf("busy dialog lost its target:\n%s", dialogText(m))
 		}
 	})
 	t.Run("F3 on a stopped app", func(t *testing.T) {

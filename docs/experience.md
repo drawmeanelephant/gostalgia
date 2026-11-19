@@ -316,9 +316,11 @@ Destructive actions open a `kit.Dialog` layer before sending any request:
   another app or process. Availability is checked again when Enter is
   pressed. Because `app/stop` names only the app, an app stop is also
   checked against the polled process table: it is disabled when any poll
-  shows the dialog's PID ended, or when a poll taken after the dialog opened
-  no longer lists that PID or shows the app's ID live under another PID. A
-  disabled app stop names the app instead of warning about unsaved work.
+  shows the dialog's PID ended, or when a poll sent after the dialog opened
+  no longer lists that PID or shows the app's ID live under another PID.
+  Polls overlap, so a result older than the one the table already shows is
+  dropped. Once its instance is gone, an app stop names the app instead of
+  warning about unsaved work.
 - `Cancel` is focused when the dialog opens. `Tab`/`→` and
   `Shift-Tab`/`←` move between enabled actions, `Enter` chooses the focused
   one, and `Esc` cancels. Canceling sends nothing; confirming sends exactly

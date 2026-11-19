@@ -37,7 +37,7 @@ type confirmation struct {
 	appID string
 	name  string
 	pid   int32
-	// polls is the shell's process-poll count when the dialog opened.
+	// polls is the last process poll sent before the dialog opened.
 	polls int
 	// typed reaps through the shell command, so its result lands in the
 	// transcript as a typed reap always has.
@@ -89,7 +89,7 @@ func (m *Model) run(line string) tea.Cmd {
 
 func (m *Model) openConfirm(c confirmation) {
 	c.active = confirmCancel
-	c.polls = m.procPolls
+	c.polls = m.procSent
 	m.confirm = &c
 }
 
@@ -119,33 +119,7 @@ func (m *Model) confirmBlocked(c confirmation) string {
 		if c.pid == 0 {
 			return name + " is not running."
 		}
-		running := false
-		for _, a := range m.apps {
-			if a.Manifest.ID == c.appID {
-				running = a.Running && a.PID == c.pid
-			}
-		}
-		// The app list refreshes only after commands, but the process table
-		// is polled, and app/stop names only the app, so the table can show
-		// that confirming would stop an instance the dialog never showed.
-		// An ended PID never runs again, so any poll proves it. A missing
-		// PID, or the app (a process named by its ID) live under another
-		// PID, counts only from a poll since the dialog opened: an older
-		// table can predate the app list the dialog was built from.
-		if running && m.tasks != nil {
-			fresh, seen := m.procPolls > c.polls, false
-			for _, p := range m.tasks.Processes() {
-				switch {
-				case p.ID == c.pid:
-					seen = true
-					running = running && stoppable(p.State)
-				case fresh && p.Name == c.appID && stoppable(p.State):
-					running = false
-				}
-			}
-			running = running && (seen || !fresh)
-		}
-		if !running {
+		if !m.stopTargetLive(c) {
 			return fmt.Sprintf("%s is no longer running as PID %d.", name, c.pid)
 		}
 	case confirmStopProcess:
@@ -164,6 +138,38 @@ func (m *Model) confirmBlocked(c confirmation) string {
 	return ""
 }
 
+// stopTargetLive reports whether the app instance an app-stop dialog
+// showed is still the one app/stop would reach.
+func (m *Model) stopTargetLive(c confirmation) bool {
+	running := false
+	for _, a := range m.apps {
+		if a.Manifest.ID == c.appID {
+			running = a.Running && a.PID == c.pid
+		}
+	}
+	// The app list refreshes only after commands, but the process table
+	// is polled, and app/stop names only the app, so the table can show
+	// that confirming would stop an instance the dialog never showed. An
+	// ended PID never runs again, so any poll proves it. A missing PID, or
+	// the app (a process named by its ID) live under another PID, counts
+	// only from a poll sent after the dialog opened: an older table can
+	// predate the app list the dialog was built from.
+	if running && m.tasks != nil {
+		fresh, seen := m.procShown > c.polls, false
+		for _, p := range m.tasks.Processes() {
+			switch {
+			case p.ID == c.pid:
+				seen = true
+				running = running && stoppable(p.State)
+			case fresh && p.Name == c.appID && stoppable(p.State):
+				running = false
+			}
+		}
+		running = running && (seen || !fresh)
+	}
+	return running
+}
+
 // confirmDialog is the open confirmation as a kit dialog.
 func (m *Model) confirmDialog() ui.Dialog {
 	c := *m.confirm
@@ -177,7 +183,7 @@ func (m *Model) confirmDialog() ui.Dialog {
 		title, verb = "Stop "+viewText(c.name)+"?", "Stop app"
 		body = fmt.Sprintf("Stops %s (%s), PID %d. Unsaved work may be lost.",
 			viewText(c.name), viewText(c.appID), c.pid)
-		if c.pid == 0 || blocked != "" {
+		if c.pid == 0 || !m.stopTargetLive(c) {
 			// The reason already names the PID; the warning no longer applies.
 			body = fmt.Sprintf("App: %s (%s).", viewText(c.name), viewText(c.appID))
 		}

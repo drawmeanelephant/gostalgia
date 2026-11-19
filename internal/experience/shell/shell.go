@@ -85,6 +85,8 @@ type tickMsg time.Time
 type procUpdateMsg struct {
 	procs []taskmanager.ProcessRow
 	err   error
+	// seq numbers the poll when it was sent.
+	seq int
 }
 type procActionMsg struct {
 	status string
@@ -152,9 +154,11 @@ type Model struct {
 	// procPending is set while a confirmed process stop or reap is in
 	// flight, so another cannot be confirmed until its result arrives.
 	procPending bool
-	// procPolls counts process-table updates, so a confirmation can tell
-	// a poll newer than itself from an older one.
-	procPolls int
+	// procSent numbers process polls as they are sent and procShown is
+	// the newest one the table shows. Polls overlap, so a slow older
+	// result arriving after a newer one is dropped, and a confirmation
+	// can tell a poll sent after it opened from an older one.
+	procSent, procShown int
 
 	taskView  bool
 	notifView bool
@@ -320,11 +324,13 @@ func tickCmd() tea.Cmd {
 func (m *Model) pollProcessesCmd() tea.Cmd {
 	client := m.client
 	ctx := m.ctx
+	m.procSent++
+	seq := m.procSent
 	return func() tea.Msg {
 		c, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
 		rows, err := taskmanager.FetchProcesses(c, client)
-		return procUpdateMsg{procs: rows, err: err}
+		return procUpdateMsg{procs: rows, err: err, seq: seq}
 	}
 }
 
@@ -562,7 +568,6 @@ func (m *Model) SetColorModeByName(name string) bool {
 
 func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
 	m.tasks.SetProcesses(procs)
-	m.procPolls++
 	var cmds []tea.Cmd
 
 	for _, p := range procs {
@@ -862,7 +867,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case procUpdateMsg:
 		m.initExperience()
-		if msg.err == nil && msg.procs != nil {
+		if msg.err == nil && msg.procs != nil && msg.seq >= m.procShown {
+			m.procShown = msg.seq
 			cmd := m.handleProcessUpdates(msg.procs)
 			return m, cmd
 		}
