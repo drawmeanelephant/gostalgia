@@ -542,11 +542,26 @@ func TestSanitizedSemanticLabels(t *testing.T) {
 }
 
 func TestRealShapingProducesTitleGlyphs(t *testing.T) {
-	// The spike claims real text, not just hit areas: the embedded Go fonts
-	// must shape the fixture titles to nonzero dimensions.
+	// The spike claims real text, not just hit areas. The title's semantic
+	// area cannot show that: its inset and flexed slot give it extent even
+	// for an empty title. Measure the label itself under loose constraints so
+	// its width comes only from shaped glyph advances.
 	h, _, _ := newFixtureModel(t)
-	title := mustFind(t, h.semantics(), "Screen / form", "title")
-	if title.Desc.Bounds.Dx() <= 0 || title.Desc.Bounds.Dy() != titleH {
-		t.Fatalf("title area has no extent: %v", title.Desc.Bounds)
+	title := measureLabel(h.model, "Screen / form")
+	if title.X <= 0 || title.Y <= 0 {
+		t.Fatalf("title shaped to %v, want positive extent", title)
 	}
+	if longer := measureLabel(h.model, "Screen / form / and more"); longer.X <= title.X {
+		t.Fatalf("longer title is %dpx wide, want more than %dpx", longer.X, title.X)
+	}
+}
+
+func measureLabel(m *Model, s string) image.Point {
+	var ops op.Ops
+	gtx := layout.Context{
+		Ops:         &ops,
+		Constraints: layout.Constraints{Max: image.Pt(1000, 100)},
+		Metric:      unit.Metric{PxPerDp: 1, PxPerSp: 1},
+	}
+	return m.label(gtx, s, m.colors.text).Size
 }
