@@ -33,7 +33,7 @@ runtime (`gostalgia boot --root /tmp/gs`). Shell attachment is not implemented.
 | `backup [export|inspect|preview|restore]` | Export portable backup, preview conflicts, or restore workspace |
 | `ps`, `status` | Process table with capability grants / runtime status |
 | `cls`, `clear` | Clear transcript |
-| `motion [on\|off]` | Enable (`on`) or disable (`off`) ReducedMotion for this shell; see [Finite per-session motion](experience.md#finite-per-session-motion-issue-213) |
+| `motion [on\|off]` | Enable (`on`) or disable (`off`) ReducedMotion for this shell; see [Finite per-session motion](experience.md#finite-per-session-motion-issues-213-239-240) |
 | `mouse [on\|off]` | Show, or turn on or off, mouse input for this shell; see [Mouse and clipboard](#mouse-and-clipboard-issue-211) |
 | `exit`, `quit` | Leave shell and shut down owned runtime |
 | `shutdown` | Request runtime shutdown over IPC |
@@ -435,18 +435,33 @@ event-type request on the returned `tea.View`.
   `BackgroundColorMsg` and `ColorProfileMsg` replies never reach the root.
   Separate models, such as concurrent SSH attaches in one process, never
   share a root.
-- **Finite failed-launch feedback (Issue #213).** The only attached transition
-  is a 160 ms badge `fx.Shake` after a failed app launch. Its `anim.Value` and
+- **Finite event motion (Issues #213, #239, #240).** The attached transitions are a
+  160 ms badge `fx.Shake` after a failed app launch, a 140 ms `fx.Iris` opening
+  reveal for the palette and confirmation dialogs, a 160 ms `fx.Wipe` entrance for
+  the newest toast identity, and one 180 ms `fx.Unfold` CRT-style startup reveal
+  wrapping the whole frame. Every opening entry point and toast arrival returns the
+  scheduling command; the startup reveal starts only after the terminal delivers
+  usable geometry and the effective initial policy is read, in either order. A
+  ReducedMotion initial policy consumes the startup event settled, with no effect or
+  animation command, and `motion on` means ReducedMotion. Every effect removes its
+  transition node at progress one and schedules no follow-up. Their `anim.Value`s and
   the root receive the same per-model clock through `anim.Clock` and
   `bloom.WithClock`; tests advance both without wall-clock sleeps. No
-  `anim.SetMotion`, palette/dialog/toast/layout transition, or idle animation
-  is attached. ReducedMotion removes the value and transition, returns no
-  animation-frame command even when enabled during an active shake, keeps
-  `WithCopyFlash(false)`, and preserves the pre-#213 static goldens. Session
-  `motion` overrides survive later polls and theme changes. Without one,
+  `anim.SetMotion` or idle animation is attached. Startup is consumed once per
+  model: configuration polls, theme changes, resizes, rebuilt roots, stale frames,
+  and switching back from ReducedMotion never replay it, and a mid-reveal policy
+  change consumes the canceled event.
+  ReducedMotion attaches none of them, returns no animation-frame command,
+  snap-cancels an active effect when enabled mid-effect, keeps
+  `WithCopyFlash(false)`, and preserves the static goldens. Its `Set` also
+  invalidates the outstanding generation, so a stale frame cannot revive or
+  extend an effect or restart it after motion returns. Session `motion`
+  overrides survive later polls and theme changes. Without one,
   explicit non-default config wins; otherwise the theme default wins, so the
   built-in `false` default cannot enable motion in a default-reduced theme.
-  Existing process/config/log polling and notification expiry remain functional work.
+  Unchanged polls, resizes, theme changes, and repeated renders never replay
+  an entrance. Existing process/config/log polling and notification expiry
+  remain functional work.
 
 ### Home wordmark and ASCII chrome (Issue #214)
 

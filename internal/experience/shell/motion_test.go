@@ -30,6 +30,20 @@ func (c *fakeMotionClock) Now() time.Time { return c.now }
 
 func (c *fakeMotionClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
+func (c *fakeMotionClock) Set(t time.Time) { c.now = t }
+
+// settleFiniteMotion snaps every active finite effect to its endpoint, as
+// time passing would, so layout and input tests assert settled screens
+// without sleeping or depending on real timers. Tests that inspect a
+// transition drive its frames explicitly instead.
+func settleFiniteMotion(m *Model) {
+	m.motion.launchShake.Set(1)
+	m.motion.overlay.Set(1)
+	m.motion.toast.Set(1)
+	m.motion.startup.Set(1)
+	m.motion.startupPhase = startupConsumed
+}
+
 func motionModel(th theme.Theme, mode ui.ColorMode, clock *fakeMotionClock) *Model {
 	m := NewWithTheme(context.Background(), noopCaller{}, nil, th, mode)
 	m.motion.now = clock.Now
@@ -399,11 +413,15 @@ func TestMotionIdleAndFunctionalPollingStayDistinct(t *testing.T) {
 	m.Update(frame)
 
 	m.notifs.Flash(notifications.Notification{Title: "functional expiry", Message: "manager-owned"})
-	for range 8 {
+	for i := range 8 {
 		_, cmd = m.Update(tickMsg(clock.Now()))
 		messages := commandMessages(t, cmd)
-		if animationFrames(messages) != 0 {
-			t.Fatal("functional polling scheduled an animation frame")
+		if frames := animationFrames(messages); i == 0 {
+			if frames != 1 {
+				t.Fatal("the arriving toast did not schedule exactly one entrance frame")
+			}
+		} else if frames != 0 {
+			t.Fatal("functional polling replayed the toast entrance")
 		}
 		if len(messages) == 0 {
 			t.Fatal("functional polling lost its refresh commands")

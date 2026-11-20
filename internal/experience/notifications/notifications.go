@@ -370,6 +370,25 @@ func (m *Manager) RenderToasts(kit ui.Kit, width int) string {
 // ToastRows formats the active toasts oldest first, each as its rows at
 // width, and the flood-bounding notice, if any, that goes beneath them.
 func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice string) {
+	blocks, notice := m.ToastBlocks(kit, width)
+	toasts = make([][]string, len(blocks))
+	for i, b := range blocks {
+		toasts[i] = b.Rows
+	}
+	return toasts, notice
+}
+
+// ToastBlock is one active toast's rendered rows and the identity they belong
+// to. The shell keys an entrance effect by ID, so a new arrival animates only
+// its own block and existing toasts never replay.
+type ToastBlock struct {
+	ID   string
+	Rows []string
+}
+
+// ToastBlocks formats the active toasts oldest first with their identities,
+// plus the flood-bounding notice, if any, that goes beneath them.
+func (m *Manager) ToastBlocks(kit ui.Kit, width int) (blocks []ToastBlock, notice string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -389,16 +408,16 @@ func (m *Manager) ToastRows(kit ui.Kit, width int) (toasts [][]string, notice st
 				wrapped = wrapped[:maxToastRows]
 				wrapped[maxToastRows-1] = kit.Truncate(wrapped[maxToastRows-1]+kit.Hint("…"), width)
 			}
-			toasts = append(toasts, wrapped)
+			blocks = append(blocks, ToastBlock{ID: t.ID, Rows: wrapped})
 			continue
 		}
-		toasts = append(toasts, []string{kit.Truncate(line, width)})
+		blocks = append(blocks, ToastBlock{ID: t.ID, Rows: []string{kit.Truncate(line, width)}})
 	}
 
 	if m.droppedToasts > 0 {
 		notice = kit.Truncate(kit.Muted(fmt.Sprintf("(+%d alerts suppressed by flood bounding)", m.droppedToasts)), width)
 	}
-	return toasts, notice
+	return blocks, notice
 }
 
 // severityFor is a level's mandatory cue: the symbol and label every surface

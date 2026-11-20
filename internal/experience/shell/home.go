@@ -335,8 +335,7 @@ func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "/":
-		m.openPalette()
-		return m, nil
+		return m, m.openPalette()
 	case "esc":
 		m.setMode(modePrompt)
 		return m, nil

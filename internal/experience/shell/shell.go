@@ -142,6 +142,10 @@ type Model struct {
 	client        Caller
 	closed        <-chan struct{}
 	width, height int
+	// geometryKnown distinguishes the constructor's placeholder size from a
+	// size the terminal actually delivered, so startup motion waits for
+	// usable geometry instead of revealing before the terminal reports it.
+	geometryKnown bool
 	cwd           string
 	input         []rune
 	cursor        int
@@ -223,8 +227,12 @@ type Model struct {
 
 	shortcuts           map[string]string
 	initialConfigLoaded bool
-	pendingTheme        string // user theme name with an in-flight theme/get; only the latest resolves
-	unresolvedTheme     string // config theme name that failed user-theme resolution; not retried
+	// initialPolicyKnown marks an effective config read, not a partial live
+	// update. The startup reveal waits for it so the first policy, including
+	// a configured ReducedMotion value, is the one it honors.
+	initialPolicyKnown bool
+	pendingTheme       string // user theme name with an in-flight theme/get; only the latest resolves
+	unresolvedTheme    string // config theme name that failed user-theme resolution; not retried
 
 	attached     bool
 	sessionID    string
@@ -1154,7 +1162,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rootCmd = m.root().Update(msg)
 	}
 	model, cmd := m.update(msg)
-	return model, tea.Batch(rootCmd, cmd, m.updateMotion(msg))
+	// Toast arrivals are recorded by services in the shared manager, so the
+	// shell consumes a new identity on its next message. No command is
+	// scheduled for an identity it has already seen.
+	toastCmd := m.syncToastMotion()
+	startupCmd := m.syncStartupMotion()
+	return model, tea.Batch(rootCmd, cmd, toastCmd, startupCmd, m.updateMotion(msg))
 }
 
 func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1196,6 +1209,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case configUpdateMsg:
 		var themeCmd tea.Cmd
+		if msg.loaded {
+			m.initialPolicyKnown = true
+		}
 		if msg.theme != "" {
 			if m.SetThemeByName(msg.theme) {
 				m.pendingTheme = ""
@@ -1312,6 +1328,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.geometryKnown = true
 		// Rows and cells moved; the pointer's old target identity no longer
 		// describes what is under it.
 		m.clearHoverAll()
@@ -1564,10 +1581,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isShortcut("palette", keyStr) || keyStr == "super+space" {
 			if m.paletteOpen {
 				m.closePalette()
-			} else {
-				m.openPalette()
+				return m, nil
 			}
-			return m, nil
+			return m, m.openPalette()
 		}
 		if m.paletteOpen {
 			return m.handlePaletteKey(msg)
@@ -1677,6 +1693,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.viewKey(msg)
 		}
 		if m.taskView {
+			var confirmCmd tea.Cmd
 			switch msg.String() {
 			case "up", "k":
 				m.tasks.SelectPrev()
@@ -1710,15 +1727,15 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "x":
 				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
 					if sel := m.tasks.SelectedProcess(); sel != nil {
-						m.openConfirm(confirmation{kind: confirmStopProcess, pid: sel.ID, name: sel.Name})
+						confirmCmd = m.openConfirm(confirmation{kind: confirmStopProcess, pid: sel.ID, name: sel.Name})
 					}
 				}
 			case "r":
 				if m.tasks.Mode() == taskmanager.ModeTable && !msg.IsRepeat {
-					m.openConfirm(confirmation{kind: confirmReap})
+					confirmCmd = m.openConfirm(confirmation{kind: confirmReap})
 				}
 			}
-			return m, nil
+			return m, confirmCmd
 		}
 		if m.notifView {
 			switch msg.String() {
@@ -1905,8 +1922,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Text-bearing keys insert before control-chord handling so Windows
 		// AltGr chords (Ctrl+Alt with text) reach the input.
 		if len(m.input) == 0 && text == "/" {
-			m.openPalette()
-			return m, nil
+			return m, m.openPalette()
 		}
 		m.insertPromptText(text)
 		return m, nil
@@ -1957,8 +1973,7 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if strings.EqualFold(line, "palette") {
 			m.input = nil
 			m.cursor = 0
-			m.openPalette()
-			return m, nil
+			return m, m.openPalette()
 		}
 		return m, m.run(line)
 	case tea.KeyBackspace:

@@ -139,9 +139,12 @@ func TestTaskManagerToggleAndNavigation(t *testing.T) {
 
 	// 'x' asks before stopping the worker; Tab moves to Stop and Enter
 	// confirms. (Before #209, 'x' stopped the process immediately.)
-	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"}); cmd != nil || m.Focus() != FocusDialog {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"}); m.Focus() != FocusDialog {
 		t.Fatalf("'x' must open a confirmation, focus %v", m.Focus())
+	} else if animationFrames(commandMessages(t, cmd)) != 1 {
+		t.Fatal("'x' opened the dialog without scheduling its opening reveal")
 	}
+	settleFiniteMotion(m)
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	_, stop := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if stop == nil || len(client.stopped) != 0 {

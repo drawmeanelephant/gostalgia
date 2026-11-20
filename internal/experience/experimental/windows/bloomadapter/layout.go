@@ -1,31 +1,98 @@
 package bloomadapter
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"strings"
 
 	"bloomfx.dev/bloom"
+	"bloomfx.dev/bloom/fx"
 	"bloomfx.dev/bloom/on"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"gostalgia/internal/experience/experimental/windows"
+	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+)
+
+const (
+	closeLabel = "[X]"
+	// topBorderSpan is the border space both corners and the margins inside
+	// them take from a window's top edge before the title and close controls
+	// can share the rest.
+	topBorderSpan = 4
+	// shadowTint is how far the shadow band's background moves toward the
+	// theme's muted tone.
+	shadowTint = 0.35
 )
 
 // View composes the base help and open windows. Rendering performs no service
 // transition and therefore cannot manufacture lifecycle events.
-func (m *Model) View() tea.View {
-	base := bloom.Box(m.kit.TextStyle(), bloom.Column(
+func (m *Model) View() tea.View { return m.compose(m.baseLayer()) }
+
+func (m *Model) baseLayer() bloom.Child {
+	return bloom.Box(m.kit.TextStyle(), bloom.Column(
 		bloom.Fill(bloom.Text(m.kit.Text(ui.Sanitize("EXPERIMENTAL WINDOW SPIKE\n"+m.status))).Style(m.kit.TextStyle())),
 		bloom.Fixed(1, bloom.Text(m.kit.Text("F6 focus  Alt-arrows move  Ctrl-W close  Tab controls  Enter act  Ctrl-C exit"))),
 	))
+}
+
+// compose draws base beneath the open windows in service z-order.
+func (m *Model) compose(base bloom.Child) tea.View {
+	view := m.root.View(m.width, m.height, m.overlay(base))
+	view.Content = m.toProfile(view.Content)
+	view.AltScreen = true
+	return view
+}
+
+// toProfile converts blended shadow colors to the kit's explicit profile.
+// Blending mixes in 24-bit even when the kit is ANSI256; Plain and other
+// modes attach no shadow at all.
+func (m *Model) toProfile(content string) string {
+	if len(m.shadow()) == 0 || m.kit.Mode() != ui.ANSI256 {
+		return content
+	}
+	var buf bytes.Buffer
+	w := colorprofile.Writer{Forward: &buf, Profile: colorprofile.ANSI256}
+	if _, err := w.WriteString(content); err != nil {
+		return content
+	}
+	return buf.String()
+}
+
+// shadow is the static depth beneath a window: the background of the cells in
+// the band moves toward the theme's muted tone while their text stays put, so
+// the window reads as a raised surface without hiding what it overlaps. Plain
+// and Monochrome carry meaning without color, so they get no dimming effect.
+func (m *Model) shadow() []fx.Effect {
+	switch mode := m.kit.Mode(); {
+	case mode != ui.ANSI256 && mode != ui.TrueColor,
+		m.kit.Theme().Name == theme.Monochrome().Name:
+		return nil
+	}
+	return []fx.Effect{fx.Recolor{Bg: m.kit.Theme().Palette.Muted, Amount: shadowTint}}
+}
+
+func (m *Model) overlay(base bloom.Child) bloom.Child {
 	layers := make([]bloom.LayerNode, 0, len(m.service.Order()))
 	for _, w := range m.service.Windows() {
 		layers = append(layers, m.windowLayer(w))
 	}
-	view := m.root.View(m.width, m.height, bloom.Overlay(base, layers...))
-	view.AltScreen = true
-	return view
+	return bloom.Overlay(base, layers...)
+}
+
+// windowStyle gives the whole window an explicit opaque surface. The border
+// takes the same background so title rows and blank body cells cannot show
+// canvas text through frame glyphs.
+func (m *Model) windowStyle() lipgloss.Style {
+	style := m.kit.TextStyle().Border(m.kit.Theme().Borders.Panel)
+	if m.kit.Mode() != ui.Plain {
+		_, bg := m.kit.Colors()
+		style = style.BorderBackground(bg)
+	}
+	return style
 }
 
 func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
@@ -35,11 +102,17 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 	closeControl := controlID{window: id, kind: "close"}
 	focused, _ := m.service.Focused()
 
+	// The close control is placed first, from the right edge, at its actual
+	// decorated width, because it must survive every valid window width. The
+	// title then takes whatever cells remain, including none.
+	closeText := m.closeControlText(b.Width, m.focus.Is(closeControl))
+	titleWidth := max(0, b.Width-topBorderSpan-lipgloss.Width(closeText)-1)
+
 	titleText := w.Title
 	if focused == id {
 		titleText = m.kit.Theme().Focus.Marker + " " + titleText
 	}
-	titleText = m.kit.Truncate(ui.Sanitize(titleText), max(1, b.Width-10))
+	titleText = m.kit.Truncate(ui.Sanitize(titleText), titleWidth)
 	title := bloom.Text(m.kit.Heading(titleText)).ID(titleControl).Truncate().On(
 		on.Drag(func(e on.Event) tea.Cmd {
 			m.drag(id, e)
@@ -52,7 +125,7 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 			return nil
 		}),
 	)
-	closeButton := m.controlText("[X]", m.focus.Is(closeControl)).ID(closeControl).Focusable().On(
+	closeButton := bloom.Text(closeText).ID(closeControl).Truncate().Focusable().On(
 		controlMouse(id, closeControl, m),
 		on.Press(func() tea.Cmd {
 			m.close(id)
@@ -60,22 +133,36 @@ func (m *Model) windowLayer(w windows.Window) bloom.LayerNode {
 		}),
 	)
 	body := m.presentationBody(id)
-	style := m.kit.TextStyle().Border(m.kit.Theme().Borders.Panel)
-	box := bloom.Box(style, body).
-		Edge(bloom.Top, bloom.Start, title).
-		Edge(bloom.Top, bloom.End, closeButton)
+	box := bloom.Box(m.windowStyle(), body).
+		Edge(bloom.Top, bloom.End, closeButton).
+		Edge(bloom.Top, bloom.Start, title)
 	scoped := bloom.Auto(box).ID(scopeID{window: id}).Scope()
 	return bloom.Layer(scoped).
 		ID(layerID{window: id}).
 		Anchor(bloom.Start, bloom.Start).
 		Offset(b.X, b.Y).
 		Size(b.Width, b.Height).
+		Shadow(2, 1, m.shadow()...).
 		On(on.Mouse(func(e on.Event) tea.Cmd {
 			if click, ok := e.Msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
 				m.activate(id, controlID{})
 			}
 			return nil
 		}))
+}
+
+// closeControlText is the text the top-border close control renders. That
+// control is allocated from the right edge before the title, so its focus
+// decoration is shed before the [X] itself could be clipped.
+func (m *Model) closeControlText(width int, focused bool) string {
+	label := ui.Sanitize(closeLabel)
+	if focused {
+		decorated := m.kit.FocusText(label)
+		if lipgloss.Width(decorated) <= max(0, width-topBorderSpan) {
+			return decorated
+		}
+	}
+	return m.kit.Text(label)
 }
 
 func controlMouse(id windows.ID, control controlID, m *Model) on.Handler {

@@ -234,6 +234,16 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	}
 	await("init app list") // Init's app list.
 	p.Send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// Startup's CRT reveal may begin before the first paint and draws from a
+	// blank frame, so wait for the settled shell before exercising it. This is
+	// a readiness wait, not motion timing evidence.
+	rendered := time.Now().Add(5 * time.Second)
+	for !strings.Contains(output.String(), "G O S T A L G I A") {
+		if time.Now().After(rendered) {
+			t.Fatal("Bubble Tea never rendered the styled shell")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	submit := func(line, step string) resultMsg {
 		t.Helper()
 		p.Send(tea.KeyPressMsg{Code: tea.KeyExtended, Text: line})

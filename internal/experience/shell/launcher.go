@@ -208,7 +208,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.append(entry{viewText(a.Manifest.Name) + " is not running.", "error"})
 				return m, nil
 			}
-			m.openConfirm(stopAppConfirmation(a))
+			return m, m.openConfirm(stopAppConfirmation(a))
 		}
 		return m, nil
 	case "f4":

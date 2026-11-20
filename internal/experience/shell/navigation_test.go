@@ -209,9 +209,12 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 
 	// F3 on the selected running app asks first, then Tab and Enter
 	// confirm the stop. (Before #209, F3 returned the stop command itself.)
-	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF3}); cmd != nil || m.Focus() != FocusDialog {
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF3}); m.Focus() != FocusDialog {
 		t.Fatalf("F3 must open a confirmation, focus %v", m.Focus())
+	} else if animationFrames(commandMessages(t, cmd)) != 1 {
+		t.Fatal("F3 opened the dialog without scheduling its opening reveal")
 	}
+	settleFiniteMotion(m)
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	_, stopCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if stopCmd == nil {

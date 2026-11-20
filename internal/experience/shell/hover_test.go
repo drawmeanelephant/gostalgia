@@ -71,6 +71,7 @@ func hoverClasses() []struct {
 		}},
 		{"palette item", func(t *testing.T, m *Model) hoverPoint {
 			m.openPalette()
+			settleFiniteMotion(m)
 			r := rectOf(t, m, layerPalette)
 			p, ok := findText(m, r, "help")
 			if !ok {
@@ -409,6 +410,7 @@ func TestHoverRespectsPaletteAndDialogBoundaries(t *testing.T) {
 	}
 
 	m.openPalette()
+	settleFiniteMotion(m)
 	mouse(t, m, tea.MouseMotionMsg{X: p.X + 1, Y: p.Y})
 	if m.hover.valid() {
 		t.Fatalf("hover showed under the palette: %+v", m.hover)
@@ -423,6 +425,7 @@ func TestHoverRespectsPaletteAndDialogBoundaries(t *testing.T) {
 	m.closePalette()
 
 	m.openConfirm(confirmation{kind: confirmShutdown})
+	settleFiniteMotion(m)
 	mouse(t, m, tea.MouseMotionMsg{X: p.X + 1, Y: p.Y})
 	if m.hover.valid() {
 		t.Fatalf("hover showed under the dialog: %+v", m.hover)

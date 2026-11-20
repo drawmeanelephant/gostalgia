@@ -349,12 +349,19 @@ panel geometry. The usage rules are in
 the shell's additive mouse input; copies bypass bloom's clipboard, which
 would also send OSC 52, and go through the runtime's `clipboard/write` under
 operator policy ([shell.md](shell.md#mouse-and-clipboard-issue-211)). Since #213
-finite motion is also model-local: the only attached effect is a 160 ms
-failed-launch badge shake, with the same per-model clock injected into
-`bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or copy
-flash and schedules no animation frames; `anim.SetMotion` is never used, and
-idle shells retain only their existing functional polling
-([experience.md](experience.md#finite-per-session-motion-issue-213)). Since #214 the
+finite motion is also model-local: the attached effects are a 160 ms
+failed-launch badge shake, a 140 ms palette/dialog opening reveal, a
+160 ms entrance for the newest toast, and one 180 ms `fx.Unfold` startup
+reveal per model after usable geometry and the effective initial policy are
+known, with the same per-model clock injected
+into `bloom.WithClock` and `anim.Clock`. ReducedMotion attaches no effect or
+copy flash and schedules no animation frames; enabling it mid-effect
+snap-cancels the effect and invalidates its outstanding frame generation.
+A canceled or reduced startup is consumed, so polls, theme changes, resizes,
+rebuilt roots, and later policy changes never replay it.
+`anim.SetMotion` is never used, and idle shells retain only their existing
+functional polling
+([experience.md](experience.md#finite-per-session-motion-issues-213-239-240)). Since #214 the
 Home dashboard also uses `bloom/fig`: the bundled `big` FIGlet font (with two
 tracking cells) falls back to bundled `mini` and then the spaced title according
 to solved content cells. Both fonts are ASCII and are licensed under
@@ -506,6 +513,15 @@ none is hidden behind a claim of universal neutrality:
   stale cells during the terminal's differential repaint even though the new
   full frame was correct. Close therefore returns `tea.ClearScreen` for a full
   repaint; this workaround is adapter-local and adds no animation or idle work.
+- **Window chrome is opaque with static depth.** Each layer fills its solved
+  rectangle with the theme surface, including border glyphs and blank body
+  cells, so canvas text cannot bleed through. A static two-column/one-row
+  shadow tint behind the window gives it visible depth without animation or
+  idle work; Plain and Monochrome omit the color-only effect. The top border
+  places the complete `[X]` control from the right edge before the title, at
+  its actual decorated width. The title takes the remaining cells, down to
+  none, and truncates for narrow, wide-glyph, or hostile text. At very narrow
+  widths the close control sheds its focus decoration before `[X]` would clip.
 - **Presentation rendering is deliberately an adapter subset.** The adapter
   maps SDK items, single-line fields, actions, blocks, meters, and grid cells to
   bloom text controls and owns selection/draft state. It does not reuse the
