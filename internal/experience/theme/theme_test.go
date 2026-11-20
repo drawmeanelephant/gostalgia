@@ -1,6 +1,10 @@
 package theme
 
-import "testing"
+import (
+	"image/color"
+	"reflect"
+	"testing"
+)
 
 func TestNamedThemes(t *testing.T) {
 	themes := []Theme{Nostalgia(), Midnight(), Monochrome(), HighContrast(), HighContrastLight()}
@@ -28,6 +32,38 @@ func TestNamedThemes(t *testing.T) {
 	}
 	if Monochrome().Palette == HighContrast().Palette {
 		t.Fatal("monochrome and high-contrast palettes must differ")
+	}
+}
+
+// termenv picks an ANSI256 cube level as int((v-35)/40) in float64, and Go
+// may fuse that arithmetic into one rounding (arm64 does, amd64 does not). A
+// channel of 115, 155, 195 or 235 makes the quotient exactly an integer, so
+// it can truncate to different levels on different machines, and no styled
+// ANSI256 golden could match on both.
+func TestBuiltinColorsDownsampleTheSameOnEveryArch(t *testing.T) {
+	boundary := map[uint32]bool{115: true, 155: true, 195: true, 235: true}
+	for _, th := range []Theme{Nostalgia(), Midnight(), Monochrome(), HighContrast(), HighContrastLight()} {
+		eachColor(reflect.ValueOf(th), th.Name, func(path string, c color.Color) {
+			r, g, b, _ := c.RGBA()
+			for _, v := range []uint32{r >> 8, g >> 8, b >> 8} {
+				if boundary[v] {
+					t.Errorf("%s %v has channel %d on an ANSI256 cube boundary; move it one step", path, c, v)
+				}
+			}
+		})
+	}
+}
+
+func eachColor(v reflect.Value, path string, visit func(string, color.Color)) {
+	switch v.Kind() {
+	case reflect.Struct:
+		for i := range v.NumField() {
+			eachColor(v.Field(i), path+"."+v.Type().Field(i).Name, visit)
+		}
+	case reflect.Interface:
+		if c, ok := v.Interface().(color.Color); ok && c != nil {
+			visit(path, c)
+		}
 	}
 }
 
