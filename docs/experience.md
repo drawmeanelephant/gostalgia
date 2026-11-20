@@ -22,8 +22,13 @@ Apps still expose environment contracts, not terminal views.
 
 `theme.Nostalgia()` is the default cream/sand surface, slate text, and amber
 accent/header palette. `theme.Midnight()` is an explicitly selected slate
-alternative. Both use thick panel borders, double dialog borders, filled title
-rows, one-cell horizontal panel padding, and a visible focus marker.
+alternative with a deep teal header fill, a bright teal accent, and an inverse
+focus highlight; its header and accent keep their intended hue after ANSI256
+downsampling as well as in TrueColor. Both use thick panel borders, double
+dialog borders, filled title rows, one-cell horizontal panel padding, and a
+visible focus marker. Header labels and panel titles are painted with
+`HeaderText` on `Header`, so every theme stays readable even when its header
+and canvas use opposite lightness.
 
 `theme.Monochrome()` provides an accessible no-color mode featuring pure ASCII
 borders (`+`, `-`, `|`), standard ASCII focus markers (`>`), and explicit bracketed
@@ -62,6 +67,15 @@ resolves every theme color through its own explicit `termenv` profile. It does n
 inspect terminal state, select adaptive colors, consult `NO_COLOR`/`COLORFGBG`, or
 modify Lip Gloss's global renderer. Plain output contains
 no ANSI styling, but retains borders and state/focus symbols.
+
+The transcript draws a two-cell semantic cue column beside its lines: the
+theme's focus marker for a prompt echo, `!` for an error, and two spaces for
+ordinary output. The cues are a viewport gutter, so they identify echo,
+output and error without color in Monochrome and Plain, while colored themes
+also paint each kind with its semantic style. Selecting and copying read the
+logical lines, so cues never appear in copied text and wrapping never repeats
+a cue on a continuation row. A theme or color-profile change restyles the
+records already kept and redraws their cues from the same logical kinds.
 
 `shell.New` selects Nostalgia and ANSI256. `shell.NewWithTheme` accepts the theme
 and mode explicitly for alternate views and deterministic testing. Shell users
@@ -317,8 +331,11 @@ presents three discoverable activity sections:
    `2h 15m`), active process count, registered service count, current user, and
    environment drive indicator sourced directly via `sys/status`.
 2. **Running Applications**: Quick-switch shortcuts for all currently active
-   applications displaying live PIDs. An honest empty notice is displayed when
-   no applications are running, hinting at `F2` to launch apps.
+   applications displaying live PIDs. The list reconciles the accepted
+   `app/list` snapshot with the newest accepted process poll, matching
+   registered app IDs only, so an out-of-band stop or launch updates Home and
+   the header count between app/list refreshes. An honest empty notice is
+   displayed when no applications are running, hinting at `F2` to launch apps.
 3. **Document Shortcuts**: Quick-open links to user files stored under
    `C:\users\guest\documents` (`/users/guest/documents`), discovered via `fs/list`.
    Selecting a document and pressing `Enter` automatically opens and prints it
@@ -513,9 +530,26 @@ scrollable table:
   too. Drawing toasts, or opening and closing the palette or a dialog, never
   advances or restarts a countdown. The Notification Center lists the same
   events itself, so no toasts are drawn over it.
+- **Severity Treatment**: Toasts and Notification Center rows share one
+  mandatory cue per level: `INFO`, `WARN`, or `ERROR` with its own symbol and
+  the theme's state colors. Monochrome and Plain render the literal `[INFO]`,
+  `[WARN]`, and `[ERROR]` instead, so severity never rests on color or bold
+  alone, and Plain emits no escapes. An application's custom badge follows the
+  severity as a supplement and never replaces it; at the narrowest toast it
+  yields first when the title or guidance would not fit. Unseen markers and
+  focus stay independent of the severity cue: selecting or rendering an entry
+  changes neither its level nor its acknowledgement.
 - **Notification Center**: Dedicated full-screen panel listing complete event history,
   timestamps, severities (`INFO`, `WARN`, `ERROR`), and associated PIDs.
+  Compact rows keep the same severity cue beside the title, dropping the
+  custom badge and receipt tag before the title.
   - Unseen vs. Seen distinction: events arrive unread until inspected.
+    Opening the center through any existing route (F6 or its configured
+    shortcut, the Notifications tab, or the `notifications` and `alerts`
+    commands) marks the events already present seen. Rendering alone never
+    changes acknowledgement, and an event that arrives while the center is
+    open stays unseen until it is inspected or `a` marks all seen. The
+    header's `Notifications (n)` count follows that same state.
   - `↑` / `↓`: Select notifications.
   - `Enter`: Mark seen and drill down to crash receipts.
   - `d`: Dismiss selected notification.
@@ -530,6 +564,8 @@ scrollable table:
   notification center entries via `notify/post` with bounded `severity`/`title`/`body`.
   Posts are attributed to the calling app and are subject to DND and flood caps.
 - **Access**: Press `F6` or execute `notifications` or `alerts` from the prompt.
+  Entering the center acknowledges the events present at entry; later arrivals
+  remain unseen until inspected.
 
 ### Crash Receipts (`internal/experience/receipts`)
 

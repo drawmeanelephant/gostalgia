@@ -54,15 +54,16 @@ func launcherCards(selected, n, bodyHeight, top int) (start, end, cardHeight int
 	return start, min(n, start+visible), cardHeight
 }
 
-// launcherCard is a's card, w cells wide and cardHeight rows tall.
-func (m *Model) launcherCard(a appStatus, focused bool, w, cardHeight int) string {
+// launcherCard is a's card, w cells wide and cardHeight rows tall. hovered
+// is the pointer's independent cue, not the keyboard's selection.
+func (m *Model) launcherCard(a appStatus, focused, hovered bool, w, cardHeight int) string {
 	status, state := "READY", theme.Normal
 	if a.Running {
 		status, state = fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success
 	}
 	return m.kit.AppCard(ui.AppCard{
 		Name: a.Manifest.Name, ID: a.Manifest.ID, Version: a.Manifest.Version,
-		Status: status, State: state, Focused: focused,
+		Icon: a.Manifest.Icon, Status: status, State: state, Focused: focused, Hovered: hovered,
 	}, ui.Bounds{Width: w, Height: cardHeight})
 }
 
@@ -101,7 +102,8 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 
 	start, end, cardHeight := launcherCards(selected, len(filtered), cardsHeight, m.launcherTop)
 	for i := start; i < end; i++ {
-		lines = append(lines, strings.Split(m.launcherCard(filtered[i], i == selected, w, cardHeight), "\n")...)
+		lines = append(lines, strings.Split(m.launcherCard(filtered[i], i == selected,
+			m.hoverAt(hoverLauncherCard, filtered[i].Manifest.ID), w, cardHeight), "\n")...)
 	}
 	a := filtered[selected]
 	if len(lines) < bodyHeight {

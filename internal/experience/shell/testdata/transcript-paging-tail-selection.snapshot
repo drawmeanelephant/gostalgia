@@ -1,0 +1,9 @@
+START: first=65 row=65 rows=15 total=80 atEnd=true atBottom=true
+AFTER PAGE UP: first=50 row=50 rows=15 total=80 atEnd=false atBottom=false
+AFTER NEW OUTPUT: first=50 row=50 rows=15 total=81 atEnd=false atBottom=false
+AFTER PAGE DOWN: first=66 row=66 rows=15 total=81 atEnd=true atBottom=true
+SELECTION: "ne 066\nline 0"
+AFTER SELECTION: first=66 row=66 rows=15 total=81 atEnd=true atBottom=true
+AFTER RESIZE: 40x12 selection="ne 066\nline 0"
+AFTER RESIZE: first=78 row=78 rows=3 total=81 atEnd=true atBottom=true
+COPIED: "ne 066\nline 0"

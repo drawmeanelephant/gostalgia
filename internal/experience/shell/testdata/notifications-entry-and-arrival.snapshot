@@ -1,0 +1,12 @@
+BEFORE ENTRY
+header: ┃ [Home]  Apps (2)   Prompt   Tasks   Notifications (2)                        ┃
+unseen: n2,n1
+AFTER ENTRY
+header: ┃  Home   Apps (2)   Prompt   Tasks  [Notifications]                           ┃
+unseen: (none)
+AFTER C ARRIVES
+header: ┃  Home   Apps (2)   Prompt   Tasks  [Notifications (1)]                       ┃
+unseen: C
+AFTER C INSPECTED
+header: ┃  Home   Apps (2)   Prompt   Tasks  [Notifications]                           ┃
+unseen: (none)

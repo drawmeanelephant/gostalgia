@@ -42,6 +42,24 @@ type appView struct {
 	regionTop    int
 	regionPinned bool
 	regionWindow int
+	// baseRegion is the view's ordinary output surface; surface names a
+	// different region an action just revealed (such as a Help panel). While
+	// set, the secondary pane shows that surface from the top instead of the
+	// control window; ordinary navigation clears it. revealed remembers which
+	// regions actions have surfaced so a later poll cannot promote a panel to
+	// the ordinary surface while the user has navigated away from it.
+	baseRegion string
+	surface    string
+	revealed   map[string]bool
+
+	// inspect gives a hinted focal block the whole body; inspectTop is its
+	// first visible line (-1 re-centers on the focal cell). blockTop and
+	// blockWindow are the resolved window the last frame drew, so arrow
+	// scrolling clamps against what the user actually sees.
+	inspect     bool
+	inspectTop  int
+	blockTop    int
+	blockWindow int
 
 	refreshing    bool
 	refreshQueued bool
@@ -82,6 +100,27 @@ type viewCheckMsg struct {
 }
 type viewCancelMsg struct{ err error }
 
+// primaryMinRows is the smallest content budget that can show a hinted focal
+// block beside usable secondary controls. Below it — 30x10 leaves one content
+// row — the shell keeps controls on screen and exposes the block through the
+// explicit inspection route instead.
+const primaryMinRows = 10
+
+// secondaryControlRows is the part of the split body reserved for the focused
+// control itself; the rest is focus-windowed content.
+const secondaryControlRows = 2
+
+// presentationPanes is an app body's vertical budget. primary is the bounded
+// focal-block viewport, meters are pinned vitals under it, and secondary is
+// the independently focus-windowed flow. Compact bodies put everything in
+// secondary and show the focal block only while inspecting.
+type presentationPanes struct {
+	inspect   bool
+	primary   int
+	meters    int
+	secondary int
+}
+
 // fetchView requests a snapshot at the newest version the shell supports and
 // steps down one version at a time while the app reports an unsupported
 // version, so an app speaking only an older contract keeps rendering and a
@@ -111,6 +150,8 @@ func fetchView(ctx context.Context, client Caller, id string, version int) (sdk.
 
 func (m *Model) openView(a appStatus) tea.Cmd {
 	m.viewEpoch++
+	// A new screen means no old pointer target remains.
+	m.clearHoverAll()
 	v := &appView{
 		id: a.Manifest.ID, pid: a.PID, epoch: m.viewEpoch, version: sdk.PresentationVersion,
 		data:   sdk.View{Title: a.Manifest.Name, State: sdk.ViewLoading},
@@ -205,6 +246,7 @@ func (m *Model) dismissView() tea.Cmd {
 	v := m.presentation
 	m.presentation = nil
 	m.viewEpoch++
+	m.clearHoverAll()
 	if v == nil || v.cancel == nil {
 		return nil
 	}
@@ -270,7 +312,11 @@ func (m *Model) checkView() tea.Cmd {
 	}
 }
 
-func (m *Model) applyView(data sdk.View) bool {
+// applyView adopts a snapshot, preserving semantic selection by identity.
+// fromAction marks a reply to a user action: an action that reveals a
+// different output surface than the view's ordinary one surfaces it from the
+// top, so the panel the user asked for is actually readable.
+func (m *Model) applyView(data sdk.View, fromAction bool) bool {
 	v := m.presentation
 	if v.instance != "" && v.instance != data.Instance {
 		return false
@@ -330,10 +376,37 @@ func (m *Model) applyView(data sdk.View) bool {
 	if wasRegion && v.region() != nil {
 		v.focus = v.regionIndex()
 	}
+	// The first region an ordinary snapshot shows is its output surface; a
+	// panel revealed later by an action is distinguishable from it. A poll
+	// must not promote a revealed panel to the ordinary surface, or toggling
+	// it shut would look like opening it.
+	if v.region() != nil && !fromAction && v.surface == "" &&
+		v.baseRegion == "" && !v.revealed[v.region().ID] {
+		v.baseRegion = v.region().ID
+	}
+	regionChanged := v.region() != nil && v.region().ID != regionID
 	// A different region resets scroll to the tail; the same one keeps the
 	// user's position (clamped at render) or stays pinned.
-	if v.region() == nil || v.region().ID != regionID {
+	if v.region() == nil || regionChanged {
 		v.regionTop, v.regionPinned = 0, true
+	}
+	if fromAction {
+		switch {
+		case v.region() == nil:
+			v.surface = ""
+		case regionChanged && v.region().ID != v.baseRegion:
+			// A newly revealed panel is the action's result: show it from its
+			// first line rather than the tail, without moving focus away from
+			// the action that can toggle it again.
+			if v.revealed == nil {
+				v.revealed = make(map[string]bool)
+			}
+			v.surface = v.region().ID
+			v.revealed[v.region().ID] = true
+			v.regionTop, v.regionPinned = 0, false
+		case regionChanged:
+			v.surface = ""
+		}
 	}
 	v.values = fields
 	return true
@@ -400,10 +473,11 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			if v.version == 0 {
 				v.version = msg.data.Version
 			}
-			if !m.applyView(msg.data) {
+			if !m.applyView(msg.data, msg.action) {
 				m.append(entry{"App instance changed; view closed.", "error"})
 				return m.dismissView()
 			}
+			m.pruneGridHover()
 			v.banner = ""
 		}
 		if msg.action && v.id == "com.gostalgia.settings" {
@@ -434,6 +508,9 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			return m.dismissView()
 		}
 		m.apps = msg.apps
+		// A fresh app/list answer outranks an older process-derived state;
+		// the next accepted poll reconciles it again.
+		m.procApps = nil
 		if msg.seq == v.seq && msg.viewErr != nil {
 			v.banner = safe(msg.viewErr.Error())
 		}
@@ -441,10 +518,11 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			if msg.version != 0 {
 				v.version = msg.version
 			}
-			if !m.applyView(*msg.data) {
+			if !m.applyView(*msg.data, false) {
 				m.append(entry{"App instance changed; view closed.", "error"})
 				return m.dismissView()
 			}
+			m.pruneGridHover()
 		}
 		return viewTick(v.epoch)
 	case viewCancelMsg:
@@ -485,6 +563,191 @@ func (v *appView) regionIndex() int {
 
 func (v *appView) regionFocused() bool {
 	return v.region() != nil && v.focus == v.regionIndex()
+}
+
+// focalBlock returns the first block carrying optional focus metadata. Only a
+// hinted block becomes a bounded primary viewport; unhinted blocks keep their
+// existing place and semantics, so an app that predates the datum — or any
+// ordinary art block — renders exactly as before.
+func (v *appView) focalBlock() *sdk.Block {
+	if i := v.focalBlockIndex(); i >= 0 {
+		return &v.data.Blocks[i]
+	}
+	return nil
+}
+
+func (v *appView) focalBlockIndex() int {
+	for i := range v.data.Blocks {
+		if v.data.Blocks[i].Focus != nil {
+			return i
+		}
+	}
+	return -1
+}
+
+// scrollBlock moves an inspected block window. The window size and top come
+// from the last frame, so scrolling never describes rows the user cannot see.
+func (v *appView) scrollBlock(delta int) {
+	block := v.focalBlock()
+	if block == nil || v.blockWindow <= 0 {
+		return
+	}
+	top := v.blockTop
+	if v.inspectTop >= 0 {
+		top = v.inspectTop
+	}
+	maxTop := max(0, len(textLines(block.Text))-v.blockWindow)
+	v.inspectTop = min(maxTop, max(0, top+delta))
+}
+
+// bodyWidth is the app body's cell width: the horizontal bound every cropped
+// block and meter fits inside.
+func (m *Model) bodyWidth() int {
+	return max(1, m.kit.PanelContentBounds(ui.Bounds{Width: m.width, Height: max(1, m.height-1)}).Width)
+}
+
+// viewPanes splits a body height between a hinted focal block, pinned meters,
+// and the focus-windowed secondary flow. A narrow body keeps controls whole
+// and leaves the block to the inspection route.
+func (m *Model) viewPanes(height int) presentationPanes {
+	v := m.presentation
+	visible := max(1, height-len(m.viewHeader())-1)
+	if v == nil {
+		return presentationPanes{secondary: visible}
+	}
+	block := v.focalBlock()
+	if block == nil {
+		return presentationPanes{secondary: visible}
+	}
+	if v.inspect {
+		return presentationPanes{inspect: true, secondary: visible}
+	}
+	if visible < primaryMinRows {
+		return presentationPanes{secondary: visible}
+	}
+	blockRows := len(textLines(block.Text))
+	if block.Label != "" {
+		blockRows++
+	}
+	meters := len(v.data.Meters)
+	primary := min(blockRows, visible-meters-secondaryControlRows)
+	if primary < 3 {
+		return presentationPanes{secondary: visible}
+	}
+	return presentationPanes{primary: primary, meters: meters, secondary: visible - primary - meters}
+}
+
+// blockWindowTop resolves the first visible line of a block window. A
+// negative top centers the focal line and clamps at the block's edges; a
+// supplied top keeps the user's inspection offset inside the same bounds.
+func blockWindowTop(lineCount, focusY, rows, top int) int {
+	if rows <= 0 {
+		return 0
+	}
+	maxTop := max(0, lineCount-rows)
+	if top >= 0 {
+		return min(maxTop, max(0, top))
+	}
+	return min(maxTop, max(0, focusY-rows/2))
+}
+
+// focusColumn converts a block focus's code-point column to display cells.
+func focusColumn(line string, x int) int {
+	if x <= 0 {
+		return 0
+	}
+	runes := []rune(line)
+	if x > len(runes) {
+		x = len(runes)
+	}
+	return ui.GraphemeWidth(string(runes[:x]))
+}
+
+// clipBlockLine keeps width display cells of one sanitized block line,
+// starting at left display cells, without splitting a grapheme cluster. A
+// cluster straddling the left edge is dropped whole, as ui.Tail does.
+func clipBlockLine(line string, left, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	var b strings.Builder
+	col, used := 0, 0
+	for _, cluster := range ui.GraphemeClusters(line) {
+		w := ui.GraphemeWidth(cluster)
+		if col+w <= left {
+			col += w
+			continue
+		}
+		if col < left {
+			col += w
+			continue
+		}
+		if used+w > width {
+			break
+		}
+		b.WriteString(cluster)
+		used += w
+		col += w
+		if used >= width {
+			break
+		}
+	}
+	return b.String()
+}
+
+// primaryBlockRows draws a hinted block in at most rows lines, keeping the
+// focal cell visible both vertically and horizontally. The snapshot keeps the
+// whole block; only this viewport crops it. inspect uses the user's scroll
+// offset, while the ordinary split view always centers on the focal cell.
+func (m *Model) primaryBlockRows(block *sdk.Block, rows int, inspect bool) []string {
+	v := m.presentation
+	if block == nil || rows <= 0 {
+		if v != nil {
+			v.blockTop, v.blockWindow = 0, max(0, rows)
+		}
+		return nil
+	}
+	all := textLines(block.Text)
+	label := viewText(block.Label)
+	lineRows := rows
+	if label != "" {
+		lineRows = max(0, rows-1)
+	}
+	focusX, focusY := 0, 0
+	if block.Focus != nil {
+		focusX, focusY = block.Focus.X, block.Focus.Y
+	}
+	top := blockWindowTop(len(all), focusY, lineRows, -1)
+	if inspect {
+		top = blockWindowTop(len(all), focusY, lineRows, v.inspectTop)
+	}
+	v.blockTop, v.blockWindow = top, lineRows
+
+	out := make([]string, 0, rows)
+	if label != "" {
+		out = append(out, m.kit.Muted(label))
+	}
+	width := m.bodyWidth()
+	focusLine := ""
+	if focusY >= 0 && focusY < len(all) {
+		focusLine = all[focusY]
+	}
+	left := 0
+	if lineWidth := ui.GraphemeWidth(focusLine); lineWidth > width {
+		left = min(lineWidth-width, max(0, focusColumn(focusLine, focusX)-width/2))
+	}
+	for i := top; i < min(len(all), top+lineRows); i++ {
+		out = append(out, m.kit.Text(clipBlockLine(all[i], left, width)))
+	}
+	return out
+}
+
+// meterRow draws one gauge. The whole meter fits the body width and, per
+// Delve's fixed contract, the whole meter never exceeds forty cells, so its
+// bar can never sprawl past forty either.
+func (m *Model) meterRow(meter sdk.Meter) string {
+	return m.kit.Progress(ui.Progress{Label: meter.Label, Value: meter.Value},
+		max(1, min(40, m.bodyWidth())))
 }
 
 // textLines splits text the way the renderer and the validator count it: a
@@ -580,6 +843,12 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 	if v.busy || v.instance == "" {
 		return nil
 	}
+	// A revealed surface stays for reading until the next ordinary
+	// navigation; Enter still reaches the focused action so the same key can
+	// toggle a panel closed again.
+	if v.surface != "" && key.String() != "enter" {
+		v.surface = ""
+	}
 	fields, actions := v.data.Fields, v.data.Actions
 	total := len(fields) + len(actions)
 	if v.grid() != nil {
@@ -589,6 +858,35 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 		total++
 	}
 	fieldFocused := v.focus < len(fields)
+	// A hinted block has a shell-owned inspection route. It is independent of
+	// field editing: while a field owns the keyboard, "m" stays ordinary
+	// text. Inspection itself keeps focus, pack selection, and drafts intact.
+	if v.focalBlock() != nil && !fieldFocused {
+		if v.inspect {
+			switch key.String() {
+			case "m":
+				v.inspect = false
+				v.inspectTop = -1
+				m.scroll = 0
+			case "up":
+				v.scrollBlock(-1)
+			case "down":
+				v.scrollBlock(1)
+			case "pgup":
+				v.scrollBlock(-max(1, v.blockWindow))
+			case "pgdown":
+				v.scrollBlock(max(1, v.blockWindow))
+			}
+			return nil
+		}
+		if key.String() == "m" {
+			v.inspect = true
+			v.inspectTop = -1
+			v.itemFocus = false
+			m.scroll = 0
+			return nil
+		}
+	}
 	switch key.String() {
 	case "tab", "shift+tab":
 		v.itemFocus, m.scroll = false, 0
@@ -815,6 +1113,14 @@ func (m *Model) viewHeader() []string {
 			break
 		}
 	}
+	if v.focalBlock() != nil {
+		// The inspection hint leads so a narrow header keeps it whole.
+		state := "m map"
+		if v.inspect {
+			state = "m controls"
+		}
+		hints = state + " · " + hints
+	}
 	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(m.kit.Hint(hints))}
 	if v.busy || v.data.State == sdk.ViewLoading {
 		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, m.width-4)))
@@ -836,6 +1142,11 @@ func (m *Model) regionWindow(height int) (window, top int) {
 	v := m.presentation
 	visible := max(1, height-len(m.viewHeader())-1)
 	window = min(20, max(4, visible/2))
+	if p := m.viewPanes(height); p.primary > 0 {
+		// Beside a focal block the region lives in the independently
+		// focus-windowed flow, so its own window must fit there.
+		window = min(20, max(1, p.secondary/2))
+	}
 	vp := viewport.New(viewport.WithHeight(window))
 	vp.SetContentLines(textLines(v.region().Text))
 	if v.regionPinned {
@@ -864,15 +1175,70 @@ func (m *Model) viewLines(height int) []string {
 	return lines
 }
 
+// inspectLayout gives a hinted focal block the whole body: one hint row and
+// a bounded window over the block. Focus, the selected grid cell, the
+// selected item, and field drafts are untouched, so returning to controls
+// resumes exactly where the user left off.
+func (m *Model) inspectLayout(height int) []string {
+	v := m.presentation
+	hint := "Map · m controls · ↑↓ scroll"
+	if m.width < 60 {
+		hint = "Map · m controls"
+	}
+	lines := []string{m.kit.Muted(m.kit.Hint(hint))}
+	return append(lines, m.primaryBlockRows(v.focalBlock(), max(0, height-1), true)...)
+}
+
+// surfaceLayout shows an action-revealed region from its first line as a
+// reading view: the panel gets the body instead of competing with the map,
+// meters, and focused control for the same few rows. The next ordinary
+// navigation clears it and returns to the control window, while Enter still
+// reaches the focused action so the same key can toggle a panel shut.
+func (m *Model) surfaceLayout(height int) []string {
+	v := m.presentation
+	lines := m.viewHeader()
+	contentRows := max(1, height-len(lines)-1)
+	label := viewText(v.region().Label)
+	if label != "" && contentRows > 1 {
+		// One row is all the panel can offer: spend it on the content rather
+		// than a label the toggle already names.
+		lines = append(lines, m.kit.Muted(label))
+		contentRows--
+	}
+	if contentRows > 0 {
+		all := textLines(v.region().Text)
+		top := min(max(0, v.regionTop), max(0, len(all)-contentRows))
+		for _, line := range all[top:min(len(all), top+contentRows)] {
+			lines = append(lines, m.kit.Text(line))
+		}
+	}
+	lines = append(lines, m.kit.Muted(viewText(v.data.Status)))
+	return lines
+}
+
 // viewLayout is the app view's lines in a body of height rows, and where
 // they show its actions and grid cells.
 func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 	v := m.presentation
+	panes := m.viewPanes(height)
+	if panes.inspect {
+		return m.inspectLayout(height), nil
+	}
+	if v.surface != "" && v.region() != nil && v.region().ID == v.surface {
+		return m.surfaceLayout(height), nil
+	}
 	lines := m.viewHeader()
 	var rows []string
 	// rowTargets holds the targets on each row, by its index in rows.
 	rowTargets := map[int][]viewTarget{}
-	for _, block := range v.data.Blocks {
+	focal := v.focalBlockIndex()
+	for i, block := range v.data.Blocks {
+		// The hinted block is drawn as the bounded primary viewport, or by
+		// the inspection route on a narrow body. Unhinted blocks keep their
+		// place in the ordinary flow.
+		if i == focal {
+			continue
+		}
 		if block.Label != "" {
 			rows = append(rows, m.kit.Muted(viewText(block.Label)))
 		}
@@ -880,10 +1246,10 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 			rows = append(rows, m.kit.Text(line))
 		}
 	}
-	for _, meter := range v.data.Meters {
-		rows = append(rows, m.kit.Progress(ui.Progress{
-			Label: meter.Label, Value: meter.Value,
-		}, max(1, m.width-8)))
+	if panes.primary == 0 {
+		for _, meter := range v.data.Meters {
+			rows = append(rows, m.meterRow(meter))
+		}
 	}
 	itemBase := len(rows)
 	for i, item := range v.data.Items {
@@ -954,7 +1320,9 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 					break
 				}
 				c := g.Cells[i]
-				text := "[" + viewText(c.Label) + "]"
+				label := viewText(c.Label)
+				text := "[" + label + "]"
+				hovered := m.hoverAt(hoverGridCell, c.ID)
 				switch {
 				case c.Disabled:
 					text += " (disabled)"
@@ -972,6 +1340,11 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 					// marker keeps the selected cell visible, matching item
 					// selection.
 					text = m.kit.Text(m.kit.Theme().Focus.Marker + " " + text)
+				case hovered:
+					// The pointer's ASCII brackets are distinct from the
+					// selected cell's marker and occupy the same two cells
+					// as the normal brackets, so the grid never reflows.
+					text = m.kit.Text("<" + label + ">")
 				default:
 					text = m.kit.Text(text)
 				}
@@ -984,7 +1357,7 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 			rows = append(rows, strings.Join(cells, " "))
 		}
 	}
-	visible := max(1, height-len(lines)-1)
+	visible := max(1, panes.secondary)
 	regionBase := -1
 	if r := v.region(); r != nil {
 		all := textLines(r.Text)
@@ -1013,6 +1386,15 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 		focus = gridBase + gridRow
 	}
 	start := max(0, min(focus-visible+1, max(0, len(rows)-visible))-m.scroll)
+	// The primary viewport and pinned meters never scroll away with the
+	// focused control; the secondary flow gets its own window around focus.
+	primaryRows := m.primaryBlockRows(v.focalBlock(), panes.primary, false)
+	lines = append(lines, primaryRows...)
+	if panes.meters > 0 {
+		for i := 0; i < min(panes.meters, len(v.data.Meters)); i++ {
+			lines = append(lines, m.meterRow(v.data.Meters[i]))
+		}
+	}
 	var targets []viewTarget
 	for r := start; r < min(len(rows), start+visible); r++ {
 		for _, t := range rowTargets[r] {

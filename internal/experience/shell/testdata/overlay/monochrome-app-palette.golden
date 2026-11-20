@@ -1,6 +1,6 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
-|  Home   Apps   Prompt   Tasks   Notifications (2)  [Pad]                     |
+|  Home   Apps (2)   Prompt   Tasks   Notifications (2)  [Pad]                 |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
 | Pad  | > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
@@ -9,8 +9,8 @@
 | (\_/)| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |      |
 | (o.o)|   [APP] Stop Echo  Graceful stop com.gostalgia....             |      |
 | > ^ <|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |      |
-| Charg|   [APP] Launch Notes  com.gostalgia.notes                      |%     |
-| Hunge|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |%     |
+| Charg|   [APP] Launch Notes  com.gostalgia.notes                      |      |
+| Hunge|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |      |
 | > One|   [APP] Stop Clock  Graceful stop com.gostalgia....            |      |
 | Text:|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |      |
 | [Adop|   [CMD] help  Command center help and keyb...                  |      |

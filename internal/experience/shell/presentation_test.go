@@ -200,13 +200,13 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
 	m.openView(screenStatus())
-	m.applyView(screenData())
+	m.applyView(screenData(), false)
 	v := m.presentation
 	v.values["text"], v.focus, v.item = "draft", 1, 1
 	data := screenData()
 	data.Fields = append([]sdk.Field{{ID: "new", Label: "New"}}, data.Fields...)
 	data.Items[0], data.Items[1] = data.Items[1], data.Items[0]
-	m.applyView(data)
+	m.applyView(data, false)
 	if v.values["text"] != "draft" || v.focus != 2 || v.item != 0 || v.data.Items[v.item].ID != "two" {
 		t.Fatal("refresh moved semantic focus/selection or discarded a draft")
 	}
@@ -214,7 +214,7 @@ func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing
 	for i := 0; i < 100; i++ {
 		data.Items = append(data.Items, sdk.Item{ID: fmt.Sprintf("item-%d", i), Label: fmt.Sprintf("ROW-%03d", i)})
 	}
-	m.applyView(data)
+	m.applyView(data, false)
 	m.height = 16
 	if !strings.Contains(m.View().Content, "[Send]") {
 		t.Fatal("focused action hidden below a long list")
@@ -354,7 +354,7 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 	v.cell = 3
 	data := padData()
 	data.Grid.Cells[0], data.Grid.Cells[3] = data.Grid.Cells[3], data.Grid.Cells[0]
-	m.applyView(data)
+	m.applyView(data, false)
 	if !v.gridFocused() || v.data.Grid.Cells[v.cell].ID != "se" {
 		t.Fatalf("refresh lost grid focus/selection: focus=%d cell=%d", v.focus, v.cell)
 	}
@@ -739,18 +739,18 @@ func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	v.regionTop = 3
 	data := areaData()
 	data.Region.Text += "\nL40\nL41"
-	m.applyView(data)
+	m.applyView(data, false)
 	if v.regionTop != 3 || v.regionPinned {
 		t.Fatalf("unpinned refresh moved the region: top=%d pinned=%v", v.regionTop, v.regionPinned)
 	}
 	v.regionPinned = true
-	m.applyView(data)
+	m.applyView(data, false)
 	m.View()
 	if !v.regionPinned || !strings.Contains(ansi.Strip(m.View().Content), "L41") {
 		t.Fatal("pinned refresh did not follow the appended tail")
 	}
 	data.Region = &sdk.Region{ID: "other", Label: "Transcript", Text: data.Region.Text}
-	m.applyView(data)
+	m.applyView(data, false)
 	if v.regionTop != 0 || !v.regionPinned {
 		t.Fatalf("region id change did not reset scroll: top=%d pinned=%v", v.regionTop, v.regionPinned)
 	}

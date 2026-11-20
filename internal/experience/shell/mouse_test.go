@@ -1116,8 +1116,10 @@ func TestMouseTooltipsShowTheSanitizedCutText(t *testing.T) {
 			t.Fatalf("text that fits shows tooltip %q", tip)
 		}
 	}
-	if v := m.View(); v.MouseMode == tea.MouseModeAllMotion || v.MouseMode == tea.MouseModeNone {
-		t.Fatalf("with nothing cut the shell asks for %v", v.MouseMode)
+	if v := m.View(); v.MouseMode != tea.MouseModeAllMotion {
+		// Pointer cues on the shelf's cards need motion reports even when
+		// no tooltip is available.
+		t.Fatalf("with pointer cues the shell asks for %v, want all motion", v.MouseMode)
 	}
 }
 
@@ -1683,7 +1685,15 @@ func TestMouseCopyDenialStaysReadableInASmallTerminal(t *testing.T) {
 				rows = append(rows, ansi.Cut(line, stack.Min.X, stack.Max.X))
 			}
 			shown := strings.Join(strings.Fields(strings.Join(rows, " ")), " ")
-			for _, want := range []string{"COPY Copy blocked", "Type mouse for how to allow it"} {
+			wants := []string{"Copy blocked", "Type mouse for how to allow it"}
+			// The copy badge supplements the mandatory severity cue. At the
+			// minimum width the two cannot share the first toast row without
+			// pushing the guidance off the two rows a 30×10 body can show, so
+			// the supplementary badge yields.
+			if size[0] >= 40 {
+				wants = append(wants, "COPY")
+			}
+			for _, want := range wants {
 				if !strings.Contains(shown, want) {
 					t.Fatalf("the toast shows %q, without %q", shown, want)
 				}

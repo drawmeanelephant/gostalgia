@@ -404,7 +404,7 @@ func TestToastsOverlayWithoutMovingTheTranscript(t *testing.T) {
 						if !ok || !stack.In(body) || stack.Max != body.Max || stack.Dy() > max(1, body.Dy()/3) {
 							t.Fatalf("%s: toast stack %v not bounded at the bottom right of %v", step.name, stack, body)
 						}
-						if !strings.Contains(strings.Join(lines[stack.Min.Y:stack.Max.Y], "\n"), "CRASH") {
+						if !strings.Contains(strings.Join(lines[stack.Min.Y:stack.Max.Y], "\n"), "ERROR") {
 							t.Fatalf("%s: toast stack not drawn:\n%s", step.name, strings.Join(lines, "\n"))
 						}
 					}
@@ -624,7 +624,7 @@ func TestToastsOverlayEveryScreen(t *testing.T) {
 					t.Fatalf("toast %v (ok %v) not at the bottom right of %v", stack, ok, body)
 				}
 				lines := screenText(m.View())
-				if !strings.Contains(strings.Join(lines[stack.Min.Y:stack.Max.Y], "\n"), "CRASH") {
+				if !strings.Contains(strings.Join(lines[stack.Min.Y:stack.Max.Y], "\n"), "ERROR") {
 					t.Fatalf("toast not drawn:\n%s", strings.Join(lines, "\n"))
 				}
 				if got, was := bodyOutside(lines, body, stack), bodyOutside(base, body, stack); strings.Join(got, "\n") != strings.Join(was, "\n") {

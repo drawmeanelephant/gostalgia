@@ -156,6 +156,11 @@ type Model struct {
 	historyPos     int
 	draft          string
 	apps           []appStatus
+	// procApps is the registered apps' running state from the newest accepted
+	// process poll, keyed by app ID. nil until a poll is accepted and cleared
+	// whenever a fresh app/list answer arrives, so neither source shows an
+	// older state. See syncRunningAppsFromProcesses.
+	procApps map[string]procAppState
 	// appsSent numbers app/list refreshes as they are sent; only the answer
 	// to the newest request is applied. See appListMsg.
 	appsSent uint64
@@ -232,9 +237,15 @@ type Model struct {
 
 	// mouseOff is set while this shell takes no mouse input; see mouse.go.
 	// mouseConfig is the accessibility.mouse setting last read, nil while
-	// it is unset.
+	// it is unset. hover is the pointer's semantic target, never the
+	// keyboard's; see hover.go.
 	mouseOff    bool
 	mouseConfig *bool
+	hover       hoverTarget
+	// hoverEpoch changes when navigation, replacement, resize or the mouse
+	// setting retires every target. A pointer callback from an older frame
+	// is ignored rather than applied to the new screen. See hover.go.
+	hoverEpoch uint64
 
 	// keyEnh records the keyboard enhancement flags the terminal actually
 	// negotiated (KeyboardEnhancementsMsg). It is observational: every
@@ -295,6 +306,8 @@ func (m *Model) setMode(mode viewMode) {
 	}
 	m.mode = mode
 	m.shelf = (mode == modeLauncher)
+	// A screen change retires every pointer target on the old screen.
+	m.clearHoverAll()
 }
 
 // leaveShelf records that the user has left the app shelf, so a launch that
@@ -303,6 +316,7 @@ func (m *Model) leaveShelf() {
 	if m.shelf {
 		m.shelfEpoch++
 		m.launchNotice, m.launchNoticeApp = "", ""
+		m.clearHoverKind(hoverLauncherCard)
 	}
 }
 
@@ -635,6 +649,16 @@ func (m *Model) openSelectedTask() tea.Cmd {
 	return m.fetchLogsCmd(sel.ID, sel.Name, true)
 }
 
+// acknowledgeNotificationCenterEntry marks the notifications present when the
+// center opens as seen. Callers invoke it only on the closed-to-open
+// transition: rendering never changes acknowledgement, and an arrival after
+// entry stays unseen until it is inspected.
+func (m *Model) acknowledgeNotificationCenterEntry() {
+	if m.notifs != nil {
+		m.notifs.MarkAllSeen()
+	}
+}
+
 // openSelectedNotification marks the selected notification seen and opens
 // its crash receipt, if it has one, as Enter does.
 func (m *Model) openSelectedNotification() tea.Cmd {
@@ -731,8 +755,93 @@ func (m *Model) SetColorModeByName(name string) bool {
 	return true
 }
 
+// procAppState is one registered app's state in an accepted process poll.
+type procAppState struct {
+	running bool
+	pid     int32
+}
+
+// syncRunningAppsFromProcesses records the registered apps' states from an
+// accepted process poll. A registered application's process is named by its
+// app ID, so matching that name counts applications only: services, terminal
+// rows and arbitrary processes never carry a registered ID. Each app is
+// recorded once even when several rows carry its ID, and a live row supplies
+// the current PID. Exited rows stay in proc/list until reaped, so presence
+// alone is not running. Failed and older polls never reach here, preserving
+// the last accepted state.
+//
+// The accepted app/list snapshot stays authoritative for the shelf and its
+// stop-confirmation checks; this is a separate display state that also drives
+// Home and the header between app/list refreshes.
+func (m *Model) syncRunningAppsFromProcesses(procs []taskmanager.ProcessRow) {
+	if len(m.apps) == 0 {
+		return
+	}
+	states := make(map[string]procAppState, len(m.apps))
+	for _, a := range m.apps {
+		states[a.Manifest.ID] = procAppState{}
+	}
+	for _, p := range procs {
+		st, known := states[p.Name]
+		if !known || st.running {
+			continue // not a registered app, or already counted
+		}
+		switch p.State {
+		case "running", "starting", "restarting":
+			states[p.Name] = procAppState{running: true, pid: p.ID}
+		}
+	}
+	m.procApps = states
+}
+
+// displayApps is the accepted app/list snapshot with running state and PID
+// reconciled against the newest accepted process poll. It is what Home and
+// the header show, so an out-of-band launch or stop appears without another
+// app/list refresh. Before any poll is accepted it is the app list alone.
+func (m *Model) displayApps() []appStatus {
+	if m.procApps == nil {
+		return m.apps
+	}
+	apps := make([]appStatus, len(m.apps))
+	copy(apps, m.apps)
+	for i := range apps {
+		st := m.procApps[apps[i].Manifest.ID]
+		apps[i].Running, apps[i].PID = st.running, st.pid
+	}
+	return apps
+}
+
 func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
+	// Home and the header read the same accepted snapshot, so an external
+	// stop or launch becomes visible without another app/list refresh.
+	m.syncRunningAppsFromProcesses(procs)
+	// A poll keeps rows that remain and replaces the rest. A hovered row
+	// that is gone or moved must not be applied to whatever now occupies
+	// the cells under the pointer.
+	hoverPID := int32(0)
+	hoverRow := -1
+	if m.hover.kind == hoverTaskRow {
+		hoverPID = m.hoverTaskPID()
+		for i, p := range m.tasks.Processes() {
+			if p.ID == hoverPID {
+				hoverRow = i
+				break
+			}
+		}
+	}
 	m.tasks.SetProcesses(procs)
+	if m.hover.kind == hoverTaskRow {
+		row := -1
+		for i, p := range m.tasks.Processes() {
+			if p.ID == hoverPID {
+				row = i
+				break
+			}
+		}
+		if hoverPID == 0 || row < 0 || row != hoverRow {
+			m.clearHoverKind(hoverTaskRow)
+		}
+	}
 	var cmds []tea.Cmd
 
 	for _, p := range procs {
@@ -986,11 +1095,17 @@ func (m *Model) refreshAppsCmd() tea.Cmd {
 // selected by ID when it is still listed. An accepted empty list is data:
 // the shelf shows its empty state rather than stale cards.
 func (m *Model) applyAppList(apps []appStatus) {
+	// The accepted list replaces the shelf, Home's running rows and the
+	// palette's app entries; retire every pointer target they could carry.
+	m.clearHoverAll()
 	id := ""
 	if filtered := m.filteredApps(); m.selected >= 0 && m.selected < len(filtered) {
 		id = filtered[m.selected].Manifest.ID
 	}
 	m.apps = apps
+	// This answer is fresher than any earlier process-derived state; the
+	// next accepted poll reconciles it again.
+	m.procApps = nil
 	if id == "" || !m.selectApp(id) {
 		m.selected = min(m.selected, max(0, len(m.filteredApps())-1))
 	}
@@ -1197,6 +1312,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		// Rows and cells moved; the pointer's old target identity no longer
+		// describes what is under it.
+		m.clearHoverAll()
 	case resultMsg:
 		var cmd tea.Cmd
 		m.busy = false
@@ -1217,6 +1335,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.hasDocs {
 			m.homeData.Documents = msg.documents
+			// Home's document rows and the palette's document entries were
+			// just replaced; their pointer identities are no longer valid.
+			m.clearHoverKind(hoverHomeRow)
+			m.clearHoverKind(hoverPaletteItem)
 		}
 		if msg.switchView == "tasks" {
 			m.taskView = true
@@ -1224,10 +1346,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shelf = false
 			m.notifView = false
 		} else if msg.switchView == "notifications" {
+			entering := !m.notifView
 			m.notifView = true
 			m.leaveShelf()
 			m.shelf = false
 			m.taskView = false
+			if entering {
+				m.acknowledgeNotificationCenterEntry()
+			}
 		} else if msg.switchView == "shelf" || msg.switchView == "launcher" {
 			cmd = tea.Batch(cmd, m.switchScreen(screenApps, false))
 		} else if msg.switchView == "settings" {
@@ -1519,6 +1645,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// scrolls its rows, and an open log tail pages; otherwise the
 			// keys page the transcript while it is on screen.
 			switch {
+			case m.presentation != nil && m.presentation.inspect:
+				return m, m.viewKey(msg)
 			case m.presentation != nil && m.presentation.regionFocused():
 				return m, m.viewKey(msg)
 			case m.presentation != nil && keyStr == "pgup":

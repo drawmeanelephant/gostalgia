@@ -1,23 +1,23 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
-|  Home   Apps  [Prompt]  Tasks   Notifications (2)                            |
+|  Home   Apps (2)  [Prompt]  Tasks   Notifications (2)                        |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
-| transcript line 12                                                           |
-| transcript line 13                                                           |
-| transcript line 14                                                           |
-| transcript lin+----------------------------------------------+               |
-| transcript lin| > Stop Echo?                                 |               |
-| transcript lin| Stops Echo (com.gostalgia.echo), PID 7.      |               |
-| transcript lin| Unsaved work may be lost.                    |               |
-| transcript lin|                                              |               |
-| transcript lin| [Cancel]  Stop app                           |               |
-| transcript lin+----------------------------------------------+               |
-| transcript line 22                                                           |
-| transcript line 23                                                           |
-| transcript line 24                                                           |
-| transcript line 25                                                           |
-| transcript line 26                                                           |
+|   transcript line 12                                                         |
+|   transcript line 13                                                         |
+|   transcript line 14                                                         |
+|   transcript l+----------------------------------------------+               |
+|   transcript l| > Stop Echo?                                 |               |
+|   transcript l| Stops Echo (com.gostalgia.echo), PID 7.      |               |
+|   transcript l| Unsaved work may be lost.                    |               |
+|   transcript l|                                              |               |
+|   transcript l| [Cancel]  Stop app                           |               |
+|   transcript l+----------------------------------------------+               |
+|   transcript line 22                                                         |
+|   transcript line 23                                                         |
+|   transcript line 24                                                         |
+|   transcript line 25                                                         |
+|   transcript line 26                                                         |
 |                                                                              |
 | C:\users\guest> stop com.gostalgia.echo                                      |
 +------------------------------------------------------------------------------+

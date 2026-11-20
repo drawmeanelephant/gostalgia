@@ -1,18 +1,18 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
-|  Home  [Apps]  Prompt   Tasks   Notifications (2)                            |
+|  Home  [Apps (2)]  Prompt   Tasks   Notifications (2)                        |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
 | SEARC| > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
 | +----| >                                                              |----+ |
 | | Not|                                                                |    | |
-| | [RE| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |    | |
-| | com|   [APP] Stop Echo  Graceful stop com.gostalgia....             |    | |
+| | [RE| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |+-+ | |
+| | com|   [APP] Stop Echo  Graceful stop com.gostalgia....             || | | |
 | +----|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |----+ |
 | +----|   [APP] Launch Notes  com.gostalgia.notes                      |----+ |
 | | > C|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |    | |
-| | [OK|   [APP] Stop Clock  Graceful stop com.gostalgia....            |    | |
-| | com|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |    | |
+| | [OK|   [APP] Stop Clock  Graceful stop com.gostalgia....            |+-+ | |
+| | com|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. || | | |
 | +----|   [CMD] help  Command center help and keyb...                  |----+ |
 | Fixtu|   [CMD] home  Switch to Home screen dashbo...                  |      |
 | GRANT+----------------------------------------------------------------+      |

@@ -29,7 +29,14 @@ const mouseConfigKey = "mouse"
 // setMouse turns this shell's mouse input on or off. Either way the next
 // frame gets a new bloom root, which drops any press, double click, hover,
 // tooltip or selection the old one was following.
-func (m *Model) setMouse(on bool) { m.mouseOff = !on }
+func (m *Model) setMouse(on bool) {
+	m.mouseOff = !on
+	// Turning the mouse off ends any cue at once, and the rebuilt root in
+	// View drops bloom's own hover too.
+	if m.mouseOff {
+		m.clearHoverAll()
+	}
+}
 
 // applyMouseConfig takes accessibility.mouse from a config refresh, nil
 // when it is unset. Only a change of the setting applies, so a refresh that
@@ -92,16 +99,24 @@ func (m *Model) screenAct(s bodyScreen, act func() tea.Cmd) tea.Cmd {
 
 // paletteAct runs act for a click or wheel step on the open palette.
 func (m *Model) paletteAct(act func() tea.Cmd) tea.Cmd {
-	if m.mouseOff || !m.paletteOpen || m.confirm != nil {
+	if !m.paletteMouseAllowed() {
 		return nil
 	}
 	return act()
 }
 
+// paletteMouseAllowed reports whether the palette's own pointer cues and
+// actions may run. A confirmation over it shuts both off.
+func (m *Model) paletteMouseAllowed() bool {
+	return !m.mouseOff && m.paletteOpen && m.confirm == nil
+}
+
 // hit is a click target in a node: its rows and cells relative to the
-// node's top-left, and what clicking it does.
+// node's top-left, what clicking it does, and the stable pointer identity it
+// carries. An empty hover identity takes no hover cue.
 type hit struct {
 	x, y, w, h int
+	hover      hoverTarget
 	act        func() tea.Cmd
 }
 
@@ -117,6 +132,9 @@ type mouseNode struct {
 	child  bloom.Child
 	hits   func(b ui.Bounds) []hit
 	scroll func(dy int) tea.Cmd
+	// hover applies pointer motion and leave to the hit identities. It is
+	// nil for nodes with no hoverable targets.
+	hover func(hs []hit, e on.Event, over bool) tea.Cmd
 }
 
 func (n mouseNode) View() string { return "" }
@@ -142,6 +160,20 @@ func (n mouseNode) Layout(ctx bloom.Context) bloom.Child {
 				}
 				return nil
 			}))
+			if n.hover != nil {
+				// Leaving the node, or being covered by a modal layer,
+				// arrives as Hover(false); motion within it carries the
+				// cell that decides the target and runs as Mouse.
+				hs = append(hs, on.Hover(func(over bool) tea.Cmd {
+					if over {
+						return nil
+					}
+					return n.hover(hits, on.Event{}, false)
+				}))
+				hs = append(hs, on.Mouse(func(e on.Event) tea.Cmd {
+					return n.hover(hits, e, true)
+				}))
+			}
 		}
 	}
 	if n.scroll != nil {
@@ -158,13 +190,32 @@ func (n mouseNode) Layout(ctx bloom.Context) bloom.Child {
 	return bloom.Column(bloom.Fill(n.child).On(hs...))
 }
 
-// withMouse is child taking clicks on hits and the wheel through scroll,
-// or child alone while the mouse is off.
+// withMouse is child taking clicks on hits, pointer cues on their stable
+// identities, and the wheel through scroll, or child alone while the mouse
+// is off.
 func (m *Model) withMouse(child bloom.Child, hits func(ui.Bounds) []hit, scroll func(dy int) tea.Cmd) bloom.Child {
+	return m.withMouseAllowed(child, hits, scroll, m.baseMouseAllowed)
+}
+
+// withMouseAllowed is withMouse for a region with its own input guard, such
+// as the modal palette. The guard decides whether pointer cues may change at
+// all; a stale frame's report can never bypass it.
+func (m *Model) withMouseAllowed(child bloom.Child, hits func(ui.Bounds) []hit, scroll func(dy int) tea.Cmd, allow func() bool) bloom.Child {
 	if m.mouseOff {
 		return child
 	}
-	return mouseNode{child: child, hits: hits, scroll: scroll}
+	epoch := m.hoverEpoch
+	return mouseNode{
+		child: child, hits: hits, scroll: scroll,
+		hover: func(hs []hit, e on.Event, over bool) tea.Cmd {
+			if epoch != m.hoverEpoch {
+				// A frame from before a navigation or replacement; its
+				// coordinates describe a screen that is no longer shown.
+				return nil
+			}
+			return m.hoverHits(hs, allow, e, over)
+		},
+	}
 }
 
 // clampStep is i moved by d and kept within [0, n).
@@ -252,10 +303,14 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 			m.setMode(modePrompt)
 		}
 	case screenNotifications:
+		wasOpen := m.notifView
 		m.notifView = !(toggle && m.notifView)
 		if m.notifView {
 			m.shelf, m.taskView = false, false
 			m.setMode(modePrompt)
+			if !wasOpen {
+				m.acknowledgeNotificationCenterEntry()
+			}
 		}
 	}
 	m.resetScroll()
@@ -263,17 +318,21 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 }
 
 // tabsNode is the tab row. Clicking a tab other than the active one shows
-// its screen, as its F-key does.
+// its screen, as its F-key does. Hovering a clickable tab marks its padding
+// with the shell's pointer cue; the active tab is not a target.
 func (m *Model) tabsNode() bloom.Child {
 	tabs, active := m.tabs()
-	return m.withMouse(m.kit.TabsLeaf(tabs, active), func(b ui.Bounds) []hit {
+	leaf := m.kit.TabsLeafHover(tabs, active, func(width int) int {
+		return m.hoveredTab(tabs, active, width)
+	})
+	return m.withMouse(leaf, func(b ui.Bounds) []hit {
 		var hits []hit
 		for _, s := range m.kit.TabSpans(tabs, active, b.Width) {
 			if s.Index == active || s.Index >= len(tabScreens) {
 				continue
 			}
 			to := tabScreens[s.Index]
-			hits = append(hits, hit{x: s.X, w: s.Width, h: 1, act: func() tea.Cmd {
+			hits = append(hits, hit{x: s.X, w: s.Width, h: 1, hover: hoverTarget{hoverTab, hoverScreenKey(to)}, act: func() tea.Cmd {
 				return m.baseAct(func() tea.Cmd {
 					// The log tail's search takes every key until it is
 					// done, the F-keys included.
@@ -286,6 +345,21 @@ func (m *Model) tabsNode() bloom.Child {
 		}
 		return hits
 	}, nil)
+}
+
+// hoveredTab is the index of the tab the pointer is on, or -1. It reads the
+// visible spans, so a tab dropped to keep the active one in view never
+// carries a cue.
+func (m *Model) hoveredTab(tabs []ui.Tab, active, width int) int {
+	if m.hover.kind != hoverTab {
+		return -1
+	}
+	for _, s := range m.kit.TabSpans(tabs, active, width) {
+		if s.Index < len(tabScreens) && hoverScreenKey(tabScreens[s.Index]) == m.hover.id {
+			return s.Index
+		}
+	}
+	return -1
 }
 
 // launcherCard is the ID of an app's card in the launcher.
@@ -324,12 +398,26 @@ func (m *Model) launcherNode() bloom.Child {
 		start, end, cardHeight := launcherCards(selected, len(filtered), h-(used-1), m.launcherTop)
 		for i := start; i < end && used < h; i++ {
 			a, focused := filtered[i], i == selected
-			card := m.kit.Leaf(func(b ui.Bounds) string { return m.launcherCard(a, focused, b.Width, cardHeight) })
+			card := m.kit.Leaf(func(b ui.Bounds) string {
+				return m.launcherCard(a, focused, m.hoverAt(hoverLauncherCard, a.Manifest.ID), b.Width, cardHeight)
+			})
 			n := min(cardHeight, h-used)
 			slot := bloom.Fixed(n, card).ID(launcherCard(a.Manifest.ID))
 			if !m.mouseOff {
 				id := a.Manifest.ID
+				epoch := m.hoverEpoch
 				slot = slot.On(
+					on.Hover(func(over bool) tea.Cmd {
+						if epoch != m.hoverEpoch {
+							return nil
+						}
+						if over && m.baseMouseAllowed() {
+							m.setHover(hoverLauncherCard, id)
+						} else {
+							m.clearHover(hoverLauncherCard, id)
+						}
+						return nil
+					}),
 					on.Click(func() tea.Cmd {
 						return m.screenAct(bodyLauncher, func() tea.Cmd {
 							if m.selectApp(id) {
@@ -376,6 +464,8 @@ func (m *Model) launcherNode() bloom.Child {
 	})
 	return m.withMouse(node, nil, func(dy int) tea.Cmd {
 		return m.screenAct(bodyLauncher, func() tea.Cmd {
+			// Cards move under a still pointer; the old cue is retired.
+			m.clearHoverKind(hoverLauncherCard)
 			if n := len(m.filteredApps()); n > 0 {
 				m.selected = clampStep(min(m.selected, n-1), dy, n)
 			}
@@ -385,9 +475,10 @@ func (m *Model) launcherNode() bloom.Child {
 }
 
 // homeScroll moves Home's selection a row a wheel step, as the arrow keys
-// do.
+// do. The rows move under a still pointer, so the old cue is retired.
 func (m *Model) homeScroll(dy int) tea.Cmd {
 	return m.screenAct(bodyHome, func() tea.Cmd {
+		m.clearHoverKind(hoverHomeRow)
 		if hv := m.homeView(); hv.visible > 0 {
 			m.homeSelected = clampStep(hv.selected, dy, hv.visible)
 		}
@@ -396,9 +487,9 @@ func (m *Model) homeScroll(dy int) tea.Cmd {
 }
 
 // homeHit is a click on the row of the Home item with key: it opens the
-// item, as Enter does on it.
+// item, as Enter does on it. The row also carries the pointer's identity.
 func (m *Model) homeHit(y, w int, kind homeItemType, key string) hit {
-	return hit{y: y, w: w, h: 1, act: func() tea.Cmd {
+	return hit{y: y, w: w, h: 1, hover: hoverTarget{hoverHomeRow, hoverHomeKey(kind, key)}, act: func() tea.Cmd {
 		return m.screenAct(bodyHome, func() tea.Cmd { return m.openHomeItem(kind, key) })
 	}}
 }
@@ -406,7 +497,7 @@ func (m *Model) homeHit(y, w int, kind homeItemType, key string) hit {
 // homeAppHits are the rows of the running apps renderHomeApps shows in b.
 func (m *Model) homeAppHits(b ui.Bounds, hv homeView) []hit {
 	var ids []string
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if a.Running {
 			ids = append(ids, a.Manifest.ID)
 		}
@@ -462,16 +553,18 @@ func (m *Model) paletteHits(b ui.Bounds) []hit {
 			break
 		}
 		key := filtered[i].key()
-		hits = append(hits, hit{x: cx, y: y, w: content.Width, h: 1, act: func() tea.Cmd {
+		hits = append(hits, hit{x: cx, y: y, w: content.Width, h: 1, hover: hoverTarget{hoverPaletteItem, key}, act: func() tea.Cmd {
 			return m.paletteAct(func() tea.Cmd { return m.runPaletteItem(key) })
 		}})
 	}
 	return hits
 }
 
-// paletteScroll moves the palette's selection a row a wheel step.
+// paletteScroll moves the palette's selection a row a wheel step. The list
+// moves under a still pointer, so the old cue is retired.
 func (m *Model) paletteScroll(dy int) tea.Cmd {
 	return m.paletteAct(func() tea.Cmd {
+		m.clearHoverKind(hoverPaletteItem)
 		if n := len(m.filteredPaletteItems()); n > 0 {
 			m.paletteSelected = clampStep(min(m.paletteSelected, n-1), dy, n)
 		}
@@ -485,7 +578,7 @@ func (m *Model) taskHits(b ui.Bounds) []hit {
 	var hits []hit
 	for _, r := range m.tasks.TableRows(m.kit, b) {
 		pid := r.PID
-		hits = append(hits, hit{x: r.X, y: r.Y, w: r.Width, h: 1, act: func() tea.Cmd {
+		hits = append(hits, hit{x: r.X, y: r.Y, w: r.Width, h: 1, hover: hoverTarget{hoverTaskRow, hoverTaskKey(pid)}, act: func() tea.Cmd {
 			return m.screenAct(bodyTasks, func() tea.Cmd {
 				if !m.tasks.SelectPID(pid) {
 					return nil
@@ -497,12 +590,14 @@ func (m *Model) taskHits(b ui.Bounds) []hit {
 	return hits
 }
 
-// taskScroll moves the table's selection a row a wheel step.
+// taskScroll moves the table's selection a row a wheel step. The rows move
+// under a still pointer, so the old cue is retired.
 func (m *Model) taskScroll(dy int) tea.Cmd {
 	return m.screenAct(bodyTasks, func() tea.Cmd {
 		if m.tasks.Mode() != taskmanager.ModeTable {
 			return nil
 		}
+		m.clearHoverKind(hoverTaskRow)
 		for range abs(dy) {
 			if dy < 0 {
 				m.tasks.SelectPrev()
@@ -560,7 +655,13 @@ func (m *Model) viewHits(b ui.Bounds) []hit {
 		if t.line >= b.Height || t.x >= b.Width {
 			continue
 		}
-		hits = append(hits, hit{x: t.x, y: t.line, w: min(t.w, b.Width-t.x), h: 1, act: func() tea.Cmd {
+		// Only grid cells carry a pointer cue; an action keeps its existing
+		// click behavior without changing its rendering.
+		target := hoverTarget{}
+		if t.kind == viewTargetCell {
+			target = hoverTarget{hoverGridCell, t.id}
+		}
+		hits = append(hits, hit{x: t.x, y: t.line, w: min(t.w, b.Width-t.x), h: 1, hover: target, act: func() tea.Cmd {
 			return m.screenAct(bodyApp, func() tea.Cmd { return m.activateViewTarget(v, t) })
 		}})
 	}

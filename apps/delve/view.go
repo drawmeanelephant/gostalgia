@@ -1,10 +1,11 @@
 // view.go composes Delve's presentation snapshot. The full layout wants
-// the version-3 contract: the map in a fixed-width Block, HP/satiety/XP
+// the version-3 contract: the map in a fixed-width Block carrying the
+// engine's true player position as its optional focal point, HP/satiety/XP
 // as Meters, a 3x3 movement Grid, and the message log in the scroll
 // Region — the help action swaps the region's content for a controls
 // list. Older negotiated versions degrade honestly: version 2 keeps
-// blocks/meters/grid and renders the log as a second block; version 1
-// carries map and log lines as items.
+// blocks/meters/grid, keeps the map unhinted, and renders the log as a
+// second block; version 1 carries map and log lines as items.
 package delve
 
 import (
@@ -76,6 +77,13 @@ func (d *Delve) preRunViewLocked(v *sdk.View, version int) {
 		{ID: "new", Label: "Begin the delve"},
 		{ID: "help", Label: "Help"},
 	}
+	if version >= 3 {
+		// The door screen keeps an ordinary output surface so the Help
+		// action swaps a panel in and back out of the same place, exactly as
+		// it does during a run.
+		v.Region = &sdk.Region{ID: "log", Label: "Log",
+			Text: "The Brass Elephant's cellar waits below.\nName your delver and begin a new delve.\nThe ledger by the door remembers every run."}
+	}
 	if d.showHelp {
 		d.helpSurfaceLocked(v, version)
 	}
@@ -139,7 +147,15 @@ func (d *Delve) runViewLocked(v *sdk.View, version int) {
 		}
 		return
 	}
-	v.Blocks = []sdk.Block{{ID: "map", Text: strings.Join(d.g.MapView(), "\n")}}
+	mapBlock := sdk.Block{ID: "map", Text: strings.Join(d.g.MapView(), "\n")}
+	if version >= 3 {
+		// The focal point is engine truth, not a glyph scan, and travels
+		// only on the negotiated modern contract. Version 2 and older
+		// clients keep the plain full-map block they already understand.
+		p := d.g.PlayerPosition()
+		mapBlock.Focus = &sdk.BlockFocus{X: p.X, Y: p.Y}
+	}
+	v.Blocks = []sdk.Block{mapBlock}
 	v.Meters = metersLocked(st)
 	v.Grid = d.gridLocked()
 	d.logSurfaceLocked(v, version)

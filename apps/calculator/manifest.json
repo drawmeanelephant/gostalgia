@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "entrypoint": "calculator",
   "permissions": ["ipc"],
+  "icon": "7 8\n+-+",
   "description": "Retired desk calculator: superseded by Dogcalc (com.gostalgia.dogcalc), which shares its arithmetic core."
 }

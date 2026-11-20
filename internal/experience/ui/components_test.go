@@ -85,6 +85,60 @@ func TestColorSnapshots(t *testing.T) {
 	snapshot(t, "colors", strings.ReplaceAll(strings.Join(views, "\n"), "\x1b", `\x1b`))
 }
 
+// TestThemeChromeSnapshots pins the same populated header and selected
+// control in every built-in theme, plus a separate Plain render. The styled
+// snapshots retain their escape sequences so a color regression cannot hide
+// behind identical stripped text.
+func TestThemeChromeSnapshots(t *testing.T) {
+	cases := []struct {
+		name  string
+		theme theme.Theme
+		mode  ColorMode
+	}{
+		{"nostalgia", theme.Nostalgia(), ANSI256},
+		{"midnight-ansi256", theme.Midnight(), ANSI256},
+		{"midnight-truecolor", theme.Midnight(), TrueColor},
+		{"monochrome", theme.Monochrome(), Plain},
+		{"high-contrast", theme.HighContrast(), ANSI256},
+		{"high-contrast-light", theme.HighContrastLight(), ANSI256},
+		{"plain", theme.Midnight(), Plain},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			k := New(tc.theme, tc.mode)
+			header := k.Tabs([]Tab{{Label: "Home"}, {Label: "Apps"}, {Label: "Prompt"}}, 1, 40)
+			selected := k.AppCard(AppCard{
+				Name: "Echo", ID: "com.gostalgia.echo", Version: "0.1.0",
+				Description: "A friendly first app.", Status: "LIVE / PID 7",
+				State: theme.Success, Focused: true,
+			}, Bounds{40, 6})
+			view := "HEADER\n" + header + "\nSELECTED\n" + selected
+			if tc.mode == Plain {
+				if strings.Contains(view, "\x1b") {
+					t.Fatalf("plain render contains ANSI styling: %q", view)
+				}
+			} else {
+				// A low base guard for every theme: Nostalgia's ANSI256
+				// downsampling is deliberately warmer and lighter than its
+				// TrueColor header. Midnight's own 4.5:1 floor lives in
+				// TestMidnightChromeProfilesAreLegibleAndTeal.
+				headerFG, headerBG := k.resolve(tc.theme.Palette.HeaderText), k.resolve(tc.theme.Palette.Header)
+				if got := contrastRatio(headerFG, headerBG); got < 3 {
+					t.Errorf("header labels contrast %.2f:1 in %s", got, tc.name)
+				}
+				focusFG, focusBG := k.resolve(tc.theme.Focus.Text), k.resolve(tc.theme.Focus.Fill)
+				if got := contrastRatio(focusFG, focusBG); got < 3 {
+					t.Errorf("selected control contrast %.2f:1 in %s", got, tc.name)
+				}
+			}
+			if tc.theme.Name == theme.Monochrome().Name && !strings.Contains(selected, "> Echo") {
+				t.Fatalf("monochrome lost its ASCII focus marker:\n%s", selected)
+			}
+			snapshot(t, "chrome-"+tc.name, strings.ReplaceAll(view, "\x1b", `\x1b`))
+		})
+	}
+}
+
 func TestComponentsStayInsideOuterBounds(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("界e\u0301👩‍💻", 100)
@@ -95,7 +149,7 @@ func TestComponentsStayInsideOuterBounds(t *testing.T) {
 				{12, 8}, {30, 10}, {80, 24}, {120, 40}, {240, 80}} {
 				for _, state := range []theme.State{theme.Normal, theme.Disabled, theme.Busy, theme.Success, theme.Error, theme.Empty} {
 					assertRectangle(t, k.Panel(Panel{Title: long, Body: long + "\n" + long, State: state, Focused: true}, bounds), bounds)
-					assertRectangle(t, k.AppCard(AppCard{Name: long, ID: long, Description: long, State: state, Focused: true}, bounds), bounds)
+					assertRectangle(t, k.AppCard(AppCard{Name: long, ID: long, Description: long, Icon: long, State: state, Focused: true}, bounds), bounds)
 					assertRectangle(t, k.Dialog(Dialog{Title: long, Body: long, State: state,
 						Actions: []Action{{Label: long}, {Label: long, Disabled: true}}}, bounds), bounds)
 					assertRectangle(t, k.Notice(Notice{Title: long, Message: long, State: state}, bounds), bounds)
@@ -252,7 +306,7 @@ func TestComponentLabelsFilterTerminalControls(t *testing.T) {
 	text := "hello\x1b]52;c;unsafe\a\x1b[2J\r"
 	for _, view := range []string{
 		k.Panel(Panel{Title: text}, Bounds{24, 4}),
-		k.AppCard(AppCard{Name: text, ID: text, Version: text, Description: text, Status: text}, Bounds{24, 7}),
+		k.AppCard(AppCard{Name: text, ID: text, Version: text, Description: text, Icon: text, Status: text}, Bounds{24, 7}),
 		k.Dialog(Dialog{Title: text, Body: text, Actions: []Action{{Label: text}}}, Bounds{24, 8}),
 		k.Tabs([]Tab{{Label: text}}, 0, 24),
 		k.Notice(Notice{Title: text, Message: text}, Bounds{24, 6}),

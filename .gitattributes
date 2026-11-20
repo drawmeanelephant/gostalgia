@@ -1,3 +1,4 @@
 # Visual snapshots are compared byte-for-byte, including on Windows checkouts.
 *.golden text eol=lf
 *.snap text eol=lf
+*.snapshot text eol=lf

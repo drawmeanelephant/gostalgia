@@ -249,6 +249,20 @@ func (m *Model) frame(home homeView) bloom.Child {
 	)
 }
 
+// runningAppCount is how many registered apps run. It reads the accepted
+// app/list snapshot reconciled with the newest accepted process poll, so an
+// external launch or stop appears without another app/list refresh. Services
+// and arbitrary runtime processes are not apps and are not counted.
+func (m *Model) runningAppCount() int {
+	running := 0
+	for _, a := range m.displayApps() {
+		if a.Running {
+			running++
+		}
+	}
+	return running
+}
+
 func (m *Model) tabs() ([]ui.Tab, int) {
 	active := 0
 	switch m.currentMode() {
@@ -264,13 +278,20 @@ func (m *Model) tabs() ([]ui.Tab, int) {
 	} else if m.notifView {
 		active = 4
 	}
+	// The header counts are read from state the shell already maintains:
+	// the accepted app/list snapshot and the notification manager. Rendering
+	// neither polls nor changes acknowledgement.
+	appsLabel := "Apps"
+	if n := m.runningAppCount(); n > 0 {
+		appsLabel = fmt.Sprintf("Apps (%d)", n)
+	}
 	notifLabel := "Notifications"
 	if m.notifs != nil && m.notifs.UnseenCount() > 0 {
 		notifLabel = fmt.Sprintf("Notifications (%d)", m.notifs.UnseenCount())
 	}
 	tabItems := []ui.Tab{
 		{Label: "Home"},
-		{Label: "Apps"},
+		{Label: appsLabel},
 		{Label: "Prompt"},
 		{Label: "Tasks"},
 		{Label: notifLabel},
@@ -345,7 +366,9 @@ func (m *Model) body(home homeView) bloom.Child {
 	case m.taskView && m.tasks != nil && m.tasks.Mode() == taskmanager.ModeLogs:
 		return m.tasks.LogsNode(m.kit, m.baseMouseAllowed)
 	case m.taskView && m.tasks != nil:
-		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.tasks.Render(m.kit, b) }), m.taskHits, m.taskScroll)
+		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
+			return m.tasks.RenderHover(m.kit, b, m.hoverTaskPID())
+		}), m.taskHits, m.taskScroll)
 	case m.notifView && m.notifs != nil:
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
 			m.notificationHits, m.notificationScroll)
@@ -522,11 +545,21 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
 		action := max(0, v.focus-len(v.data.Fields))
 		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
-		return []ui.Binding{
+		bindings := []ui.Binding{
 			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-C", Help: exitHelp},
 			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
 			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F2", Help: "APPS"},
 		}
+		if v.focalBlock() != nil {
+			// A hinted block's inspection route leads so a 30-cell help bar
+			// keeps it whole rather than dropping it behind longer hints.
+			mapHelp := "MAP"
+			if v.inspect {
+				mapHelp = "CONTROLS"
+			}
+			bindings = append([]ui.Binding{{Key: "m", Help: mapHelp, Disabled: blocked}}, bindings...)
+		}
+		return bindings
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)

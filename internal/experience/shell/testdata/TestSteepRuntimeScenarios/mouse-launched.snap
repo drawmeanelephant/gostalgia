@@ -1,13 +1,13 @@
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ G O S T A L G I A  /  PERSONAL COMPUTING                                     ┃
-┃  Home  [Apps]  Prompt   Tasks   Notifications                                ┃
+┃  Home  [Apps (2)]  Prompt   Tasks   Notifications                            ┃
 ┃ ✓ ONLINE   guest · C: environment drive                                      ┃
 ┃                                                                              ┃
 ┃ SEARCH: steepnotifier                                                        ┃
 ┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
 ┃ ┃ › Steep Notifier                                                         ┃ ┃
-┃ ┃ ✓ LIVE / PID N                                                           ┃ ┃
-┃ ┃ com.test.steepnotifier  v1.0.0                                           ┃ ┃
+┃ ┃ ✓ LIVE / PID N                                                       +-+ ┃ ┃
+┃ ┃ com.test.steepnotifier  v1.0.0                                       | | ┃ ┃
 ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┃                                                                              ┃
 ┃ GRANT  ipc · notify                                                          ┃

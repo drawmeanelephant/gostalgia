@@ -30,6 +30,7 @@ type fakeGameEngine struct {
 	flags    engine.Flags
 	inv      []engine.InvEntry
 	mapLines []string
+	pos      engine.Pos
 	log      []string
 	score    engine.Score
 	blob     []byte
@@ -47,6 +48,7 @@ func (f *fakeGameEngine) Command(c engine.Cmd) []engine.Event {
 }
 
 func (f *fakeGameEngine) MapView() []string            { return f.mapLines }
+func (f *fakeGameEngine) PlayerPosition() engine.Pos   { return f.pos }
 func (f *fakeGameEngine) LogTail(n int) []string       { return tailLines(f.log, n) }
 func (f *fakeGameEngine) Stats() engine.Stats          { return f.stats }
 func (f *fakeGameEngine) Flags() engine.Flags          { return f.flags }
@@ -67,6 +69,7 @@ func newFakeEngine() *fakeGameEngine {
 			Attack: 3, Defense: 1, Weapon: "dagger",
 		},
 		mapLines: lines,
+		pos:      engine.Pos{X: 10, Y: 11},
 		log:      []string{"You descend into the Underhall.", "It is dark down here."},
 		inv: []engine.InvEntry{
 			{ID: 3, Label: "a) dagger", Detail: "+3", Kind: engine.ItemWeapon, Equipped: true},
@@ -840,6 +843,120 @@ func TestHelpTogglesRegion(t *testing.T) {
 	v = h.act(t, 3, sdk.ActionRequest{Action: "help"})
 	if v.Region == nil || v.Region.ID != "log" {
 		t.Fatalf("untoggled region = %+v", v.Region)
+	}
+}
+
+// helpCopies counts the controls panel in a snapshot. The Help action label
+// itself is not a panel copy; only the surface text is.
+func helpCopies(v sdk.View) int {
+	n := 0
+	if v.Region != nil {
+		n += strings.Count(v.Region.Text, "Controls")
+	}
+	for _, b := range v.Blocks {
+		n += strings.Count(b.Text, "Controls")
+	}
+	for _, it := range v.Items {
+		n += strings.Count(it.Label, "Controls")
+		n += strings.Count(it.Detail, "Controls")
+	}
+	return n
+}
+
+// TestHelpStartsHiddenAndTogglesOnce covers the approved #233 behavior end
+// to end: a fresh Delve shows no controls panel, Help adds exactly one, and
+// disabling it removes the panel for the current game state — including
+// after an ordinary snapshot refresh, which is where a duplicate could
+// otherwise reappear.
+func TestHelpStartsHiddenAndTogglesOnce(t *testing.T) {
+	h := newHarness(t)
+	pre := h.view(t, 3)
+	if helpCopies(pre) != 0 {
+		t.Fatalf("fresh Delve already shows controls text: %+v", pre.Region)
+	}
+	if findAction(pre, "help") == nil {
+		t.Fatal("Help action missing from the door screen")
+	}
+	// The door screen swaps its log region for the panel and back again.
+	if pre = h.act(t, 3, sdk.ActionRequest{Action: "help"}); pre.Region == nil ||
+		pre.Region.ID != "help" || helpCopies(pre) != 1 {
+		t.Fatalf("door help = %+v, copies=%d", pre.Region, helpCopies(pre))
+	}
+	if pre = h.act(t, 3, sdk.ActionRequest{Action: "help"}); pre.Region == nil ||
+		pre.Region.ID != "log" || helpCopies(pre) != 0 {
+		t.Fatalf("door help did not clear: %+v, copies=%d", pre.Region, helpCopies(pre))
+	}
+
+	v := h.startRun(t, "Tess")
+	if helpCopies(v) != 0 {
+		t.Fatalf("ongoing run already shows controls text: %+v", v.Region)
+	}
+	v = h.act(t, 3, sdk.ActionRequest{Action: "help"})
+	if v.Region == nil || v.Region.ID != "help" || helpCopies(v) != 1 {
+		t.Fatalf("enabled help = %+v, copies=%d", v.Region, helpCopies(v))
+	}
+	if findAction(v, "help") == nil {
+		t.Fatal("Help action disappeared while its panel is open")
+	}
+	// A refresh (the shell's poll) must not add a second panel or clear it.
+	if v = h.view(t, 3); helpCopies(v) != 1 {
+		t.Fatalf("refresh while enabled = %d copies", helpCopies(v))
+	}
+	v = h.act(t, 3, sdk.ActionRequest{Action: "help"})
+	if helpCopies(v) != 0 || v.Region == nil || v.Region.ID != "log" {
+		t.Fatalf("disabled help = %+v, copies=%d", v.Region, helpCopies(v))
+	}
+	if v = h.view(t, 3); helpCopies(v) != 0 {
+		t.Fatalf("refresh after disabling = %d copies", helpCopies(v))
+	}
+	// Version 2 keeps the same absent/present/absent contract on its block.
+	v2 := h.view(t, 2)
+	if helpCopies(v2) != 0 {
+		t.Fatal("version 2 fresh snapshot shows controls text")
+	}
+	v2 = h.act(t, 2, sdk.ActionRequest{Action: "help"})
+	if helpCopies(v2) != 1 || findBlock(v2, "help") == nil {
+		t.Fatalf("version 2 help = %d copies, blocks=%+v", helpCopies(v2), v2.Blocks)
+	}
+}
+
+// TestMapFocalPointIsEngineTruth pins the optional metadata: v3 carries the
+// real engine tile while retaining the full 48x22 map, and v2 keeps the
+// legacy unhinted block.
+func TestMapFocalPointIsEngineTruth(t *testing.T) {
+	h := newHarness(t)
+	h.startRun(t, "")
+	v := h.view(t, 3)
+	b := findBlock(v, "map")
+	if b == nil || b.Focus == nil {
+		t.Fatalf("v3 map block has no focal point: %+v", b)
+	}
+	if b.Focus.X != 10 || b.Focus.Y != 11 {
+		t.Fatalf("focal point = %+v, want engine position (10,11)", b.Focus)
+	}
+	lines := strings.Split(b.Text, "\n")
+	if len(lines) != engine.MapHeight {
+		t.Fatalf("hinted map has %d lines, want %d", len(lines), engine.MapHeight)
+	}
+	for i, line := range lines {
+		if n := len([]rune(line)); n != engine.MapWidth {
+			t.Fatalf("hinted map line %d is %d runes, want %d", i, n, engine.MapWidth)
+		}
+	}
+	// The hint follows engine truth as the delver moves, including an edge.
+	h.game.pos = engine.Pos{X: engine.MapWidth - 1, Y: engine.MapHeight - 1}
+	if v = h.view(t, 3); findBlock(v, "map").Focus == nil ||
+		*findBlock(v, "map").Focus != (sdk.BlockFocus{X: engine.MapWidth - 1, Y: engine.MapHeight - 1}) {
+		t.Fatalf("focal point did not follow the engine: %+v", findBlock(v, "map").Focus)
+	}
+	// v2 predates the optional datum and must stay unhinted with the full map.
+	v2 := h.view(t, 2)
+	b2 := findBlock(v2, "map")
+	if b2 == nil || b2.Focus != nil {
+		t.Fatalf("version 2 map = %+v, want unhinted full block", b2)
+	}
+	if got := len(strings.Split(b2.Text, "\n")); got != engine.MapHeight {
+		t.Fatalf("version 2 map has %d lines, want %d", got, engine.MapHeight)
 	}
 }
 

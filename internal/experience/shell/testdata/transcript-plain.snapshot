@@ -1,0 +1,85 @@
+THEME: nostalgia
+› C:\users\guest> echo "hello"
+  hello
+! unknown command "ehco"; did you mean: echo?
+  A result long enough to wrap over a row so the gutter marks only the first
+   row, never the continuation, and the logical text stays whole.
+! red  hostile
+
+
+
+
+
+
+
+
+
+
+THEME: midnight
+› C:\users\guest> echo "hello"
+  hello
+! unknown command "ehco"; did you mean: echo?
+  A result long enough to wrap over a row so the gutter marks only the first
+   row, never the continuation, and the logical text stays whole.
+! red  hostile
+
+
+
+
+
+
+
+
+
+
+THEME: monochrome
+> C:\users\guest> echo "hello"
+  hello
+! unknown command "ehco"; did you mean: echo?
+  A result long enough to wrap over a row so the gutter marks only the first
+   row, never the continuation, and the logical text stays whole.
+! red  hostile
+
+
+
+
+
+
+
+
+
+
+THEME: high-contrast
+» C:\users\guest> echo "hello"
+  hello
+! unknown command "ehco"; did you mean: echo?
+  A result long enough to wrap over a row so the gutter marks only the first
+   row, never the continuation, and the logical text stays whole.
+! red  hostile
+
+
+
+
+
+
+
+
+
+
+THEME: high-contrast-light
+» C:\users\guest> echo "hello"
+  hello
+! unknown command "ehco"; did you mean: echo?
+  A result long enough to wrap over a row so the gutter marks only the first
+   row, never the continuation, and the logical text stays whole.
+! red  hostile
+
+
+
+
+
+
+
+
+
+

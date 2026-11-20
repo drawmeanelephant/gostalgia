@@ -86,7 +86,7 @@ func formatUptime(seconds float64) string {
 
 func (m *Model) homeItems() []homeItem {
 	var items []homeItem
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if a.Running {
 			items = append(items, homeItem{kind: homeItemApp, app: a})
 		}
@@ -105,7 +105,14 @@ const (
 	homeSystemID
 	homeAppsID
 	homeDocsID
+	homeCompositionID
 )
+
+// homeMaxContentWidth bounds Home's composition at large sizes. The large
+// wordmark is 80 cells wide, and the section rows fit within it. A wider
+// body centers that column instead of spreading the dashboard over the whole
+// frame and leaving it pinned to the upper-left.
+const homeMaxContentWidth = 80
 
 const homeSpacedTitle = "G O S T A L G I A"
 
@@ -189,12 +196,7 @@ func (m *Model) homeView() homeView {
 // selection; when even that does not fit, system activity collapses first,
 // then the document shortcuts, before the app list itself is windowed.
 func (m *Model) homeNode(hv homeView) bloom.Child {
-	running := 0
-	for _, a := range m.apps {
-		if a.Running {
-			running++
-		}
-	}
+	running := m.runningAppCount()
 	system := m.kit.Leaf(func(b ui.Bounds) string {
 		up := formatUptime(m.homeData.UptimeSeconds)
 		user := viewText(m.homeData.User)
@@ -213,20 +215,38 @@ func (m *Model) homeNode(hv homeView) bloom.Child {
 	docs := m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.renderHomeDocs(b, hv, running) }).Natural(0, docsRows),
 		func(b ui.Bounds) []hit { return m.homeDocHits(b, hv, running) }, nil)
 	return m.withMouse(ui.SizedNode(func(ctx bloom.Context) bloom.Child {
-		mark := selectHomeWordmarkForBounds(ctx.Width, ctx.Height)
+		// Bound the composition, then center that column on bodies wider
+		// than it. At 80x24 and 30x10 the column still takes the whole body,
+		// so the established composition and collapse priorities hold.
+		width := min(ctx.Width, homeMaxContentWidth)
+		mark := selectHomeWordmarkForBounds(width, ctx.Height)
 		wordmark := m.kit.Leaf(func(ui.Bounds) string { return m.kit.Heading(mark.text) })
-		return bloom.Column(
+		content := bloom.Column(
 			bloom.Fixed(mark.height, wordmark).ID(homeWordmarkID),
 			bloom.Fixed(2, system).Collapsible(prioHomeSystem).ID(homeSystemID),
 			bloom.Auto(apps).Min(1).ID(homeAppsID),
 			bloom.Auto(docs).Min(min(2, docsRows)).Collapsible(prioHomeDocuments).ID(homeDocsID),
-		).Gap(1)
+		).Gap(1).ID(homeCompositionID)
+		if width >= ctx.Width {
+			return content
+		}
+		return bloom.Row(
+			bloom.Fixed((ctx.Width-width)/2, nil),
+			bloom.Fixed(width, content),
+			bloom.Fill(nil),
+		)
 	}), nil, m.homeScroll)
 }
 
-func (m *Model) homeRow(selected bool, name, rest string) string {
-	if selected {
+// homeRow draws one Home item. hovered is the pointer's independent cue:
+// selection stays the keyboard's, and the ASCII hover marker never relies on
+// color.
+func (m *Model) homeRow(selected, hovered bool, name, rest string) string {
+	switch {
+	case selected:
 		return m.kit.Selection(m.kit.Theme().Focus.Marker+" "+name) + rest
+	case hovered:
+		return m.kit.Text(ui.HoverMarker+" "+name) + rest
 	}
 	return "  " + m.kit.Text(name) + rest
 }
@@ -237,7 +257,7 @@ func (m *Model) homeRow(selected bool, name, rest string) string {
 func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 	var rows []string
 	selectedRow := -1
-	for _, a := range m.apps {
+	for _, a := range m.displayApps() {
 		if !a.Running {
 			continue
 		}
@@ -246,7 +266,8 @@ func (m *Model) renderHomeApps(b ui.Bounds, hv homeView) string {
 			selectedRow = idx
 		}
 		badge := m.kit.Badge(fmt.Sprintf("LIVE / PID %d", a.PID), theme.Success, 20)
-		rows = append(rows, m.kit.Truncate(m.homeRow(idx == hv.selected, viewText(a.Manifest.Name),
+		rows = append(rows, m.kit.Truncate(m.homeRow(idx == hv.selected,
+			m.hoverAt(hoverHomeRow, hoverHomeKey(homeItemApp, a.Manifest.ID)), viewText(a.Manifest.Name),
 			"  "+badge+"  "+m.kit.Muted(viewText(a.Manifest.ID))), b.Width))
 	}
 	if len(rows) == 0 {
@@ -276,7 +297,8 @@ func (m *Model) renderHomeDocs(b ui.Bounds, hv homeView, base int) string {
 	n := max(1, b.Height-1)
 	start := max(0, min(hv.selected-base-n+1, len(docs)-n))
 	for i := start; i < min(len(docs), start+n); i++ {
-		lines = append(lines, m.kit.Truncate(m.homeRow(base+i == hv.selected, viewText(docs[i].Name),
+		lines = append(lines, m.kit.Truncate(m.homeRow(base+i == hv.selected,
+			m.hoverAt(hoverHomeRow, hoverHomeKey(homeItemDoc, docs[i].Path)), viewText(docs[i].Name),
 			"  "+m.kit.Muted(fmt.Sprintf("%d B", docs[i].Size))), b.Width))
 	}
 	return strings.Join(lines, "\n")

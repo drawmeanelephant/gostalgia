@@ -185,8 +185,8 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	if !strings.Contains(view, "broken-daemon Crashed") {
 		t.Fatalf("expected toast in home view, got:\n%s", view)
 	}
-	if !strings.Contains(view, "CRASH") {
-		t.Fatalf("expected CRASH badge in toast, got:\n%s", view)
+	if !strings.Contains(view, "ERROR") {
+		t.Fatalf("expected ERROR severity in toast, got:\n%s", view)
 	}
 
 	// Notification distinction: accepted/recorded != seen

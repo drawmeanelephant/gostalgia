@@ -15,7 +15,16 @@ type Panel struct {
 	Body    string // Trusted text or composed component output; sanitize external data.
 	State   theme.State
 	Focused bool
+	// Hovered marks the panel as under the pointer. Hover is not focus: it
+	// adds the shell's ASCII hover marker and leaves the focus marker and
+	// every measurement as they are.
+	Hovered bool
 }
+
+// HoverMarker is the shell-owned pointer cue. It is ASCII in every theme and
+// profile, so hover never depends on color or weight to be visible. It is
+// distinct from the theme's focus marker.
+const HoverMarker = "~"
 
 // PanelContentBounds reports space available inside a panel, excluding its
 // border, filled title row, and horizontal padding.
@@ -35,11 +44,15 @@ func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 		return ""
 	}
 	title := label(p.Title)
-	if p.Focused && p.State != theme.Disabled {
-		title = k.theme.Focus.Marker + " " + title
+	marker := ""
+	switch {
+	case p.Focused && p.State != theme.Disabled:
+		marker = k.theme.Focus.Marker + " "
+	case p.Hovered && p.State != theme.Disabled:
+		marker = HoverMarker + " "
 	}
 	if bounds.Width < 2 || bounds.Height < 3 {
-		return Fit(k.Heading(k.Truncate(title, bounds.Width))+"\n"+p.Body, bounds)
+		return Fit(k.Heading(k.Truncate(marker+title, bounds.Width))+"\n"+p.Body, bounds)
 	}
 	palette := k.theme.Palette
 	color := palette.Border
@@ -61,7 +74,7 @@ func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 	}
 	out := []string{
 		stroke(border.TopLeft + strings.Repeat(border.Top, inner) + border.TopRight),
-		stroke(border.Left) + k.paint(Fit(" "+k.Truncate(title, max(0, inner-1)), Bounds{inner, 1}),
+		stroke(border.Left) + k.paint(Fit(" "+marker+k.Truncate(title, max(0, inner-1)), Bounds{inner, 1}),
 			titleFG, titleBG, k.theme.Typography.TitleBold) + stroke(border.Right),
 	}
 	body := strings.Split(p.Body, "\n")
@@ -94,18 +107,26 @@ type TabSpan struct {
 // Tabs keeps the active tab visible by dropping leading tabs when necessary.
 // Invalid active indices select nothing; a disabled tab is never highlighted.
 func (k Kit) Tabs(tabs []Tab, active, width int) string {
-	row, _ := k.tabs(tabs, active, width)
+	row, _ := k.tabs(tabs, active, -1, width)
+	return row
+}
+
+// TabsHover is Tabs with the tab at index hovered marked by the shell's
+// pointer cue instead of its normal padding. An inactive tab keeps the same
+// cells either way; hovering never changes the active tab or the layout.
+func (k Kit) TabsHover(tabs []Tab, active, hovered, width int) string {
+	row, _ := k.tabs(tabs, active, hovered, width)
 	return row
 }
 
 // TabSpans reports where Tabs draws each tab it shows in width cells, left
 // to right. Tabs it drops to keep the active one visible have no span.
 func (k Kit) TabSpans(tabs []Tab, active, width int) []TabSpan {
-	_, spans := k.tabs(tabs, active, width)
+	_, spans := k.tabs(tabs, active, -1, width)
 	return spans
 }
 
-func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
+func (k Kit) tabs(tabs []Tab, active, hovered, width int) (string, []TabSpan) {
 	if width <= 0 {
 		return "", nil
 	}
@@ -113,7 +134,9 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 	parts := make([]string, len(tabs))
 	for i, tab := range tabs {
 		text := k.Truncate(label(tab.Label), max(0, width-2))
-		fg, bg := k.theme.Palette.Text, k.theme.Palette.Header
+		// Header labels use the header foreground token, not body text:
+		// HighContrast's header is light with dark text, unlike its canvas.
+		fg, bg := k.theme.Palette.HeaderText, k.theme.Palette.Header
 		if tab.Disabled {
 			text = "(" + text + ")"
 			s := k.theme.Status(theme.Disabled)
@@ -121,6 +144,10 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 		} else if i == active {
 			text = "[" + text + "]"
 			fg, bg = k.theme.Focus.Text, k.theme.Focus.Fill
+		} else if i == hovered {
+			// The marker replaces the padding on either side, so a hovered
+			// tab keeps the row's measurements and never looks selected.
+			text = HoverMarker + text + HoverMarker
 		} else {
 			text = " " + text + " "
 		}
@@ -150,7 +177,7 @@ func (k Kit) tabs(tabs []Tab, active, width int) (string, []TabSpan) {
 		used += cells
 	}
 	return k.paint(Fit(strings.Join(visible, gap), Bounds{width, 1}),
-		k.theme.Palette.Text, k.theme.Palette.Header, false), spans
+		k.theme.Palette.HeaderText, k.theme.Palette.Header, false), spans
 }
 
 // Badge uses an explicit symbol and label so state isn't communicated by color
@@ -175,11 +202,37 @@ func (k Kit) Badge(text string, state theme.State, width int) string {
 	return k.paint(k.Truncate(content, width), s.Text, s.Fill, true)
 }
 
+// Severity renders a notification's level cue: the level's own symbol and
+// label in the state's colors, or the literal bracketed label in Monochrome
+// and Plain, where color and weight alone cannot carry severity. Plain emits
+// no escape sequences. The symbol and label are shell-owned vocabulary, so
+// external text never supplies either.
+func (k Kit) Severity(symbol, name string, state theme.State, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	cue := symbol + " " + label(name)
+	if k.ASCIIChrome() || k.Mode() == Plain {
+		cue = "[" + label(name) + "]"
+	}
+	s := k.theme.Status(state)
+	return k.paint(k.Truncate(cue, width), s.Text, s.Fill, true)
+}
+
 type AppCard struct {
 	Name, ID, Version, Description string
-	Status                         string
-	State                          theme.State
-	Focused                        bool
+	// Icon is optional untrusted icon art. AppCard sanitizes it and draws at
+	// most two lines of twelve display cells beside the status and identity;
+	// missing or unusable art uses a generic ASCII glyph, and a card too
+	// narrow for both identity and art shows no icon column at all.
+	Icon    string
+	Status  string
+	State   theme.State
+	Focused bool
+	// Hovered marks the card under the pointer. It is independent of
+	// Focused and adds only the ASCII hover marker, so compact name/state
+	// priorities and every card measurement are unchanged.
+	Hovered bool
 }
 
 func (k Kit) AppCard(card AppCard, bounds Bounds) string {
@@ -188,8 +241,11 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 	if bounds.Height < 4 {
 		title := label(card.Name)
 		marker := ""
-		if card.Focused && card.State != theme.Disabled {
+		switch {
+		case card.Focused && card.State != theme.Disabled:
 			marker = k.theme.Focus.Marker + " "
+		case card.Hovered && card.State != theme.Disabled:
+			marker = HoverMarker + " "
 		}
 		if bounds.Height == 1 {
 			// One row is all a shelf with a launch rejection leaves at
@@ -202,14 +258,18 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 			}
 			name := k.Truncate(title, nameWidth)
 			header := k.StatusText(name, card.State)
-			if marker != "" {
+			if card.Focused && marker != "" {
 				header = k.Selection(marker + name)
+			} else if marker != "" {
+				header = k.Text(marker + name)
 			}
 			return Fit(header+"  "+badge, bounds)
 		}
 		header := k.StatusText(title, card.State)
-		if marker != "" {
+		if card.Focused && marker != "" {
 			header = k.Selection(marker + title)
+		} else if marker != "" {
+			header = k.Text(marker + title)
 		}
 		return Fit(header+"\n"+k.Badge(card.Status, card.State, bounds.Width)+"\n"+
 			label(card.Description), bounds)
@@ -224,7 +284,35 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 	if card.Description != "" {
 		body += "\n" + Wrap(Sanitize(card.Description), content.Width)
 	}
-	return k.Panel(Panel{Title: card.Name, Body: body, State: card.State, Focused: card.Focused}, bounds)
+	body = k.appCardIcon(body, card.Icon, content.Width)
+	return k.Panel(Panel{Title: card.Name, Body: body, State: card.State, Focused: card.Focused, Hovered: card.Hovered}, bounds)
+}
+
+// appCardIcon places icon art in the right-hand columns of a card body's
+// first lines, beside the status and identity. The column is reserved only
+// when the detail text keeps a readable share of the width, so missing art
+// never leaves a decorative gap and a narrow card protects its name/state.
+func (k Kit) appCardIcon(body, raw string, width int) string {
+	const (
+		iconGap   = 2
+		minDetail = 18
+	)
+	icon := k.appIcon(raw)
+	iconWidth := 0
+	for _, line := range icon {
+		iconWidth = max(iconWidth, ansi.StringWidth(line))
+	}
+	if iconWidth == 0 || width < iconWidth+iconGap+minDetail {
+		return body
+	}
+	rows := strings.Split(body, "\n")
+	detailWidth := width - iconWidth - iconGap
+	for i := 0; i < len(rows) && i < len(icon); i++ {
+		pad := strings.Repeat(" ", iconWidth-ansi.StringWidth(icon[i]))
+		rows[i] = Fit(rows[i], Bounds{Width: detailWidth, Height: 1}) +
+			strings.Repeat(" ", iconGap) + pad + k.Muted(icon[i])
+	}
+	return strings.Join(rows, "\n")
 }
 
 type Action struct {

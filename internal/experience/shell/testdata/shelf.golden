@@ -1,13 +1,13 @@
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ G O S T A L G I A  /  PERSONAL COMPUTING                                     ┃
-┃  Home  [Apps]  Prompt   Tasks   Notifications                                ┃
+┃  Home  [Apps (1)]  Prompt   Tasks   Notifications                            ┃
 ┃ ✓ ONLINE   guest · C: environment drive                                      ┃
 ┃                                                                              ┃
 ┃ SEARCH: type to filter apps...                                               ┃
 ┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
 ┃ ┃ › Echo                                                                   ┃ ┃
-┃ ┃ ✓ LIVE / PID 1                                                           ┃ ┃
-┃ ┃ com.gostalgia.echo  v0.1.0                                               ┃ ┃
+┃ ┃ ✓ LIVE / PID 1                                                       +-+ ┃ ┃
+┃ ┃ com.gostalgia.echo  v0.1.0                                           | | ┃ ┃
 ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┃ A friendly first app.                                                        ┃
 ┃ GRANT  ipc                                                                   ┃

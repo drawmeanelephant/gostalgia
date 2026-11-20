@@ -23,16 +23,21 @@ type Caller interface {
 	Call(context.Context, string, any, any) error
 }
 
+// appManifest is the shelf's view of a registered manifest: only what the
+// launcher renders, including optional icon art.
+type appManifest struct {
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Version     string   `json:"version"`
+	Description string   `json:"description"`
+	Icon        string   `json:"icon"`
+	Permissions []string `json:"permissions"`
+}
+
 type appStatus struct {
-	Manifest struct {
-		ID          string   `json:"id"`
-		Name        string   `json:"name"`
-		Version     string   `json:"version"`
-		Description string   `json:"description"`
-		Permissions []string `json:"permissions"`
-	} `json:"manifest"`
-	Running bool  `json:"running"`
-	PID     int32 `json:"pid"`
+	Manifest appManifest `json:"manifest"`
+	Running  bool        `json:"running"`
+	PID      int32       `json:"pid"`
 }
 
 type sysStatusData struct {

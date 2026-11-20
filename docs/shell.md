@@ -95,7 +95,10 @@ an app by itself; Monochrome renders the shell-owned hint text in ASCII.
 - **Left/Right, Home/End, Ctrl-A/E**: move cursor. Backspace/Delete edits;
   Ctrl-U clears input. Unicode and bracketed paste are supported.
 - **PgUp/PgDown**: page the transcript by its height. The transcript keeps
-  the newest 10,000 lines, and each result is capped at 12,000 runes. Long
+  the newest 10,000 lines, and each result is capped at 12,000 runes. Echoed
+  commands, ordinary output and errors carry left-edge cues (the prompt
+  marker, a blank column, and `!`): Monochrome and Plain read the kinds
+  without color, and copied text leaves the cues out. Long
   lines wrap; a resize keeps the line at the top of the transcript in place.
   At the end the transcript follows new output; paged back, it stays put
   while output arrives, and paging down to the end follows again. Running a
@@ -328,6 +331,20 @@ event-type request on the returned `tea.View`.
   `HelpBar`, the Task Manager, Notification Center, palette, launcher and
   app views) enters the tree as `ui.Leaf` adapters that render into exactly
   the rectangle the layout gives them.
+- **Header counts.** The tabs carry parenthesized ASCII counts, so they
+  read without color in every theme and in Plain. `Apps (n)` counts the
+  registered apps that are running, read from the accepted `app/list`
+  snapshot and reconciled with the newest accepted process poll. A process
+  row counts only when its name is a registered app ID and its state is live,
+  so services, terminal rows and arbitrary runtime processes are excluded;
+  several rows for one app count once. An out-of-band stop or launch therefore
+  updates Home and this count on the existing 500 ms process poll, without
+  entering Apps or starting another poll. A failed or superseded poll leaves
+  the last accepted state in place. `Notifications (n)` counts events the
+  notification manager still holds as unseen. Both counts disappear at zero,
+  read only state the shell already maintains (rendering starts no poll or
+  refresh), and their width is part of each tab's normal measured span, so
+  mouse geometry stays aligned.
 - **Responsive priorities.** When the frame is short, the blank spacer rows
   give way. Tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the
@@ -351,9 +368,11 @@ event-type request on the returned `tea.View`.
   too short for that panel to show its content (the 30×10 frame leaves
   three rows), each drops its border and shows its essential content:
   - The Notification Center shows a position and unread summary, then the
-    entries around the selection, each as its title and message. It also
-    switches when the panel is too narrow to show an entry's title beside
-    its badge and timestamp. Below seven body rows it is always compact.
+    entries around the selection, each as its severity cue, title and
+    message. The cue stays with the row regardless of focus; the custom
+    badge and receipt tag yield before the title. It also switches when the
+    panel is too narrow to show an entry's title beside its cue and
+    timestamp. Below seven body rows it is always compact.
   - The log tail shows a `LOGS · PID n · name` heading, the search or
     match status when there is one, and then as many log lines as fit. The
     keys scroll it from the same position as the bordered tail. Below seven
@@ -472,6 +491,13 @@ Home goldens cover all five built-in themes at 30×10, 80×24, and 200×60 in
 `internal/experience/shell/testdata/home-wordmark/`, with focused tests around
 the actual big/mini/spaced thresholds and short-height fallback.
 
+Bodies wider than 80 content cells center Home's wordmark and sections as one
+80-cell column (Issue #232). The bound is a layout node, not string padding:
+element identities, section rows, and their solved mouse coordinates move with
+it. At 80×24 and smaller the column still takes the full body width, so the
+existing compact collapse priorities are unchanged. The centering is static and
+adds no ambient content, timer, or idle redraw work.
+
 ### Mouse and clipboard (Issue #211)
 
 Mouse input is additive: every click, wheel step and copy has a keyboard
@@ -500,11 +526,12 @@ equivalent, and the shell stays complete without a mouse.
   when the effective value changes: `mouse on|off` lasts for this shell,
   is not saved, and holds until the configured value next changes. Each
   shell, including each SSH attach, has its own setting, root and gestures.
-- **Mouse modes.** While on, the shell asks for cell-motion reports
-  (clicks, the wheel and drags); while a cut line with a tooltip is on
-  screen, bloom asks for all motion, for hover. Off asks for none. On exit
-  or detach the terminal is restored as before, mouse tracking included
-  (`ESC[?1000l`, `ESC[?1002l`, `ESC[?1003l`, `ESC[?1006l`).
+- **Mouse modes.** While on, a screen with pointer cues or a cut line with
+  a tooltip asks for all motion, so hover can follow the pointer; other
+  screens ask for cell motion (clicks, the wheel and drags). Off asks for
+  none. On exit or detach the terminal is restored as before, mouse
+  tracking included (`ESC[?1000l`, `ESC[?1002l`, `ESC[?1003l`,
+  `ESC[?1006l`).
 
 Each click runs the same function as its key, which checks the state when
 the click arrives, not when the frame was drawn: a busy shell, an action in
@@ -516,6 +543,20 @@ the covered surface or start a copy; log-tail wheels still work while a command
 runs. A copy that already started keeps its completion feedback. A click only
 selects or opens; stopping, reaping and shutdown stay behind their keys and
 confirmations. Borders, headings, blank cells and the active tab do nothing.
+
+**Pointer cues.** Moving the pointer over a launcher card, header tab,
+palette row, Home row, Task Manager row or app-view grid cell marks it with
+`~`: a `~ ` prefix on cards and rows, `~Label~` on tabs, and `<KEY>` in
+place of `[KEY]` on a grid cell. The cue adds no cells: it replaces blank
+padding or takes them from the same truncated title line, so solving, mouse
+hit boxes and the keyboard selection or active tab do not change. It is
+ASCII in every theme and in Plain. Leaving the target, switching screens, opening a palette or
+confirmation, resizing, replacing the list, scrolling, or `mouse off`
+clears it, and a report routed through a frame drawn before that change is
+ignored. An open palette or dialog also blocks the cue and the click on the
+surface beneath it. Hovering a header tab only shows the cue: entering the
+screen is what marks unseen notifications seen, and severity labels and
+unread counts stay as they were.
 
 | Mouse | Keyboard equivalent |
 |---|---|

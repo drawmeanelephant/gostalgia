@@ -5,9 +5,12 @@
 // inside the step's timeslice, the classic chip chord trick.
 //
 // The version-2 snapshot renders the pattern as a real 16-column grid
-// (64 cells, the pad maximum). Version-1 requests get the four rows as
-// items plus a compact row-edit field. The working pattern and a bounded
-// library of named patterns persist in
+// (64 cells, the pad maximum). Each cell carries its row's voice identity
+// as text — l/L lead, h/H high, o/O low, b/B bass, upper case meaning a set
+// step — so the four voices stay distinguishable without color, and the
+// grid label spells the voices and their current scale pitches. Version-1
+// requests get the four rows as items plus a compact row-edit field. The
+// working pattern and a bounded library of named patterns persist in
 // /apps/data/com.gostalgia.musictoy/patterns.json via atomic fs/save.
 //
 // Playback is honest about its bounds: sound/play caps a clip at 64 notes
@@ -15,9 +18,12 @@
 // 60bpm tempo floor) 4 seconds, so a press fires exactly one bounded pass
 // and says so. The host player is fire-and-forget with no stop primitive,
 // which is why there is a Play action and no Stop — the clip always ends
-// on its own within a few seconds. On hosts without audio, or without the
-// sound grant, composing and saving keep working and the view states
-// plainly that playback is unavailable.
+// on its own within a few seconds. A successful sound/play acknowledgement
+// starts a non-persisted static "Playing" deadline for exactly the
+// acknowledged duration; composition and unrelated messages leave it
+// alone, and a failed attempt never starts or extends one. On hosts without
+// audio, or without the sound grant, composing and saving keep working and
+// the view states plainly that playback is unavailable.
 package musictoy
 
 import (
@@ -130,6 +136,12 @@ type Toy struct {
 	player     string // host player name reported by sound/status
 	statusNote string // transient feedback line; cleared on each action
 	lastError  string
+
+	// playingUntil and playingFor describe the host-acknowledged pass, not
+	// the pattern: pattern edits and tempo changes never touch them. Zero
+	// playingUntil means no acknowledged pass; they are never persisted.
+	playingUntil time.Time
+	playingFor   time.Duration
 }
 
 // Factory constructs a fresh, uninitialized Toy instance.
@@ -458,11 +470,26 @@ func (t *Toy) playLocked(ctx context.Context) error {
 			return fmt.Errorf("play failed: %v", err)
 		}
 	}
-	seconds := float64(clipDurationMs(notes)) / 1000
+	if !out.Played {
+		// A reply without the acknowledgement is not evidence that audio
+		// started, so it never claims Playing.
+		return fmt.Errorf("playback was not acknowledged — nothing was scheduled")
+	}
+	// The acknowledged duration owns the indicator. A missing duration
+	// falls back to the pass this request described; either way a failed
+	// attempt above leaves an existing pass's deadline untouched.
+	duration := time.Duration(out.DurationMs) * time.Millisecond
+	if duration <= 0 {
+		duration = time.Duration(clipDurationMs(notes)) * time.Millisecond
+	}
+	t.playingUntil = t.currentTime().Add(duration)
+	t.playingFor = duration
+
+	seconds := duration.Seconds()
 	if t.pattern.Active() == 0 {
-		t.statusNote = fmt.Sprintf("played one pass — %d rests (the pattern is empty)", len(notes))
+		t.statusNote = fmt.Sprintf("%d rests (the pattern is empty)", len(notes))
 	} else {
-		t.statusNote = fmt.Sprintf("playing one pass: %d notes over %.1fs", len(notes), seconds)
+		t.statusNote = fmt.Sprintf("%d notes over %.1fs", len(notes), seconds)
 	}
 	return nil
 }
@@ -735,41 +762,61 @@ func (t *Toy) viewLocked(version int) sdk.View {
 }
 
 // gridLocked builds the 16x4 step pad: every cell declares the shared step
-// action and carries its coordinate as cell id. Set cells read "x", empty
-// cells a quiet middle dot.
+// action, carries its coordinate as cell id, and shows its row voice as a
+// letter — lower case for a rest, upper case for a set step. The label is
+// the voice/pitch legend derived from the current scale.
 func (t *Toy) gridLocked() *sdk.Grid {
 	cells := make([]sdk.Cell, 0, numRows*numSteps)
 	for r := 0; r < numRows; r++ {
 		for s := 0; s < numSteps; s++ {
-			label := "·"
+			on := 0
 			if t.pattern.cells[r][s] {
-				label = "x"
+				on = 1
 			}
 			cells = append(cells, sdk.Cell{
 				ID:     fmt.Sprintf("r%ds%d", r, s),
-				Label:  label,
+				Label:  voiceCells[r][on],
 				Action: stepAction,
 			})
 		}
 	}
-	return &sdk.Grid{Label: "Step grid", Columns: numSteps, Cells: cells}
+	return &sdk.Grid{Label: voiceLegend(t.scaleLocked()), Columns: numSteps, Cells: cells}
 }
 
-// statusLocked picks the line under the grid: transient notes win, then the
-// honest playback story, then a working summary.
+// playingLabelLocked reports the static acknowledged-pass indicator while the
+// clock is still before the pass deadline. It never advances or animates on
+// its own, and the deadline is set only by a successful acknowledgement.
+func (t *Toy) playingLabelLocked() string {
+	if t.playingUntil.IsZero() || !t.currentTime().Before(t.playingUntil) {
+		return ""
+	}
+	return fmt.Sprintf("Playing one pass (%.1fs)", t.playingFor.Seconds())
+}
+
+// statusLocked picks the line under the grid. A durable acknowledged-pass
+// indicator leads it when one is running; transient notes win over the
+// baseline playback story, but neither clears nor retimes the indicator.
 func (t *Toy) statusLocked(scale scaleDef) string {
-	if t.statusNote != "" {
-		return t.statusNote
+	base := t.statusNote
+	if base == "" {
+		if t.sound != soundOn {
+			base = fmt.Sprintf("playback unavailable — %s; composing and saving still work", t.soundWhy)
+		} else {
+			via := ""
+			if t.player != "" {
+				via = " · via " + t.player
+			}
+			base = fmt.Sprintf("%d cells · %d bpm · %s · play fires one %.1fs pass%s",
+				t.pattern.Active(), t.bpm, scale.name, float64(numSteps*stepMs(t.bpm))/1000, via)
+		}
 	}
-	if t.sound != soundOn {
-		return fmt.Sprintf("playback unavailable — %s; composing and saving still work", t.soundWhy)
+	if playing := t.playingLabelLocked(); playing != "" {
+		if base == "" {
+			return playing
+		}
+		return playing + " · " + base
 	}
-	via := ""
-	if t.player != "" {
-		via = " · via " + t.player
-	}
-	return fmt.Sprintf("%d cells · %d bpm · %s · play fires one %.1fs pass%s",
-		t.pattern.Active(), t.bpm, scale.name, float64(numSteps*stepMs(t.bpm))/1000, via)
+	return base
 }
 
 // now reads the injectable clock.
@@ -906,7 +953,7 @@ func (t *Toy) playRoute(ctx context.Context, _ json.RawMessage) (any, error) {
 	return map[string]any{
 		"played":      true,
 		"notes":       len(notes),
-		"duration_ms": clipDurationMs(notes),
+		"duration_ms": int(t.playingFor / time.Millisecond),
 	}, nil
 }
 
