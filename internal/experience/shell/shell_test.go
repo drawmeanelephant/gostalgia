@@ -243,6 +243,8 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	if r := submit("apps", "apps"); !strings.Contains(r.text, "com.gostalgia.echo") {
 		t.Fatal("demo missing")
 	}
+	// `apps` opens the shelf, as F2 does; Esc returns to the prompt.
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if r := submit("echo fabulous", "echo fabulous"); r.text != "fabulous   [echo #1]" {
 		t.Fatal(r.text)
 	}
@@ -408,6 +410,9 @@ func TestGraphemeClusterEditing(t *testing.T) {
 func TestThemeAndMotionCommands(t *testing.T) {
 	ctx := context.Background()
 	m := New(ctx, noopCaller{}, nil)
+	// Typed commands and Tab completion happen at the prompt. An error no
+	// longer moves the shell here from another screen on its own.
+	m.setMode(modePrompt)
 
 	// Test theme command with no args shows active theme
 	res := execute(ctx, m.client, m.cwd, "theme")

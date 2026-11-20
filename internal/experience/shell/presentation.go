@@ -116,6 +116,7 @@ func (m *Model) openView(a appStatus) tea.Cmd {
 		data:   sdk.View{Title: a.Manifest.Name, State: sdk.ViewLoading},
 		values: make(map[string]string), regionPinned: true,
 	}
+	m.leaveShelf()
 	m.presentation, m.shelf, m.scroll = v, false, 0
 	epoch, ctx, client, id := v.epoch, m.ctx, m.client, v.id
 	return tea.Batch(func() tea.Msg {

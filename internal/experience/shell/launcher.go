@@ -74,10 +74,19 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	selected := min(m.selected, max(0, len(filtered)-1))
 	lines = append(lines, m.kit.Truncate(m.launcherSearch(), w))
 
+	// A rejection keeps one of the shelf's rows; the cards below get the
+	// rest, so the notice never pushes the layout past the body.
+	cardsHeight, noticeRows := bodyHeight, 0
+	if notice := m.launcherNoticeLine(w); notice != "" {
+		lines = append(lines, notice)
+		cardsHeight--
+		noticeRows = 1
+	}
+
 	if len(m.apps) == 0 {
 		notice := m.kit.Notice(ui.Notice{
 			Title: "No apps installed", Message: "Your shelf is ready for its first app.", State: theme.Empty,
-		}, ui.Bounds{Width: w, Height: max(1, bodyHeight-2)})
+		}, ui.Bounds{Width: w, Height: max(1, bodyHeight-2-noticeRows)})
 		lines = append(lines, strings.Split(notice, "\n")...)
 		return lines
 	}
@@ -85,18 +94,22 @@ func (m *Model) renderLauncher(w, bodyHeight int) []string {
 	if len(filtered) == 0 {
 		notice := m.kit.Notice(ui.Notice{
 			Title: "No matching apps", Message: fmt.Sprintf("No apps match %q. Esc clears filter.", m.launcherQuery), State: theme.Empty,
-		}, ui.Bounds{Width: w, Height: max(1, bodyHeight-2)})
+		}, ui.Bounds{Width: w, Height: max(1, bodyHeight-2-noticeRows)})
 		lines = append(lines, strings.Split(notice, "\n")...)
 		return lines
 	}
 
-	start, end, cardHeight := launcherCards(selected, len(filtered), bodyHeight, m.launcherTop)
+	start, end, cardHeight := launcherCards(selected, len(filtered), cardsHeight, m.launcherTop)
 	for i := start; i < end; i++ {
 		lines = append(lines, strings.Split(m.launcherCard(filtered[i], i == selected, w, cardHeight), "\n")...)
 	}
 	a := filtered[selected]
-	lines = append(lines, m.kit.Muted(m.kit.Truncate(safe(a.Manifest.Description), w)),
-		m.kit.Muted(m.kit.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, m.kit.Separator())), w)))
+	if len(lines) < bodyHeight {
+		lines = append(lines, m.kit.Muted(m.kit.Truncate(safe(a.Manifest.Description), w)))
+	}
+	if len(lines) < bodyHeight {
+		lines = append(lines, m.kit.Muted(m.kit.Truncate("GRANT  "+safe(strings.Join(a.Manifest.Permissions, m.kit.Separator())), w)))
+	}
 	return lines
 }
 
@@ -113,11 +126,51 @@ func (m *Model) selectApp(id string) bool {
 }
 
 // launchSelected launches the selected app, as Enter does in the launcher.
+// It is a shelf launch: a rejection belongs in the shelf, not on the command
+// line, and only its newest answer, from this visit to the shelf, may show.
 func (m *Model) launchSelected() tea.Cmd {
-	if filtered := m.filteredApps(); len(filtered) > 0 && m.selected < len(filtered) {
-		return m.submit("launch " + filtered[m.selected].Manifest.ID)
+	filtered := m.filteredApps()
+	if len(filtered) == 0 || m.selected < 0 || m.selected >= len(filtered) {
+		return nil
 	}
-	return nil
+	a := filtered[m.selected]
+	m.launchSent++
+	m.launchNotice, m.launchNoticeApp = "", ""
+	return m.submitFrom("launch "+a.Manifest.ID, originShelfLaunch, m.launchSent, a.Manifest.ID, m.shelfEpoch)
+}
+
+// launcherNoticeLine is the shelf's launch rejection, w cells wide. The
+// heading words carry it without color, so Monochrome and Plain read it too.
+func (m *Model) launcherNoticeLine(w int) string {
+	if m.launchNotice == "" || w <= 0 {
+		return ""
+	}
+	return m.kit.Truncate(m.kit.StatusText("LAUNCH FAILED  "+m.launchNotice, theme.Error), w)
+}
+
+// showShelfLaunchFailure keeps a rejected launch in the shelf. Only the
+// newest launch, from the visit to the shelf the user is still on, and for an
+// app still listed there may set it; a late answer never pulls the user back
+// or rewrites the filter and selection they moved on to.
+func (m *Model) showShelfLaunchFailure(msg resultMsg) bool {
+	if msg.originSeq != m.launchSent || msg.originEpoch != m.shelfEpoch {
+		return false
+	}
+	if m.currentMode() != modeLauncher || m.presentation != nil {
+		return false
+	}
+	listed := false
+	for _, a := range m.apps {
+		if a.Manifest.ID == msg.originApp {
+			listed = true
+			break
+		}
+	}
+	if !listed {
+		return false
+	}
+	m.launchNotice, m.launchNoticeApp = safe(msg.err.Error()), msg.originApp
+	return true
 }
 
 func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

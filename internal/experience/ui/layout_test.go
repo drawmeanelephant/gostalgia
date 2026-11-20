@@ -52,6 +52,11 @@ func TestANSILayoutPreservesStyles(t *testing.T) {
 	if got := ansi.Strip(Tail(text, 3)); got != "👩‍💻x" {
 		t.Fatalf("Tail = %q", got)
 	}
+	// A cut that lands inside a wide cluster drops it instead of exceeding
+	// the requested cell budget.
+	if got := ansi.Strip(Tail("界abc", 4)); got != "abc" {
+		t.Fatalf("Tail across a wide cluster = %q", got)
+	}
 }
 
 func TestFitAndWrap(t *testing.T) {
@@ -81,6 +86,21 @@ func TestSanitizeExternalText(t *testing.T) {
 	}
 	if !utf8.ValidString(Sanitize("\xff")) {
 		t.Fatal("invalid UTF-8 was not repaired")
+	}
+}
+
+func TestFirstCluster(t *testing.T) {
+	for text, want := range map[string]string{
+		"":             "",
+		"abc":          "a",
+		"e\u0301clair": "e\u0301",
+		"👩‍💻x":         "👩‍💻",
+		"🇺🇸xy":         "🇺🇸",
+		"\xffrest":     "\xff",
+	} {
+		if got := FirstCluster(text); got != want {
+			t.Errorf("FirstCluster(%q) = %q, want %q", text, got, want)
+		}
 	}
 }
 

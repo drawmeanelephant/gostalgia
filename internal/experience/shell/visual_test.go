@@ -44,7 +44,10 @@ func TestShellVisualSnapshots(t *testing.T) {
 			}
 			m.busy = view == "busy"
 			if view == "error" {
+				// The fixture shows the prompt's rendering of an error. Storing
+				// the line no longer chooses the screen by itself.
 				m.append(entry{"The app couldn't start. Try again.", "error"})
+				m.setMode(modePrompt)
 			}
 			if strings.HasPrefix(view, "app") {
 				data := screenData()

@@ -21,7 +21,7 @@ runtime (`gostalgia boot --root /tmp/gs`). Shell attachment is not implemented.
 | Command | Meaning |
 |---|---|
 | `help`, `?` | Command reference |
-| `apps` | IDs, versions, live/ready states, manifest grants |
+| `apps` | Open the Apps shelf; the listing it leaves in the transcript carries IDs, versions, live/ready states and manifest grants |
 | `launch ID`, `run ID` | Launch a registered app; single-instance errors are visible |
 | `stop ID` | Wait for app cleanup and retract routes |
 | `echo MESSAGE` | Invoke the sole demo app (must be running) |
@@ -44,12 +44,26 @@ and `..` work inside the VFS. Quote paths/messages containing spaces; use single
 or double quotes. Backslashes remain literal in path arguments. Raw `call`
 JSON is preserved, not passed through path/quote parsing.
 
+An unknown command name suggests bounded next steps: the closest accepted
+command names within a small edit distance, and `launch <app-id>` when the
+input matches an installed app's friendly name or full ID. A distant token
+keeps the plain `type help` fallback. A hint never runs a command or launches
+an app by itself; Monochrome renders the shell-owned hint text in ASCII.
+
 ## Keyboard
 
 - **F2**: switch between prompt and app shelf. **↑/↓** selects an app;
   **Enter** launches it; **F3** stops it after a confirmation; **Esc** returns
   to the prompt. The
-  shelf displays description and manifest permissions.
+  shelf displays description and manifest permissions. Opening the shelf by
+  F2, its tab, the `apps` command or the palette reads `app/list` again in the
+  background, so an app stopped or launched by another client shows its
+  current state and PID without running a command. The answer never holds up
+  typing, selection or leaving the shelf, and only the newest answer is
+  shown. At the 30×10 minimum the selected card keeps its name and its
+  `LIVE`/`READY` state, even beside a launch rejection, and the help row uses
+  the shorter `Esc BACK` label so `Enter RUN` and `F3 STOP` fit as complete
+  hints. Growing the terminal restores the full cards and wording.
 - **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
   busy work or returns to the prompt. F2 returns to the shelf. See
@@ -86,8 +100,9 @@ JSON is preserved, not passed through path/quote parsing.
   At the end the transcript follows new output; paged back, it stays put
   while output arrives, and paging down to the end follows again. Running a
   command or switching views returns it to the end, and `cls` and `clear`
-  empty it and return it there. Long input stays
-  cursor-centered.
+  empty it and return it there. A prompt draft that fits with its cursor is
+  shown whole; longer input scrolls in a grapheme-safe viewport around the
+  cursor.
 - **Task Manager log tail** (`l` on a process): **↑/↓** (or **k/j**) scroll a
   line, **PgUp/PgDown** a page, **Home/End** (or **g/G**) jump to the first or
   last line. **f** toggles following new output; a tail opens at its first
@@ -326,8 +341,11 @@ event-type request on the returned `tea.View`.
   stop at the last running app and Enter opens it. In the Task Manager
   table, `RESTARTS` collapses first, then `MEMORY`, `CPU` and `STATE`;
   `PID` and `NAME` never collapse, and the `PID` column widens so no ID is
-  cut. Below six body rows the table drops its border and footer and shows
-  a header plus the rows around the selected process.
+  cut. When no process in the table reports supported resource metrics, the
+  `CPU` and `MEMORY` columns are omitted rather than filled with dashes,
+  and their width goes to `NAME`. Below six body rows the table drops its
+  border and footer and shows a header plus the rows around the selected
+  process.
 - **Compact diagnostic views.** The Notification Center, the task log tail
   and the crash receipt are bordered panels when there is room. In a body
   too short for that panel to show its content (the 30×10 frame leaves
@@ -380,10 +398,13 @@ event-type request on the returned `tea.View`.
 - **Real cursor.** In editable prompt mode the prompt row places the
   terminal's own cursor (`bloom.Text(...).Cursor(...)`) at the insertion
   point, measured in cells, so it lands correctly after combining marks,
-  wide CJK characters and ZWJ emoji. Long input is sliced around the cursor
-  by whole graphemes, keeping one cell free for the cursor at the end of the
-  input. A busy prompt, any other mode, an open palette or confirmation, and the
-  size notice show no cursor; closing the layer restores it.
+  wide CJK characters and ZWJ emoji. A draft that fits, including its cursor
+  cell, is shown whole. Longer input uses a grapheme-safe viewport with one
+  cell kept free for the cursor at the end and half the row for each side
+  where possible, so editing at the start, middle or end keeps the insertion
+  point visible and never splits a cluster. A busy prompt, any other mode, an
+  open palette or confirmation, and the size notice show no cursor; closing
+  the layer restores it.
 - **Root lifecycle.** Each shell model owns one root, built with
   `bloom.WithColors` from its kit's text and surface colors, that model's
   `bloom.WithClock`, `bloom.WithCopyFlash(false)`, the kit's selection style
@@ -509,7 +530,7 @@ confirmations. Borders, headings, blank cells and the active tab do nothing.
 | Wheel over the transcript | PgUp/PgDown. Scrolled up, it stays put as output arrives; back at the end it follows again. |
 | Wheel over a log tail | ↑/↓ and PgUp/PgDown. Wheeling never starts following; press **f**. |
 | Wheel over the launcher, palette, Home, Task Manager table or Notification Center | ↑/↓, one row a step, stopping at the ends; the wheel never opens anything |
-| Hover a cut app description or `GRANT` line in the launcher | A wider terminal shows it uncut; `apps` lists every app's grants |
+| Hover a cut app description or `GRANT` line in the launcher | A wider terminal shows it uncut; the `apps` command lists every app's grants in the transcript |
 | Drag over transcript or log tail text | Ctrl-Y copies the lines on screen |
 
 **Selection and copy.** Dragging over the transcript or a log tail selects

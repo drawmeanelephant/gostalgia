@@ -51,11 +51,6 @@ func (m *Model) append(e entry) {
 			m.transcriptPos = p
 		}
 	}
-	if e.kind == "error" {
-		if m.presentation == nil {
-			m.setMode(modePrompt)
-		}
-	}
 }
 
 // transcriptBuffer is the transcript's styled lines, made on first use.

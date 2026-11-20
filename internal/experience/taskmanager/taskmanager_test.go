@@ -735,6 +735,178 @@ func TestColumnsCollapseInPriorityOrder(t *testing.T) {
 	}
 }
 
+// A population without supported resource metrics has no CPU or MEMORY
+// values to show, so those columns are omitted rather than filled with
+// dashes, and their width widens NAME. The decision follows the displayed
+// samples, not the platform name.
+func TestUnsupportedMetricsDropColumnsAndWidenName(t *testing.T) {
+	tm := New()
+	tm.SetProcesses([]ProcessRow{
+		{ID: 41, Name: "very-long-process-identity-name", State: "running"},
+		{ID: 42, Name: "another-long-process-identity", State: "failed"},
+	})
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+
+	wide := tm.Render(kit, ui.Bounds{Width: 80, Height: 24})
+	for _, title := range []string{"CPU", "MEMORY"} {
+		if strings.Contains(wide, title) {
+			t.Fatalf("80x24 kept %s with no supported metrics:\n%s", title, wide)
+		}
+	}
+	if !strings.Contains(wide, "very-long-process-identity-name") {
+		t.Fatalf("80x24 did not give the released width to NAME:\n%s", wide)
+	}
+	if !strings.Contains(wide, "STATE") || !strings.Contains(wide, "running") {
+		t.Fatalf("80x24 lost state with no supported metrics:\n%s", wide)
+	}
+	marker := kit.Theme().Focus.Marker
+	if !lineHasAll(wide, marker, "41", "very-long-process-identity-name") {
+		t.Fatalf("80x24 selected identity not visible:\n%s", wide)
+	}
+
+	minimum := tm.Render(kit, ui.Bounds{Width: 30, Height: 10})
+	for _, title := range []string{"CPU", "MEMORY"} {
+		if strings.Contains(minimum, title) {
+			t.Fatalf("30x10 kept %s with no supported metrics:\n%s", title, minimum)
+		}
+	}
+	if !lineHasAll(minimum, marker, "41", "very-long-proc") {
+		t.Fatalf("30x10 selected identity not visible:\n%s", minimum)
+	}
+
+	cols := solveColumns(tableColumnsFor(tm.Processes()), 74, tm.pidWidth())
+	widths := make(map[ColumnID]int, len(cols))
+	for _, c := range cols {
+		widths[c.id] = c.width
+	}
+	if _, ok := widths["cpu"]; ok {
+		t.Fatalf("CPU still laid out: %v", widths)
+	}
+	if _, ok := widths["memory"]; ok {
+		t.Fatalf("MEMORY still laid out: %v", widths)
+	}
+	if widths["name"] <= 20 || widths["state"] == 0 {
+		t.Fatalf("released width did not reach identity/state: %v", widths)
+	}
+}
+
+// lineHasAll reports whether one rendered line contains every part.
+func lineHasAll(view string, parts ...string) bool {
+	for _, line := range strings.Split(view, "\n") {
+		ok := true
+		for _, part := range parts {
+			if !strings.Contains(line, part) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+// Supported samples keep the CPU and MEMORY columns with their formatted
+// values, and mixed samples keep the existing placeholder for unsupported
+// rows. The width-based 30x10 collapse still applies independently.
+func TestSupportedAndMixedSamplesKeepMetricColumns(t *testing.T) {
+	usage := platform.ResourceUsage{Supported: true, CPUUserMs: 15, CPUSysMs: 5, MemoryBytes: 512 * 1024}
+	tm := New()
+	tm.SetProcesses([]ProcessRow{
+		{ID: 51, Name: "worker-a", State: "running", Resources: usage},
+		{ID: 52, Name: "worker-b", State: "running", Resources: platform.ResourceUsage{Supported: false}},
+	})
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+
+	wide := tm.Render(kit, ui.Bounds{Width: 80, Height: 24})
+	for _, title := range []string{"CPU", "MEMORY"} {
+		if !strings.Contains(wide, title) {
+			t.Fatalf("80x24 dropped %s for a supported sample:\n%s", title, wide)
+		}
+	}
+	rows := strings.Split(wide, "\n")
+	var supported, unsupported string
+	for _, line := range rows {
+		if strings.Contains(line, "worker-a") {
+			supported = line
+		}
+		if strings.Contains(line, "worker-b") {
+			unsupported = line
+		}
+	}
+	if !strings.Contains(supported, "20ms") || !strings.Contains(supported, "512 KB") {
+		t.Fatalf("supported row lost formatted metrics: %q", supported)
+	}
+	if !strings.Contains(unsupported, "-") {
+		t.Fatalf("unsupported row lost its placeholder: %q", unsupported)
+	}
+
+	allSupported := []ProcessRow{
+		{ID: 51, Name: "worker-a", State: "running", Resources: usage},
+		{ID: 52, Name: "worker-b", State: "running", Resources: usage},
+	}
+	tm.SetProcesses(allSupported)
+	if got := tm.Render(kit, ui.Bounds{Width: 80, Height: 24}); !strings.Contains(got, "20ms") || strings.Contains(got, "- ") {
+		t.Fatalf("all-supported population did not keep metrics:\n%s", got)
+	}
+	for _, title := range []string{"CPU", "MEMORY"} {
+		if got := tm.Render(kit, ui.Bounds{Width: 30, Height: 10}); strings.Contains(got, title) {
+			t.Fatalf("30x10 kept %s even though width collapses it:\n%s", title, got)
+		}
+	}
+}
+
+// Updating the displayed population between unsupported, mixed, and
+// supported keeps the selection and the identity/state data usable while the
+// metric columns follow the current samples.
+func TestMetricColumnsFollowPopulationUpdates(t *testing.T) {
+	usage := platform.ResourceUsage{Supported: true, CPUUserMs: 1200, CPUSysMs: 300, MemoryBytes: 15 * 1024 * 1024}
+	unsupported := []ProcessRow{
+		{ID: 61, Name: "alpha", State: "running"},
+		{ID: 62, Name: "beta", State: "running"},
+	}
+	tm := New()
+	tm.SetProcesses(unsupported)
+	tm.SelectNext()
+	kit := ui.New(theme.Nostalgia(), ui.Plain)
+	wide := ui.Bounds{Width: 80, Height: 24}
+
+	if got := tm.Render(kit, wide); strings.Contains(got, "MEMORY") {
+		t.Fatalf("unsupported population kept MEMORY:\n%s", got)
+	}
+	tm.SetProcesses([]ProcessRow{unsupported[0], {ID: 62, Name: "beta", State: "running", Resources: usage}})
+	if p := tm.SelectedProcess(); p == nil || p.ID != 62 {
+		t.Fatalf("selection changed across population update: %+v", p)
+	}
+	mixed := tm.Render(kit, wide)
+	if !strings.Contains(mixed, "MEMORY") || !strings.Contains(mixed, "1.5s") || !strings.Contains(mixed, "15.0 MB") {
+		t.Fatalf("mixed population did not restore metrics:\n%s", mixed)
+	}
+	if !lineHasAll(mixed, kit.Theme().Focus.Marker, "62", "beta") {
+		t.Fatalf("selected identity lost after update:\n%s", mixed)
+	}
+	tm.SetProcesses(unsupported)
+	if got := tm.Render(kit, wide); strings.Contains(got, "MEMORY") || strings.Contains(got, "CPU") {
+		t.Fatalf("return to unsupported population kept metrics:\n%s", got)
+	}
+}
+
+// An empty table has no samples, so it must not claim metric support or
+// invent a metric column.
+func TestEmptyProcessesDoNotReportMetricSupport(t *testing.T) {
+	if resourcesSupported(nil) {
+		t.Fatal("empty population reported resource support")
+	}
+	out := New().Render(ui.New(theme.Nostalgia(), ui.Plain), ui.Bounds{Width: 80, Height: 24})
+	if !strings.Contains(out, "No Processes Found") {
+		t.Fatalf("empty table lost its notice:\n%s", out)
+	}
+	if strings.Contains(out, "CPU") || strings.Contains(out, "MEMORY") {
+		t.Fatalf("empty table invented metric columns:\n%s", out)
+	}
+}
+
 // The PID column widens for long IDs instead of cutting the identifying
 // column.
 func TestWidePIDsAreNotTruncated(t *testing.T) {
