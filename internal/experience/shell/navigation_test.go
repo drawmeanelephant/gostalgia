@@ -2,11 +2,13 @@ package shell
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 func mockApps() []appStatus {
@@ -380,6 +382,245 @@ func TestPromptCommandNavigation(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if m.Focus() != FocusPalette {
 		t.Fatalf("expected FocusPalette after typing 'palette', got %v", m.Focus())
+	}
+}
+
+// launchCaller answers app/launch with launchErr and app/list with apps, so
+// the shelf's asynchronous launch and refresh can be observed separately.
+type launchCaller struct {
+	launchErr error
+	apps      []appStatus
+}
+
+func (c *launchCaller) Call(_ context.Context, method string, _ any, out any) error {
+	switch method {
+	case "app/launch":
+		return c.launchErr
+	case "app/list":
+		data, err := json.Marshal(c.apps)
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(data, out)
+	}
+	return nil
+}
+
+// A rejected launch from the shelf is feedback in the shelf: the user keeps
+// the filter, the selected card and the live instance, and the tab stays put.
+func TestRejectedLauncherLaunchRetainsContext(t *testing.T) {
+	errorText := "app: com.gostalgia.echo is already running or initializing (pid 7)"
+	apps := []appStatus{
+		runningApp("com.gostalgia.echo", "Echo", 7),
+		readyApp("com.gostalgia.clock", "Clock"),
+	}
+	caller := &launchCaller{launchErr: errors.New(errorText), apps: apps}
+	m := New(context.Background(), caller, nil)
+	m.apps = apps
+	m.setMode(modeLauncher)
+	m.launcherQuery = "Echo"
+	m.selected = 0
+
+	cmd := m.launchSelected()
+	if cmd == nil {
+		t.Fatal("launch of the selected app returned no command")
+	}
+	_, effects := m.Update(cmd())
+	if frames := animationFrames(commandMessages(t, effects)); frames != 1 {
+		t.Fatalf("rejected launch scheduled %d animation frames, want its one bounded effect", frames)
+	}
+
+	if got := m.Focus(); got != FocusLauncher {
+		t.Fatalf("focus after rejected launch = %v, want launcher", got)
+	}
+	if m.launcherQuery != "Echo" {
+		t.Fatalf("filter after rejection = %q, want Echo", m.launcherQuery)
+	}
+	if got := selectedAppID(m); got != "com.gostalgia.echo" {
+		t.Fatalf("selected app after rejection = %q", got)
+	}
+	if len(m.apps) != len(apps) || !m.apps[0].Running || m.apps[0].PID != 7 {
+		t.Fatalf("rejection replaced the live instance: %+v", m.apps)
+	}
+	body := strings.Join(m.renderLauncher(80, 12), "\n")
+	if !strings.Contains(body, "LAUNCH FAILED") || !strings.Contains(body, "already running or initializing") {
+		t.Fatalf("shelf shows no readable rejection:\n%s", body)
+	}
+	if view := m.View().Content; !strings.Contains(view, "LIVE / PID 7") {
+		t.Fatalf("live instance missing from the shelf:\n%s", view)
+	}
+	// The feedback also fits the shell's smallest frame.
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
+	small := m.View().Content
+	if !strings.Contains(small, "LAUNCH FAILED") {
+		t.Fatalf("rejection missing from the 30x10 shelf:\n%s", small)
+	}
+	if w, h := lipgloss.Width(small), lipgloss.Height(small); w > 30 || h > 10 {
+		t.Fatalf("30x10 rejection frame is %dx%d", w, h)
+	}
+	// The rejection is also kept in the transcript, independently of focus.
+	found := false
+	for _, e := range m.transcript {
+		found = found || strings.Contains(e.text, errorText)
+	}
+	if !found {
+		t.Fatal("rejected launch was not recorded in the transcript")
+	}
+	// A registry refresh that no longer lists the app clears feedback about it.
+	m.Update(appListMsg{seq: m.appsSent, apps: []appStatus{}})
+	if m.launchNotice != "" {
+		t.Fatalf("rejection outlived its app: %q", m.launchNotice)
+	}
+	if body := strings.Join(m.renderLauncher(80, 10), "\n"); strings.Contains(body, "LAUNCH FAILED") || !strings.Contains(body, "No apps installed") {
+		t.Fatalf("stale rejection left with an empty shelf:\n%s", body)
+	}
+}
+
+// Leaving the shelf before a rejected launch answers must not drag the user
+// back, rewrite the current filter, or appear as late shelf feedback.
+func TestLateLauncherRejectionDoesNotStealNavigation(t *testing.T) {
+	apps := []appStatus{
+		runningApp("com.gostalgia.echo", "Echo", 7),
+		readyApp("com.gostalgia.clock", "Clock"),
+	}
+	caller := &launchCaller{
+		launchErr: errors.New("app: com.gostalgia.echo is already running or initializing (pid 7)"),
+		apps:      apps,
+	}
+	m := New(context.Background(), caller, nil)
+	m.apps = apps
+	m.setMode(modeLauncher)
+	m.launcherQuery = "Echo"
+	m.selected = 0
+	pending := m.launchSelected()
+
+	m.setMode(modeHome)
+	m.launcherQuery = "Clock"
+	m.selected = 0
+	m.Update(pending())
+
+	if got := m.Focus(); got != FocusHome {
+		t.Fatalf("late rejection moved focus to %v, want home", got)
+	}
+	if m.launcherQuery != "Clock" || selectedAppID(m) != "com.gostalgia.clock" {
+		t.Fatalf("late rejection changed filter/selection: %q / %q", m.launcherQuery, selectedAppID(m))
+	}
+	m.setMode(modeLauncher)
+	if body := strings.Join(m.renderLauncher(80, 12), "\n"); strings.Contains(body, "LAUNCH FAILED") {
+		t.Fatalf("late rejection reappeared in the shelf:\n%s", body)
+	}
+}
+
+// Overlapping shelf launches keep the newest outcome: an older rejection that
+// arrives after a newer launch neither replaces its feedback nor revives a
+// rejection a successful launch cleared.
+func TestShelfLaunchRejectionsKeepNewestOutcome(t *testing.T) {
+	apps := []appStatus{
+		runningApp("com.gostalgia.echo", "Echo", 7),
+		readyApp("com.gostalgia.clock", "Clock"),
+	}
+	caller := &launchCaller{apps: apps}
+	m := New(context.Background(), caller, nil)
+	m.apps = apps
+	m.setMode(modeLauncher)
+
+	caller.launchErr = errors.New("app: com.gostalgia.echo is already running or initializing (pid 7)")
+	m.selected = 0
+	first := m.launchSelected()()
+	caller.launchErr = errors.New("app: com.gostalgia.clock is already running or initializing (pid 9)")
+	m.selected = 1
+	second := m.launchSelected()()
+
+	m.Update(second)
+	m.Update(first)
+	if !strings.Contains(m.launchNotice, "clock") || strings.Contains(m.launchNotice, "echo") {
+		t.Fatalf("stale rejection replaced the newest feedback: %q", m.launchNotice)
+	}
+
+	// A newer success clears an earlier rejection and leaves it cleared when
+	// the earlier answer finally arrives.
+	caller.launchErr = errors.New("app: com.gostalgia.echo is already running or initializing (pid 7)")
+	m.selected = 0
+	staleFailure := m.launchSelected()()
+	caller.launchErr = nil
+	m.selected = 1
+	success := m.launchSelected()()
+	m.Update(success)
+	m.Update(staleFailure)
+	if m.launchNotice != "" {
+		t.Fatalf("stale rejection outlived the newer success: %q", m.launchNotice)
+	}
+}
+
+// A launch typed at the prompt still reports there, on the command line.
+func TestPromptLaunchRejectionStaysOnCommandLine(t *testing.T) {
+	errorText := "app: com.gostalgia.echo is already running or initializing (pid 1)"
+	caller := &launchCaller{launchErr: errors.New(errorText)}
+	m := New(context.Background(), caller, nil)
+	m.setMode(modePrompt)
+
+	m.Update(m.submit("launch com.gostalgia.echo")())
+
+	if got := m.Focus(); got != FocusPrompt {
+		t.Fatalf("focus after prompt launch rejection = %v, want prompt", got)
+	}
+	found := false
+	for _, e := range m.transcript {
+		found = found || strings.Contains(e.text, errorText)
+	}
+	if !found {
+		t.Fatal("prompt launch rejection missing from the command line")
+	}
+	if m.launchNotice != "" {
+		t.Fatalf("prompt rejection leaked into the shelf: %q", m.launchNotice)
+	}
+}
+
+// A prompt command that answers after navigation does not pull focus back.
+func TestLatePromptLaunchResultDoesNotStealFocus(t *testing.T) {
+	caller := &launchCaller{launchErr: errors.New("app: com.gostalgia.echo is already running")}
+	m := New(context.Background(), caller, nil)
+	m.setMode(modePrompt)
+	pending := m.submit("launch com.gostalgia.echo")
+
+	m.setMode(modeHome)
+	m.Update(pending())
+
+	if got := m.Focus(); got != FocusHome {
+		t.Fatalf("late prompt result moved focus to %v, want home", got)
+	}
+}
+
+// A successful shelf launch keeps the shelf as the successful path did and
+// its accepted registry refresh shows the new live instance.
+func TestLauncherLaunchSuccessKeepsShelf(t *testing.T) {
+	live := runningApp("com.gostalgia.echo", "Echo", 8)
+	caller := &launchCaller{apps: []appStatus{live}}
+	m := New(context.Background(), caller, nil)
+	m.apps = []appStatus{readyApp("com.gostalgia.echo", "Echo")}
+	m.setMode(modeLauncher)
+	m.selected = 0
+
+	if cmd := m.launchSelected(); cmd == nil {
+		t.Fatal("launch of the selected app returned no command")
+	} else {
+		m.Update(cmd())
+	}
+	if got := m.Focus(); got != FocusLauncher {
+		t.Fatalf("focus after successful launch = %v, want launcher", got)
+	}
+	if m.launchNotice != "" {
+		t.Fatalf("successful launch left rejection feedback: %q", m.launchNotice)
+	}
+
+	// The result's registry refresh is what turns the card LIVE.
+	for _, msg := range commandMessages(t, m.refreshAppsCmd()) {
+		if appMsg, ok := msg.(appListMsg); ok {
+			m.Update(appMsg)
+		}
+	}
+	if len(m.apps) != 1 || !m.apps[0].Running || m.apps[0].PID != 8 {
+		t.Fatalf("successful launch did not reach the shelf: %+v", m.apps)
 	}
 }
 

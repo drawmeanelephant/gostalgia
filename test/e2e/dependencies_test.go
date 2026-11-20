@@ -60,6 +60,9 @@ func TestCharmRestrictedToExperience(t *testing.T) {
 		// bloom (any package of the bloomfx.dev module) is an experience-only
 		// layout/compositing dependency, including from tests. Steep and reel
 		// are narrower: even in experience or test, only test imports are allowed.
+		// Gio (any package of the gioui.org module) is narrower still: only the
+		// experimental window spike may import it, including from tests, because
+		// gioui.org/app uses cgo on macOS and needs display headers on Linux.
 		for listIndex, list := range parts[1:] {
 			for _, imp := range strings.Split(list, ",") {
 				imp = strings.TrimSpace(imp)
@@ -68,6 +71,9 @@ func TestCharmRestrictedToExperience(t *testing.T) {
 				}
 				if isSteepImport(imp) && !steepImportAllowed(pkgPath, listIndex > 0) {
 					t.Errorf("package %s imports steep package %s outside _test.go under internal/experience/ or test/", pkgPath, imp)
+				}
+				if isGioImport(imp) && !gioImportAllowed(pkgPath) {
+					t.Errorf("package %s imports Gio package %s (restricted to internal/experience/experimental/windows/)", pkgPath, imp)
 				}
 			}
 		}
@@ -80,6 +86,14 @@ func isBloomImport(imp string) bool {
 
 func isSteepImport(imp string) bool {
 	return imp == "getsteep.dev/steep" || strings.HasPrefix(imp, "getsteep.dev/steep/")
+}
+
+func isGioImport(imp string) bool {
+	return strings.HasPrefix(imp, "gioui.org/")
+}
+
+func gioImportAllowed(pkgPath string) bool {
+	return strings.HasPrefix(pkgPath, "gostalgia/internal/experience/experimental/windows/")
 }
 
 func steepImportAllowed(pkgPath string, testImport bool) bool {
@@ -130,6 +144,24 @@ func TestBloomImportMatcher(t *testing.T) {
 	} {
 		if got := isBloomImport(imp); got != want {
 			t.Errorf("isBloomImport(%q) = %v, want %v", imp, got, want)
+		}
+	}
+}
+
+func TestGioImportMatcher(t *testing.T) {
+	for imp, want := range map[string]bool{
+		"gioui.org/app":            true,
+		"gioui.org/op":             true,
+		"gioui.org/io/input":       true,
+		"gioui.org/font/gofont":    true,
+		"gioui.org/shader":         true,
+		"gioui.orgx/counterfeit":   false,
+		"example.com/gioui.org":    false,
+		"github.com/eliasnaur/gio": false,
+		"gostalgia/internal/ui":    false,
+	} {
+		if got := isGioImport(imp); got != want {
+			t.Errorf("isGioImport(%q) = %v, want %v", imp, got, want)
 		}
 	}
 }
@@ -187,6 +219,11 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		// deliberately. Its go.mod sets the Bubble Tea v2.1.1, x/ansi v0.11.9
 		// and Go 1.27.3 floors above.
 		"bloomfx.dev/bloom": "v0.0.0-alpha.6",
+		// Gio (experimental window-spike comparison only; docs/architecture.md
+		// §4.6). Pinned exactly like bloom: one toolkit experiment at a time,
+		// fenced to internal/experience/experimental/windows/ so nothing that
+		// default builds can reach the cgo gioui.org/app or GPU packages.
+		"gioui.org": "v0.10.3",
 		// steep and its terminal/input capture module are exact-pinned,
 		// test-only dependencies. TestSteepImportFence and the import scan
 		// above confine both to _test.go in internal/experience/ or test/.

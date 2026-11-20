@@ -350,7 +350,7 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds) string {
 	// monochrome modes where the contract requires the theme's text focus
 	// marker, and its self-sizing columns fight the fixed DOS column
 	// budget below.
-	cols := solveColumns(w-markerWidth, m.pidWidth())
+	cols := solveColumns(tableColumnsFor(m.procs), w-markerWidth, m.pidWidth())
 	headerRow := columnLine(kit, cols, func(c column) string { return c.title })
 
 	var rows []string
@@ -439,9 +439,9 @@ var tableColumns = []column{
 
 // columnsRow is the table's column layout as a bloom row of Collapsible
 // slots one cell apart. The PID column widens to pidWidth so no PID is cut.
-func columnsRow(pidWidth int) bloom.FlexNode {
-	slots := make([]bloom.Child, len(tableColumns))
-	for i, c := range tableColumns {
+func columnsRow(cols []column, pidWidth int) bloom.FlexNode {
+	slots := make([]bloom.Child, len(cols))
+	for i, c := range cols {
 		if c.id == "pid" {
 			c.width = max(c.width, pidWidth)
 		}
@@ -457,18 +457,44 @@ func columnsRow(pidWidth int) bloom.FlexNode {
 	return bloom.Row(slots...).Gap(1)
 }
 
-// solveColumns lays the columns out in width cells and returns the visible
-// ones at their solved widths.
-func solveColumns(width, pidWidth int) []column {
-	frame := bloom.Solve(max(0, width), 1, columnsRow(pidWidth))
-	var cols []column
+// tableColumnsFor is the column set the table lays out for procs. CPU and
+// MEMORY are omitted while no process in the table reports supported resource
+// metrics: they can only offer placeholder dashes, so NAME receives their
+// released width to keep process identity readable. The decision follows the
+// samples, not a platform name.
+func tableColumnsFor(procs []ProcessRow) []column {
+	if resourcesSupported(procs) {
+		return tableColumns
+	}
+	cols := make([]column, 0, len(tableColumns))
+	reclaimed := 0
 	for _, c := range tableColumns {
-		if r, ok := frame.Rect(c.id); ok && r.Dx() > 0 {
-			c.width = r.Dx()
-			cols = append(cols, c)
+		if c.id == "cpu" || c.id == "memory" {
+			reclaimed += c.width + 1 // natural width and its separating gap
+			continue
+		}
+		cols = append(cols, c)
+	}
+	for i := range cols {
+		if cols[i].id == "name" {
+			cols[i].width += reclaimed
 		}
 	}
 	return cols
+}
+
+// solveColumns lays the columns out in width cells and returns the visible
+// ones at their solved widths.
+func solveColumns(cols []column, width, pidWidth int) []column {
+	frame := bloom.Solve(max(0, width), 1, columnsRow(cols, pidWidth))
+	var visible []column
+	for _, c := range cols {
+		if r, ok := frame.Rect(c.id); ok && r.Dx() > 0 {
+			c.width = r.Dx()
+			visible = append(visible, c)
+		}
+	}
+	return visible
 }
 
 // VisibleColumns reports the titles of the columns a table content width
@@ -476,7 +502,7 @@ func solveColumns(width, pidWidth int) []column {
 // column and can drop secondary columns sooner.
 func VisibleColumns(width int) []string {
 	var titles []string
-	for _, c := range solveColumns(width-markerWidth, 0) {
+	for _, c := range solveColumns(tableColumns, width-markerWidth, 0) {
 		titles = append(titles, c.title)
 	}
 	return titles
@@ -609,7 +635,7 @@ func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
 	if len(m.procs) == 0 {
 		return ui.Fit(kit.Muted("No Processes Found"), bounds)
 	}
-	cols := solveColumns(w-markerWidth, m.pidWidth())
+	cols := solveColumns(tableColumnsFor(m.procs), w-markerWidth, m.pidWidth())
 	var lines []string
 	n := bounds.Height
 	if n >= 2 {
@@ -618,6 +644,18 @@ func (m *Model) renderCompactTable(kit ui.Kit, bounds ui.Bounds) string {
 	}
 	lines = append(lines, m.processLines(kit, cols, w, n)...)
 	return ui.Fit(strings.Join(lines, "\n"), bounds)
+}
+
+// resourcesSupported reports whether any process row in the table carries
+// supported resource metrics. It reads the samples rather than assuming a
+// platform, so an empty table never claims availability.
+func resourcesSupported(procs []ProcessRow) bool {
+	for _, p := range procs {
+		if p.Resources.Supported {
+			return true
+		}
+	}
+	return false
 }
 
 func formatState(p ProcessRow) string {

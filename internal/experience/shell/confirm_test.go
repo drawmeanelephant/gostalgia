@@ -286,7 +286,7 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 		relaunched := append([]appStatus(nil), m.apps...)
 		relaunched[0].PID = 44
 		relaunched[0], relaunched[2] = relaunched[2], relaunched[0]
-		m.Update(resultMsg{apps: relaunched})
+		m.Update(appListMsg{apps: relaunched})
 		if !strings.Contains(dialogWords(m), "no longer running as PID 7") {
 			t.Fatalf("dialog does not say its target went away:\n%s", dialogText(m))
 		}
@@ -297,8 +297,8 @@ func TestConfirmationNeverRetargets(t *testing.T) {
 			t.Fatalf("stale confirmation sent %v", got)
 		}
 	})
-	// The app list refreshes only after a command, but the process table
-	// is polled; a relaunch the poll sees first must still disable the
+	// The app list refreshes on Apps entry and after commands; the process
+	// table is polled. A relaunch the poll sees first must still disable the
 	// stop, because app/stop would reach the new instance.
 	relaunch := taskmanager.ProcessRow{ID: 45, Name: "com.gostalgia.echo", Kind: "child", State: "running"}
 	for _, poll := range []struct {

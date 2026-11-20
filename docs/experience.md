@@ -252,12 +252,12 @@ shells keep independent clocks, settings, and state.
 |---|---|
 | `Panel` | Total outer bounds include the border, filled title, and padding. `PanelContentBounds` reports the available body rectangle. |
 | `Tabs` | One padded row; keeps the active tab visible when leading tabs must be dropped. Brackets show selection; parentheses show disabled tabs. |
-| `AppCard` | Name/focus header, real status badge, identity/version, and optional description. Compact layouts prioritize name and status. |
+| `AppCard` | Name/focus header, real status badge, identity/version, and optional description. Compact layouts prioritize name and status; a one-row card packs the name and full status, cutting the name before the state. |
 | `Badge` | Bounded inline symbol and label; an empty label uses the state label. |
 | `Dialog` | A box at most 48 cells wide: double border, title, word-wrapped message, and selectable/disabled actions. Actions take priority over a long body. `Kit.Dialog` centers it on a canvas of its own; `Kit.DialogLayer` returns it as a centered modal bloom layer, a focus scope the caller composes over the current screen with `bloom.Overlay`. The kit only renders: the caller owns visibility, input routing, target validation, and what confirming does. The kit sends no requests, and apps never supply dialogs or terminal views. |
 | `Progress` | Static clamped fraction/percentage, or indeterminate text without a fabricated percentage. No tick or animation command. |
 | `Notice` | Friendly default or caller-supplied empty, busy, disabled, success, and error messages. |
-| `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. |
+| `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. A binding that would not fit whole is dropped, never clipped mid-action. |
 | `Leaf`, `TabsLeaf`, `HelpBarLeaf` | bloom adapters: a `bloom.Layouter` that renders kit output into exactly the rectangle its slot gets. `Kit.Leaf` paints panel-body lines on the surface; `Sized` places output as rendered; `Natural` sets the size an `Auto` slot asks for. Render functions must not change state. |
 | `PanelNode` | `Panel` as a bloom node: draws the same border, title and padding as `Panel` and lays its child out in `PanelContentRect`, the body's offset and `PanelContentBounds` size. |
 
@@ -464,10 +464,16 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 
 Applications follow the platform single-instance contract. When launching an
 app that is already running or rejected by the runtime, the shell handles the
-rejection gracefully: the error is recorded in the transcript, focus safely
-transitions to the prompt to display the diagnostic message, and the terminal
-state remains intact. Stopping an application via `F3`, the palette, or
-`stop <app-id>` issues a graceful IPC stop request once it is confirmed.
+rejection gracefully and reports it where the launch came from. A launch from
+the Apps shelf keeps the shelf focused, with its filter, selected card and the
+existing live instance unchanged, and shows the rejection as a `LAUNCH FAILED`
+line there; only the newest launch from the current visit to the shelf may show
+one, so a late answer never pulls the user back after they navigate away. A
+typed `launch <app-id>` still records the error in the transcript and reports
+it on the command line, which comes to the front only while the user is still
+on the screen they submitted from. The terminal state remains intact in both
+cases. Stopping an application via `F3`, the palette, or `stop <app-id>` issues
+a graceful IPC stop request once it is confirmed.
 
 ## Task Manager, Notifications, and Crash Receipts
 
@@ -479,7 +485,9 @@ directly into the shell via dedicated tabs, commands, and overlay notifications:
 The live Task Manager displays real-time supervised process state and metrics in a
 scrollable table:
 - **Columns**: Selection pointer, `PID`, `NAME`, `STATE`, `CPU` (user/system usage),
-  `RAM` (resident memory), `RESTARTS`, and `EXIT` code / runtime duration.
+  `MEMORY` (resident memory), and `RESTARTS`. When no process in the table
+  reports supported resource metrics, `CPU` and `MEMORY` are omitted rather
+  than shown as dashes, and their width goes to `NAME`.
 - **Navigation & Controls**:
   - `↑` / `↓` / `k` / `j`: Navigate through processes.
   - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`), which
@@ -681,21 +689,22 @@ All stay inside experience. The dependency tests allow Charm and bloom under
 `internal/experience/` and still verify stdlib-only runtime/SDK/apps/`gctl`
 closures. Rendering needs no cgo, external binary, host shell, or service.
 
-## Experimental window adapter (Issue #215)
+## Experimental window adapters (Issues #215, #216)
 
 The nonproduction draft under `internal/experience/experimental/windows` keeps
 window identity, titles, logical bounds, focus, z-order, and lifecycle separate
-from its bloom adapter. Two existing SDK fixtures demonstrate dragging, border
-and keyboard close, focus scopes, independent drafts, and semantic action
-requests. Typed open/focus/move/close events use the existing event bus;
-rendering emits no lifecycle events. No production shell or runtime entry point
-registers the experiment, and apps still supply presentation data rather than
-toolkit views.
+from its bloom and Gio adapters. Two existing SDK fixtures demonstrate
+dragging, border and keyboard close, focus scopes, independent drafts, and
+semantic action requests. Typed open/focus/move/close events use the existing
+event bus; rendering emits no lifecycle events. No production shell or runtime
+entry point registers the experiments, and apps still supply presentation data
+rather than toolkit views.
 
-Run it with:
+Run them with:
 
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
+go build -tags giodemo -o /tmp/giowindowdemo ./internal/experience/experimental/windows/cmd/giowindowdemo
 go test -count=1 ./internal/experience/experimental/windows/...
 ```
 
@@ -706,9 +715,12 @@ to exit. At 30×10 the windows are clamped and content is clipped; the demo does
 not replace the shell's responsive presentation renderer. Actions stay local to
 the fixture demonstration. Close requests a full terminal repaint because the
 real alpha.6 differential-repaint path left stale cells after layer removal.
-The complete adapter-leak inventory and the explicitly unverified Gio baseline
-are in [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred);
-empirical Gio comparison is [#216](https://github.com/drawmeanelephant/gostalgia/issues/216).
+
+The Gio demo is behind the `giodemo` build tag because `gioui.org/app` uses
+cgo on macOS and needs display headers on Linux; building it proves compile
+only, and opening a window requires a display. The complete side-by-side
+adapter-leak inventory is in
+[architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
 
 ## Verification and snapshots
 

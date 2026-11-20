@@ -187,9 +187,29 @@ func (k Kit) AppCard(card AppCard, bounds Bounds) string {
 	// Use text instead, retaining the name and real status before other detail.
 	if bounds.Height < 4 {
 		title := label(card.Name)
-		header := k.StatusText(title, card.State)
+		marker := ""
 		if card.Focused && card.State != theme.Disabled {
-			header = k.Selection(k.theme.Focus.Marker + " " + title)
+			marker = k.theme.Focus.Marker + " "
+		}
+		if bounds.Height == 1 {
+			// One row is all a shelf with a launch rejection leaves at
+			// 30x10. Pack the name and the actual state, cutting the name
+			// rather than the state when both cannot fit.
+			badge := k.Badge(card.Status, card.State, bounds.Width)
+			nameWidth := bounds.Width - ansi.StringWidth(badge) - 2 - ansi.StringWidth(marker)
+			if nameWidth < 1 {
+				return Fit(badge, bounds)
+			}
+			name := k.Truncate(title, nameWidth)
+			header := k.StatusText(name, card.State)
+			if marker != "" {
+				header = k.Selection(marker + name)
+			}
+			return Fit(header+"  "+badge, bounds)
+		}
+		header := k.StatusText(title, card.State)
+		if marker != "" {
+			header = k.Selection(marker + title)
 		}
 		return Fit(header+"\n"+k.Badge(card.Status, card.State, bounds.Width)+"\n"+
 			label(card.Description), bounds)
@@ -344,13 +364,20 @@ type Binding struct {
 	Disabled  bool
 }
 
-// HelpBar is one row. Put the most important contextual bindings first; those
-// that don't fit are clipped rather than wrapping over a prompt or dialog.
+// HelpBar is one row. Put the most important contextual bindings first;
+// those that don't fit are dropped whole rather than clipped mid-action, so
+// a narrow terminal never shows a hint like "F3 ST" with no action. It
+// returns as many whole hints as fit.
 // bubbles/help was evaluated and lost (issue #185): it drops disabled
 // bindings outright and applies one style set to the whole bar, while the
 // contract renders disabled keys parenthesized in the disabled state.
 func (k Kit) HelpBar(bindings []Binding, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	separator := k.Separator()
 	var parts []string
+	used := 0
 	for _, binding := range bindings {
 		s := k.theme.Status(theme.Normal)
 		keyText := label(k.KeyLabel(binding.Key))
@@ -359,7 +386,16 @@ func (k Kit) HelpBar(bindings []Binding, width int) string {
 			keyText = "(" + keyText + ")"
 		}
 		key := k.paint(keyText, s.Text, s.Fill, k.theme.Typography.KeyBold)
-		parts = append(parts, key+" "+k.paint(label(binding.Help), s.Text, s.Fill, false))
+		part := key + " " + k.paint(label(binding.Help), s.Text, s.Fill, false)
+		cells := ansi.StringWidth(part)
+		if len(parts) > 0 {
+			cells += ansi.StringWidth(separator)
+		}
+		if used+cells > width {
+			break
+		}
+		parts = append(parts, part)
+		used += cells
 	}
-	return k.Text(Fit(strings.Join(parts, k.Separator()), Bounds{width, 1}))
+	return k.Text(Fit(strings.Join(parts, separator), Bounds{width, 1}))
 }
