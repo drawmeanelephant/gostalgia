@@ -808,6 +808,10 @@ only, and opening a window requires a display. The complete side-by-side
 adapter-leak inventory is in
 [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
 
+The proposed production design that builds on this spike, including which
+surfaces become windows and how input is routed, is in
+[Multi-window shell design](windows.md) (Issue #246).
+
 ## Verification and snapshots
 
 ```sh

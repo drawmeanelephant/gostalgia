@@ -126,6 +126,7 @@ use, and the terminal demo is most useful at 80×24 or larger. The
 toolkit-neutral draft and the observed side-by-side bloom/Gio leak inventory
 are in
 [docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
+The proposed production design is in [docs/windows.md](docs/windows.md).
 
 ## Checks
 
