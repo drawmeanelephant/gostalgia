@@ -469,11 +469,8 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		if !h.IsAltScreen() {
 			t.Fatal("shell did not enter the alternate screen")
 		}
-		// Interrupt a settled frame, not the startup reveal. ConPTY re-renders
-		// the screen and writes ESC[m only when its pen still holds a style, so
-		// a reveal frame ending in default cells hides the reset on Windows.
-		h.WaitSettle()
 		h.KeyCtrlC()
+
 		if status := h.ExitStatus(); status != 0 {
 			t.Fatalf("Ctrl-C exit status = %d, want 0", status)
 		}
@@ -553,7 +550,7 @@ func assertSteepScreenAnchor(t *testing.T, h *steep.Harness, anchor, help steep.
 
 func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	t.Helper()
-	var raw []byte
+	var all, raw []byte
 	var inputEncodings []string
 	ctrlCSeen := false
 	for event := range timeline.Events() {
@@ -565,6 +562,7 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 				raw = nil
 			}
 		case reel.Output:
+			all = append(all, event.Data...)
 			if ctrlCSeen {
 				raw = append(raw, event.Data...)
 			}
@@ -576,15 +574,10 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	if len(raw) == 0 {
 		t.Fatal("Ctrl-C recording contains no terminal output after Ctrl-C")
 	}
-	styleReset := "\x1b[0m"
-	if goruntime.GOOS == "windows" {
-		// ConPTY writes the equivalent zero-parameter SGR reset as ESC[m.
-		styleReset = "\x1b[m"
-	}
 	expected := map[string]string{
 		"alternate screen reset": "\x1b[?1049l",
 		"cursor visible":         "\x1b[?25h",
-		"style reset":            styleReset,
+		"style reset":            "\x1b[0m",
 		"mouse 1000 reset":       "\x1b[?1000l",
 		"mouse 1002 reset":       "\x1b[?1002l",
 		"mouse 1003 reset":       "\x1b[?1003l",
@@ -598,8 +591,17 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 		// directions. The scenario's ModeSetting assertions still prove that
 		// its emulator state was restored; every supported reset is required.
 		delete(expected, "mouse 1000 reset")
+		// ConPTY repaints instead of forwarding Run's ESC[0m, and writes its
+		// own reset only while its pen still holds a style. Whether one
+		// follows Ctrl-C depends on how ConPTY painted the last frame, so the
+		// pen check below carries the requirement there.
+		delete(expected, "style reset")
 	}
 	missing := false
+	if last, ok := finalSGRResetsPen(all); !ok {
+		missing = true
+		t.Errorf("terminal output leaves the pen styled: last SGR is %q, want a reset", last)
+	}
 	for name, sequence := range expected {
 		if !bytes.Contains(raw, []byte(sequence)) {
 			missing = true
@@ -609,4 +611,22 @@ func assertSteepRestorationOutput(t *testing.T, timeline *reel.Timeline) {
 	if missing {
 		t.Errorf("post-Ctrl-C raw output was %q", raw)
 	}
+}
+
+var sgrSequence = regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
+
+// finalSGRResetsPen reports whether the last SGR sequence in out, if any, is
+// a bare reset such as ESC[m or ESC[0m, so the terminal is left unstyled.
+func finalSGRResetsPen(out []byte) (last string, ok bool) {
+	matches := sgrSequence.FindAllSubmatch(out, -1)
+	if len(matches) == 0 {
+		return "", true
+	}
+	final := matches[len(matches)-1]
+	for _, param := range strings.FieldsFunc(string(final[1]), func(r rune) bool { return r == ';' || r == ':' }) {
+		if strings.TrimLeft(param, "0") != "" {
+			return string(final[0]), false
+		}
+	}
+	return string(final[0]), true
 }
