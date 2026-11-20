@@ -11,14 +11,14 @@ import (
 )
 
 // The finite effects are event-owned and comfortably below the experience
-// contract's 200 ms ceiling. They have no idle loop: a value schedules frames
+// contract's 400 ms ceiling. They have no idle loop: a value schedules frames
 // only while it is moving and its transition node disappears at progress one.
 const (
 	launchShakeDuration   = 160 * time.Millisecond
 	overlayRevealDuration = 140 * time.Millisecond
 	toastEntranceDuration = 160 * time.Millisecond
 	// startupRevealDuration is the once-per-model CRT-style startup reveal.
-	// It stays inside the same 200 ms finite-motion budget.
+	// It stays inside the same 400 ms finite-motion budget.
 	startupRevealDuration = 180 * time.Millisecond
 )
 
