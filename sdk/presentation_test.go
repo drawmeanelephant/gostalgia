@@ -103,6 +103,22 @@ func TestPresentationValidation(t *testing.T) {
 		func(v *View) { v.Grid = &Grid{Label: strings.Repeat("x", 257), Columns: 1} },
 		func(v *View) {
 			v.Version = 2
+			v.Blocks = []Block{{ID: "art", Text: "abc", Focus: &BlockFocus{X: 1, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 2, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 0, Y: 2}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: -1, Y: 0}}}
+		},
+		func(v *View) {
+			v.Blocks = []Block{{ID: "art", Text: "a\nbc", Focus: &BlockFocus{X: 0, Y: -1}}}
+		},
+		func(v *View) {
+			v.Version = 2
 			v.Region = &Region{ID: "log", Text: "x"}
 		},
 		func(v *View) {
@@ -136,6 +152,88 @@ func TestPresentationValidation(t *testing.T) {
 	v.Blocks = []Block{{ID: "art", Text: strings.Repeat("x\n", maxBlockLines)}}
 	if err := v.Validate(); err != nil {
 		t.Fatalf("trailing newline counted as an extra line: %v", err)
+	}
+}
+
+// TestPresentationBlockFocus pins the optional version-3 focal point: it is
+// accepted inside the block's own text, counts runes rather than bytes, and a
+// trailing newline adds no line for Focus.Y to name.
+func TestPresentationBlockFocus(t *testing.T) {
+	v := testView()
+	v.Version, v.Instance = PresentationVersion, "launch"
+	v.Blocks = []Block{{
+		ID: "map", Text: "map\n界@\nend\n",
+		Focus: &BlockFocus{X: 1, Y: 1},
+	}}
+	if err := v.Validate(); err != nil {
+		t.Fatalf("valid block focus rejected: %v", err)
+	}
+	// X counts code points: the wide rune at column 0 still lets column 1
+	// name the following ASCII cell, and byte offsets would wrongly reject it.
+	v.Blocks[0].Focus = &BlockFocus{X: 2, Y: 2}
+	if err := v.Validate(); err != nil {
+		t.Fatalf("focus on the last terminated line rejected: %v", err)
+	}
+}
+
+// TestPresentationBlockFocusRejectsSanitizerShifts pins the boundary between
+// a hinted block's raw text and the experience sanitizer. Validation counts
+// code points in the raw text; the shell strips ANSI sequences, expands tabs,
+// and drops other terminal controls before rendering. If a focus were
+// accepted against such text, its coordinate would name a different cell
+// after sanitization, and a cropped viewport could center away from the
+// glyph the app meant. A hint therefore requires control-free text, while
+// the same text without a hint keeps the documented legacy sanitization.
+func TestPresentationBlockFocusRejectsSanitizerShifts(t *testing.T) {
+	base := testView()
+	base.Version, base.Instance = PresentationVersion, "launch"
+	for _, tc := range []struct {
+		name  string
+		text  string
+		focus BlockFocus
+	}{
+		{"nul padding", strings.Repeat("\x00", 20) + "@", BlockFocus{X: 20, Y: 0}},
+		{"tab expansion", "a\tb", BlockFocus{X: 2, Y: 0}},
+		{"ansi sequence", "\x1b[31m@\x1b[0m", BlockFocus{X: 5, Y: 0}},
+		{"carriage return", "a\rb", BlockFocus{X: 2, Y: 0}},
+		{"control on another line", "ok\n\x1b[31mred", BlockFocus{X: 0, Y: 0}},
+		{"invalid utf-8", "ab\xff\xfe@", BlockFocus{X: 4, Y: 0}},
+	} {
+		v := base
+		v.Blocks = []Block{{ID: "map", Text: tc.text, Focus: &tc.focus}}
+		if err := v.Validate(); err == nil {
+			t.Errorf("%s: accepted hinted block whose Focus moves during sanitization: %q", tc.name, tc.text)
+		}
+		// Legacy semantics: without the optional hint the same text is a
+		// plain art block and stays valid, sanitized exactly as before.
+		v.Blocks = []Block{{ID: "map", Text: tc.text}}
+		if err := v.Validate(); err != nil {
+			t.Errorf("%s: rejected unhinted legacy block: %v", tc.name, err)
+		}
+	}
+}
+
+// TestPresentationBlockFocusAcceptsControlFreeText proves the new boundary
+// does not narrow the useful population: newlines, wide runes, and combining
+// clusters sanitize unchanged, so their code-point coordinates keep naming
+// the same cell.
+func TestPresentationBlockFocusAcceptsControlFreeText(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		text  string
+		focus BlockFocus
+	}{
+		{"wide and combining", "map\n界e\u0301@\nend\n", BlockFocus{X: 3, Y: 1}},
+		{"combining base", "e\u0301x", BlockFocus{X: 0, Y: 0}},
+		{"combining mark", "e\u0301x", BlockFocus{X: 1, Y: 0}},
+		{"newline separated", "a\nbc\n", BlockFocus{X: 1, Y: 1}},
+	} {
+		v := testView()
+		v.Version, v.Instance = PresentationVersion, "launch"
+		v.Blocks = []Block{{ID: "map", Text: tc.text, Focus: &tc.focus}}
+		if err := v.Validate(); err != nil {
+			t.Errorf("%s: control-free focus rejected: %v", tc.name, err)
+		}
 	}
 }
 

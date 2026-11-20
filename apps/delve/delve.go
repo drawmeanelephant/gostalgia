@@ -64,6 +64,7 @@ const moveAction = "move"
 type gameEngine interface {
 	Command(engine.Cmd) []engine.Event
 	MapView() []string
+	PlayerPosition() engine.Pos
 	LogTail(int) []string
 	Stats() engine.Stats
 	Flags() engine.Flags

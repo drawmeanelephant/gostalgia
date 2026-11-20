@@ -53,6 +53,30 @@ var rowWaves = [numRows]string{"sawtooth", "square", "square", "triangle"}
 // item detail.
 var rowNames = [numRows]string{"lead", "high", "low", "bass"}
 
+// voiceCells is each row's single-character grid identity: the voice's
+// initial in lower case for a rest and upper case for a set step. One glyph
+// keeps the 16x4 pad inside the existing cell width, and the letter survives
+// focus, toggles, theme changes, and Monochrome/Plain rendering without
+// relying on row color.
+var voiceCells = [numRows][2]string{
+	{"l", "L"},
+	{"h", "H"},
+	{"o", "O"},
+	{"b", "B"},
+}
+
+// voiceLegend labels the grid with the actual voices and their pitches in the
+// current scale, so the cell letters always resolve to real sounding rows.
+// It stays compact enough for an 80-column body.
+func voiceLegend(scale scaleDef) string {
+	parts := make([]string, 0, numRows)
+	for r := 0; r < numRows; r++ {
+		parts = append(parts, fmt.Sprintf("%s %s %.0f",
+			voiceCells[r][1], rowNames[r], scale.rowFreqHz(r)))
+	}
+	return strings.Join(parts, " · ") + " Hz · uppercase = on"
+}
+
 // scaleDef is one named row-to-pitch table. offsets are semitones above the
 // root, listed ascending; row r (0 = top) sounds offsets[numRows-1-r], so
 // the top grid row is always the highest pitch.

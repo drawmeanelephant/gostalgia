@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,8 @@ type harness struct {
 	statusErr      error
 	playErr        error
 	playCalls      int
+	playAck        bool       // sound/play reports played; default true
+	playDurationMs int        // acknowledged duration override; 0 = computed
 	lastNotes      []clipNote // payload of the most recent sound/play call
 	seq            atomic.Int64
 
@@ -46,6 +49,7 @@ func newHarness(t *testing.T) *harness {
 		caps:           []string{"ipc", "fs.read", "fs.write", "sound"},
 		soundSupported: true,
 		player:         "fake",
+		playAck:        true,
 		handlers:       map[string]sdk.Handler{},
 	}
 	inst, err := Factory()
@@ -122,7 +126,11 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 			return err
 		}
 		h.lastNotes = body.Notes
-		return reply(map[string]any{"played": true, "notes": len(body.Notes), "duration_ms": clipDurationMs(body.Notes)})
+		duration := clipDurationMs(body.Notes)
+		if h.playDurationMs != 0 {
+			duration = h.playDurationMs
+		}
+		return reply(map[string]any{"played": h.playAck, "notes": len(body.Notes), "duration_ms": duration})
 	}
 	return fmt.Errorf("unknown method %s", method)
 }
@@ -446,8 +454,8 @@ func TestGridV2(t *testing.T) {
 		if c.Action != stepAction {
 			t.Errorf("cell %q action = %q, want %q", c.ID, c.Action, stepAction)
 		}
-		if c.Label != "·" {
-			t.Errorf("empty cell %q label = %q, want ·", c.ID, c.Label)
+		if wantLabel := voiceCells[i/numSteps][0]; c.Label != wantLabel {
+			t.Errorf("empty cell %q label = %q, want its voice's rest glyph %q", c.ID, c.Label, wantLabel)
 		}
 	}
 	// The step action is cell-declared only, like dogcalc's press.
@@ -459,18 +467,79 @@ func TestGridV2(t *testing.T) {
 	}
 }
 
+func TestGridVoiceIdentity(t *testing.T) {
+	h := newHarness(t)
+	v := h.view(t, 2)
+
+	// Every row carries its own rest glyph, so empty rows are distinguishable.
+	seen := map[string]int{}
+	for r := 0; r < numRows; r++ {
+		got := cellByID(t, v.Grid, fmt.Sprintf("r%ds%d", r, 0)).Label
+		if got != voiceCells[r][0] {
+			t.Fatalf("row %d rest glyph = %q, want %q", r, got, voiceCells[r][0])
+		}
+		if prev, dup := seen[got]; dup {
+			t.Fatalf("rows %d and %d share the rest glyph %q", prev, r, got)
+		}
+		seen[got] = r
+	}
+
+	// The legend names the actual voices in top-to-bottom order with the
+	// pitches the current scale will sound.
+	last := -1
+	for r := 0; r < numRows; r++ {
+		want := fmt.Sprintf("%s %s %.0f", voiceCells[r][1], rowNames[r], scales[0].rowFreqHz(r))
+		at := strings.Index(v.Grid.Label, want)
+		if at < 0 {
+			t.Fatalf("legend %q is missing %q", v.Grid.Label, want)
+		}
+		if at <= last {
+			t.Fatalf("legend %q is not in lead/high/low/bass order at %q", v.Grid.Label, want)
+		}
+		last = at
+	}
+	if !strings.Contains(v.Grid.Label, "uppercase = on") {
+		t.Errorf("legend %q does not explain the case cue", v.Grid.Label)
+	}
+
+	// A toggle changes only that cell's case; the other rows keep their
+	// identity and the whole pad stays one glyph per cell.
+	v = h.act(t, 2, stepAction, "", "r2s5", nil)
+	for r := 0; r < numRows; r++ {
+		want := voiceCells[r][0]
+		if r == 2 {
+			want = voiceCells[r][1]
+		}
+		if got := cellByID(t, v.Grid, fmt.Sprintf("r%ds%d", r, 5)).Label; got != want {
+			t.Fatalf("row %d step 5 glyph = %q, want %q", r, got, want)
+		}
+	}
+
+	// The scale changes the pitches in the legend, never the row letters.
+	v = h.act(t, 2, "scale", "", "", nil) // major
+	for r := 0; r < numRows; r++ {
+		want := fmt.Sprintf("%s %s %.0f", voiceCells[r][1], rowNames[r], scales[1].rowFreqHz(r))
+		if !strings.Contains(v.Grid.Label, want) {
+			t.Errorf("after scale change legend %q is missing %q", v.Grid.Label, want)
+		}
+		if got := cellByID(t, v.Grid, fmt.Sprintf("r0s%d", r)).Label; got != voiceCells[0][0] {
+			t.Errorf("scale change altered row 0 identity: %q", got)
+		}
+	}
+}
+
 func TestToggleViaGrid(t *testing.T) {
 	h := newHarness(t)
 	v := h.act(t, 2, stepAction, "", "r0s4", nil)
-	if got := cellByID(t, v.Grid, "r0s4").Label; got != "x" {
-		t.Fatalf("after press r0s4 label = %q, want x", got)
+	if got := cellByID(t, v.Grid, "r0s4").Label; got != "L" {
+		t.Fatalf("after press r0s4 label = %q, want L", got)
 	}
 	if !h.app.pattern.On(0, 4) {
 		t.Fatal("cell press did not set the pattern")
 	}
 	v = h.act(t, 2, stepAction, "", "r0s4", nil)
-	if got := cellByID(t, v.Grid, "r0s4").Label; got != "·" {
-		t.Fatalf("second press r0s4 label = %q, want ·", got)
+	if got := cellByID(t, v.Grid, "r0s4").Label; got != "l" {
+		t.Fatalf("second press r0s4 label = %q, want l", got)
 	}
 	if h.app.pattern.On(0, 4) {
 		t.Fatal("second press did not clear the pattern cell")
@@ -622,7 +691,7 @@ func TestPlaySilentWithoutGrant(t *testing.T) {
 	}
 	// Composition is unaffected.
 	v = h.act(t, 2, stepAction, "", "r3s0", nil)
-	if cellByID(t, v.Grid, "r3s0").Label != "x" {
+	if cellByID(t, v.Grid, "r3s0").Label != "B" {
 		t.Error("composing broke on a silent host")
 	}
 	if h.playCalls != 0 {
@@ -735,6 +804,203 @@ func TestPlayUnsupportedAtPlayTime(t *testing.T) {
 	}
 }
 
+// --- acknowledged playback indicator ---
+
+// startPass sets a cell and plays one pass, returning the action view. The
+// harness clock starts at t0, so the deadline is t0 plus the acknowledged
+// duration unless a test overrides it.
+func startPass(t *testing.T, h *harness) sdk.View {
+	t.Helper()
+	h.act(t, 2, stepAction, "", "r0s0", nil)
+	return h.act(t, 2, "play", "", "", nil)
+}
+
+// TestPlayingIndicatorFollowsAcknowledgedDuration: nothing claims Playing
+// before the host acknowledges a pass, the static indicator appears for the
+// acknowledged duration, and the presentation immediately after the deadline
+// is clean. The deadline is in-memory only.
+func TestPlayingIndicatorFollowsAcknowledgedDuration(t *testing.T) {
+	h := newHarness(t)
+	if strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("view claimed Playing before any acknowledged playback")
+	}
+
+	v := startPass(t, h)
+	if !strings.Contains(v.Status, "Playing one pass (2.0s)") {
+		t.Fatalf("status after acknowledged play = %q, want a 2.0s Playing indicator", v.Status)
+	}
+	if !strings.Contains(v.Status, "16 notes over 2.0s") {
+		t.Errorf("status after acknowledged play = %q, want the acknowledged pass note", v.Status)
+	}
+
+	h.now = t0.Add(2*time.Second - time.Millisecond)
+	if !strings.Contains(h.view(t, 2).Status, "Playing one pass (2.0s)") {
+		t.Fatal("indicator vanished before the acknowledged deadline")
+	}
+	h.now = t0.Add(2 * time.Second)
+	if strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("indicator survived the acknowledged deadline")
+	}
+
+	// A relaunch over the same files starts with no pass in flight.
+	h2 := newHarness(t)
+	h2.files = h.files
+	if strings.Contains(h2.view(t, 2).Status, "Playing") {
+		t.Fatal("playback deadline was persisted across launches")
+	}
+}
+
+// TestPlayingIndicatorUsesAcknowledgedDuration: the host's acknowledged
+// duration owns the deadline, not the requested pass length.
+func TestPlayingIndicatorUsesAcknowledgedDuration(t *testing.T) {
+	h := newHarness(t)
+	h.playDurationMs = 400
+
+	v := startPass(t, h)
+	if !strings.Contains(v.Status, "Playing one pass (0.4s)") {
+		t.Fatalf("status = %q, want the acknowledged 0.4s pass", v.Status)
+	}
+	var out struct {
+		Played     bool `json:"played"`
+		DurationMs int  `json:"duration_ms"`
+	}
+	h.route(t, "play", nil, &out)
+	if !out.Played || out.DurationMs != 400 {
+		t.Fatalf("play route = %+v, want the acknowledged 400ms", out)
+	}
+
+	h.now = t0.Add(400*time.Millisecond - time.Millisecond)
+	if !strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("indicator vanished before the acknowledged deadline")
+	}
+	h.now = t0.Add(400 * time.Millisecond)
+	if strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("indicator outlived the acknowledged duration")
+	}
+}
+
+// TestPlayingIndicatorIsStatic: the indicator is fixed text for the whole
+// acknowledged pass — no countdown, moving step, or other time-driven
+// decoration — so two presentations at different clocks inside the pass are
+// identical.
+func TestPlayingIndicatorIsStatic(t *testing.T) {
+	h := newHarness(t)
+	startPass(t, h)
+
+	h.now = t0.Add(250 * time.Millisecond)
+	first := h.view(t, 2)
+	h.now = t0.Add(1250 * time.Millisecond)
+	second := h.view(t, 2)
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("presentation changed inside the pass:\n%+v\n%+v", first, second)
+	}
+	if !strings.Contains(first.Status, "Playing one pass (2.0s)") {
+		t.Fatalf("static pass status = %q, want Playing", first.Status)
+	}
+}
+
+// TestUnrelatedActionsDoNotRetimePlaying: editing the pattern, changing
+// tempo, changing scale, saving, or clearing never clears or extends the
+// pass already acknowledged.
+func TestUnrelatedActionsDoNotRetimePlaying(t *testing.T) {
+	h := newHarness(t)
+	if v := startPass(t, h); !strings.Contains(v.Status, "Playing one pass (2.0s)") {
+		t.Fatalf("status = %q, want Playing", v.Status)
+	}
+	h.now = t0.Add(500 * time.Millisecond)
+
+	h.act(t, 2, stepAction, "", "r0s1", nil)
+	v := h.view(t, 2)
+	if !strings.Contains(v.Status, "Playing one pass (2.0s)") || !strings.Contains(v.Status, "lead step 2 on") {
+		t.Fatalf("step edit status = %q, want the pass plus the edit note", v.Status)
+	}
+
+	// A faster tempo would make a new pass 1.3s; it must not retime this one.
+	h.act(t, 2, "tempo", "", "", map[string]string{"tempo_bpm": "180"})
+	v = h.view(t, 2)
+	if !strings.Contains(v.Status, "Playing one pass (2.0s)") {
+		t.Fatalf("tempo change retimed the acknowledged pass: %q", v.Status)
+	}
+	h.act(t, 2, "scale", "", "", nil)
+	h.act(t, 2, "save", "", "", map[string]string{"save_name": "during pass"})
+	h.act(t, 2, "clear", "", "", nil)
+	v = h.view(t, 2)
+	if !strings.Contains(v.Status, "Playing one pass (2.0s)") || !strings.Contains(v.Status, "pattern cleared") {
+		t.Fatalf("unrelated actions changed the pass status: %q", v.Status)
+	}
+
+	h.now = t0.Add(1999 * time.Millisecond)
+	if !strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("indicator vanished before its original deadline")
+	}
+	h.now = t0.Add(2 * time.Second)
+	if strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("indicator was extended past its original deadline")
+	}
+}
+
+// TestPlayFailuresNeverClaimOrExtendPlaying: unavailable hosts, busies, and
+// acknowledgements that report failure never start an indicator, and a
+// failure during an acknowledged pass leaves its original deadline alone.
+func TestPlayFailuresNeverClaimOrExtendPlaying(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(*harness)
+	}{
+		{"no grant", func(h *harness) { h.caps = []string{"ipc", "fs.read", "fs.write"} }},
+		{"unsupported host", func(h *harness) { h.soundSupported = false }},
+		{"status unreachable", func(h *harness) { h.statusErr = errors.New("no such route") }},
+		{"busy", func(h *harness) { h.playErr = errors.New("sound/play: platform: audio playback busy") }},
+		{"unacknowledged", func(h *harness) { h.playAck = false }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			tc.setup(h)
+			h.act(t, 2, stepAction, "", "r0s0", nil)
+			var out struct {
+				Played bool   `json:"played"`
+				Reason string `json:"reason"`
+			}
+			h.route(t, "play", nil, &out)
+			if out.Played {
+				t.Fatalf("play route = %+v, want failure", out)
+			}
+			if out.Reason == "" {
+				t.Error("failed play had no readable reason")
+			}
+			if v := h.view(t, 2); strings.Contains(v.Status, "Playing") {
+				t.Fatalf("failed play claimed Playing: %q", v.Status)
+			}
+			// Composition stays usable after the failure.
+			if got := cellByID(t, h.act(t, 2, stepAction, "", "r1s1", nil).Grid, "r1s1").Label; got != "H" {
+				t.Fatalf("composition after failure set %q, want H", got)
+			}
+		})
+	}
+
+	// A failure during an acknowledged pass neither clears nor extends it.
+	h := newHarness(t)
+	startPass(t, h)
+	h.now = t0.Add(500 * time.Millisecond)
+	h.playErr = errors.New("sound/play: platform: audio playback busy")
+	v := h.act(t, 2, "play", "", "", nil)
+	if !strings.Contains(v.Status, "Playing one pass (2.0s)") || !strings.Contains(v.Status, "audio busy") {
+		t.Fatalf("busy during a pass status = %q, want the pass plus the busy note", v.Status)
+	}
+	h.playErr = nil
+	h.playAck = false
+	h.act(t, 2, "play", "", "", nil)
+	h.now = t0.Add(1999 * time.Millisecond)
+	if !strings.Contains(h.view(t, 2).Status, "Playing one pass (2.0s)") {
+		t.Fatal("failed retry cleared or retimed the acknowledged pass")
+	}
+	h.now = t0.Add(2 * time.Second)
+	if strings.Contains(h.view(t, 2).Status, "Playing") {
+		t.Fatal("failed retries extended the acknowledged pass")
+	}
+}
+
 // --- persistence ---
 
 func TestSaveLoadDeletePattern(t *testing.T) {
@@ -808,7 +1074,7 @@ func TestPersistenceReload(t *testing.T) {
 	h2 := newHarness(t)
 	h2.files = h.files
 	v := h2.view(t, 2)
-	if cellByID(t, v.Grid, "r2s7").Label != "x" {
+	if cellByID(t, v.Grid, "r2s7").Label != "O" {
 		t.Error("working pattern did not survive relaunch")
 	}
 	if h2.app.bpm != 90 {
@@ -859,7 +1125,7 @@ func TestDeniedStorageNotesIt(t *testing.T) {
 		t.Errorf("denied storage banner = %q, want the denial", v.Error)
 	}
 	v = h.act(t, 2, stepAction, "", "r0s0", nil)
-	if cellByID(t, v.Grid, "r0s0").Label != "x" {
+	if cellByID(t, v.Grid, "r0s0").Label != "L" {
 		t.Error("composing broke without storage")
 	}
 	if !strings.Contains(v.Status, "save failed") {

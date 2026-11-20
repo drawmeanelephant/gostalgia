@@ -1645,6 +1645,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// scrolls its rows, and an open log tail pages; otherwise the
 			// keys page the transcript while it is on screen.
 			switch {
+			case m.presentation != nil && m.presentation.inspect:
+				return m, m.viewKey(msg)
 			case m.presentation != nil && m.presentation.regionFocused():
 				return m, m.viewKey(msg)
 			case m.presentation != nil && keyStr == "pgup":

@@ -509,12 +509,23 @@ concrete vocabulary is:
 - `sdk.ViewState`: `ready`, `loading`, or `error`. An error state requires an
   error banner. `status` is informational text, not an IPC error.
 - `sdk.Block` (version 2): a preformatted multi-line text region for ASCII art
-  or pre-wrapped content. `id`, optional `label` caption, and `text`. Lines are
+  or pre-wrapped content. `id`, optional `label` caption, `text`, and optional
+  version-3 `focus`. Lines are
   rendered verbatim in order: the shell clips each line at the viewport edge
   and never wraps, so apps can draw fixed-width figures. Tabs expand to the
   next 8-cell tab stop during sanitization; use spaces for pixel-exact
   alignment. One trailing newline terminates the last line rather than
   counting as an extra line.
+- `sdk.BlockFocus` (version 3): optional `focus: {x, y}` on a `sdk.Block`,
+  naming the cell the experience should keep visible when it crops a bounded
+  viewport — for example a map's player tile. `x` counts Unicode code points
+  from the left of `y`'s line and `y` counts lines from the block's top; both
+  are validated against the block's own text, and a focus on a version below
+  3 is an error. A hinted block must be valid UTF-8 with no terminal controls
+  other than newlines (no tabs or ANSI escapes), so the named cell survives
+  sanitization unchanged; control-free text, including wide and combining
+  runes, is unaffected. An unhinted block keeps the ordinary sanitization
+  above and renders exactly as before, so the hint is always optional.
 - `sdk.Meter` (version 2): `id`, `label`, and a finite `value` fraction. The
   shell clamps `value` to [0,1] and draws it in the theme's progress vocabulary
   (ASCII `#`/`-` in monochrome).
@@ -1331,7 +1342,7 @@ routes under `app/com.gostalgia.petwatch/`: `state`, `add`, `complete`,
 `apps/dogcalc` (display name **Dogcalc**, ID `com.gostalgia.dogcalc`) is the
 pack's calculator rendered as a real pad: digit keys are named breeds and the
 operator keys are dog verbs, laid out through the contract-v2 `grid` element.
-It shares the v1 Calculator's arithmetic core — the same `Evaluate` route math
+It shares the Calculator's arithmetic core — the same `Evaluate` route math
 and the same exported `Pad` key-press state machine — so chained left-to-right
 operations, decimals, overflow, and divide-by-zero behave identically.
 
@@ -1363,7 +1374,8 @@ Labels keep the arithmetic symbol visible next to the dog so the math still
 reads plainly. The `PAW .` cell disables itself while the operand being edited
 already has a decimal point, and `ROLL ±` flips the sign of the entry or of a
 computed result. The version-2 grid frees the pad from the 16-action bound, so
-the `.` and `±` keys that the v1 Calculator could not afford ship here.
+the `.` and `±` keys that the sixteen-action v1 contract cannot carry ship
+here.
 
 A version-1 snapshot gets the fallback instead: the original sixteen keys
 (`digit_0`–`digit_9`, `add`, `sub`, `mul`, `div`, `eq`, `clear`) as labeled
@@ -1393,6 +1405,16 @@ the pack's arithmetic story continues through Dogcalc. The app stays compiled
 and registered — Dogcalc imports its `Evaluate` core and `Pad` state machine —
 so existing headless `calc` calls and v1 views keep working, but it is no
 longer the face of arithmetic on the shelf.
+
+Retirement does not freeze its presentation contract. A negotiated version-2
+or version-3 snapshot carries the same plain four-column `Grid` ("Keypad") of
+18 cells as Dogcalc, with the shared `press` action routed by `cell_id`: clear,
+sign, divide, multiply on the first row, digits in calculator order, equals at
+the right edge, and zero plus decimal on the short final row. The decimal cell
+disables itself while the current operand already has its point. A version-1
+snapshot and every v1 action response keep exactly the original sixteen
+labeled actions (`digit_0`–`digit_9`, `add`, `sub`, `mul`, `div`, `eq`,
+`clear`) with no grid, `dot`, or `neg`, so older clients lose nothing.
 
 ## 15. Todo: a persistent task list (`com.gostalgia.todo`)
 
@@ -1681,12 +1703,17 @@ the `sound/status` probe).
 
 A version-2 snapshot carries a 16-column `Grid` of exactly 64 cells — the
 pad maximum — where cell `r{row}s{step}` declares the shared `step` action
-and a press toggles the cell (`x` on, `·` off). A version-1 snapshot gets
-the fallback instead: the four rows rendered as items with their encoded
-step strings, plus a `row_edit` field and `apply_row` action that accept
-`<row> <16 x/. glyphs>` (e.g. `lead x.x..x..x....x`) or `<row> clear`. Rows
-are named or 1-indexed: `lead`, `high`, `low`, `bass` — top to bottom,
-highest pitch to lowest.
+and a press toggles the cell. Every cell spells its row's voice as one
+character: lower-case `l`, `h`, `o`, `b` for a rest and upper-case `L`,
+`H`, `O`, `B` for a set step, top to bottom lead, high, low, bass. The
+grid label repeats that key with the voices' actual pitches in the current
+scale (`L lead 220 · H high 165 · O low 131 · B bass 110 Hz · uppercase =
+on`), so the pad stays readable without row colors and in Monochrome or
+Plain mode. A version-1 snapshot gets the fallback instead: the four rows
+rendered as items with their encoded step strings, plus a `row_edit` field
+and `apply_row` action that accept `<row> <16 x/. glyphs>` (e.g. `lead
+x.x..x..x....x`) or `<row> clear`. Rows are named or 1-indexed: `lead`,
+`high`, `low`, `bass` — top to bottom, highest pitch to lowest.
 
 Each row is a fixed voice: sawtooth lead, two square middle rows, triangle
 bass. Pitches come from a data-driven scale table — `pentatonic` (minor:
@@ -1708,8 +1735,19 @@ lasts 4 seconds, far under the 10s ceiling. There is no Stop action — the
 host player is fire-and-forget and the clip always self-terminates within a
 few seconds — and there is no loop mode, because looping would mean
 re-issuing play calls on a timer the primitive does not provide. The status
-line and the `play` route both report the single pass plainly ("playing one
-pass: N notes over Xs").
+line reports the single pass plainly.
+
+A successful `sound/play` acknowledgement also sets an in-memory pass
+deadline for exactly the duration the host acknowledged. While the clock is
+before that deadline the status line starts with a static `Playing one pass
+(Xs)` marker; there is no playhead, no column scrolling, and no timer-driven
+redraw. Pattern edits, tempo or scale changes, saves, clears, and unrelated
+action messages leave the acknowledged deadline untouched, so they neither
+clear the marker early nor stretch the pass. A busy adapter, an unsupported
+host, a missing grant, a failed call, or a reply that does not acknowledge
+playback never reports Playing, and a failed attempt during a pass keeps the
+original deadline. The deadline is not persisted, so a relaunch starts with
+no pass in flight.
 
 Playback availability is probed once per launch exactly like Dogcalc's
 bark: `session/whoami` for the `sound` grant, then `sound/status` for host
@@ -1737,8 +1775,9 @@ fs grants the app keeps working in memory and reports each failed save.
 
 Programmatic routes under `app/com.gostalgia.musictoy/`: `state` (pattern,
 settings, library, and the probed sound story), `toggle` (`{row, step}`),
-`set` (`{bpm?, scale?}`), `play` (returns `{played, notes, duration_ms}` or
-`{played:false, reason}` — the silent path is a state, not an error),
+`set` (`{bpm?, scale?}`), `play` (returns `{played, notes, duration_ms}` —
+`duration_ms` is the host-acknowledged pass length — or `{played:false,
+reason}`, because the silent path is a state, not an error),
 `save` (`{name}`), `load` (`{id}`), `delete` (`{id}`), and `list`.
 
 ## 20. Adventure: a text adventure (`com.gostalgia.adventure`)

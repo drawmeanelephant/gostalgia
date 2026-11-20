@@ -545,11 +545,21 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
 		action := max(0, v.focus-len(v.data.Fields))
 		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
-		return []ui.Binding{
+		bindings := []ui.Binding{
 			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-C", Help: exitHelp},
 			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
 			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F2", Help: "APPS"},
 		}
+		if v.focalBlock() != nil {
+			// A hinted block's inspection route leads so a 30-cell help bar
+			// keeps it whole rather than dropping it behind longer hints.
+			mapHelp := "MAP"
+			if v.inspect {
+				mapHelp = "CONTROLS"
+			}
+			bindings = append([]ui.Binding{{Key: "m", Help: mapHelp, Disabled: blocked}}, bindings...)
+		}
+		return bindings
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)
