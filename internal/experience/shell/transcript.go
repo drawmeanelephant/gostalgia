@@ -69,10 +69,8 @@ func (m *Model) clearTranscript() {
 	m.transcriptPos = bloom.ViewportEnd
 }
 
-// resetScroll returns shell output to its tail and an app view's rows to
-// their focus.
+// resetScroll returns shell output to its tail.
 func (m *Model) resetScroll() {
-	m.scroll = 0
 	m.transcriptPos = bloom.ViewportEnd
 }
 

@@ -502,8 +502,10 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 - `FocusLauncher`: Launcher search bar and card list own selection; typing
   filters the app cards, `↑`/`↓` selects, `Enter` runs, `Esc` clears the search
   or returns to the prompt.
-- `FocusApp`: Active app presentation view owns keyboard interaction; `Esc`
-  retracts presentation and restores prompt focus.
+- `FocusWindow`: The focused app window on the Windows screen owns keyboard
+  interaction; `Esc` goes back to the screen the windows replaced and keeps
+  every window open, `Ctrl-W` closes the focused window, and `F8` focuses the
+  next one.
 - `FocusPalette`: The command palette layer owns every keystroke except
   `Ctrl-C` and `Ctrl-D`; `Esc` closes only the palette and restores the view and focus
   beneath it.

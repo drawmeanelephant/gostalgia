@@ -44,6 +44,7 @@ Default settings are declared in `internal/config/defaults.go`:
 | `shortcuts.tasks` | `string` | `"f5"` | Shell shortcut for task manager. |
 | `shortcuts.notifications` | `string` | `"f6"` | Shell shortcut for notification center. |
 | `shortcuts.settings` | `string` | `"f7"` | Shell shortcut for settings application. |
+| `shortcuts.window_next` | `string` | `"f8"` | Shell shortcut that focuses the next window on the Windows screen. |
 | `shortcuts.palette` | `string` | `"ctrl+p"`| Shell shortcut for quick command palette. |
 
 The shell also reads `accessibility.mouse` (`bool`), which has no built-in default:

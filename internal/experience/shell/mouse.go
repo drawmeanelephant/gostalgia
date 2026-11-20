@@ -230,17 +230,17 @@ const (
 	bodyLauncher
 	bodyTasks
 	bodyNotifications
-	bodyApp
+	bodyWindows
 )
 
 func (m *Model) bodyScreen() bodyScreen {
 	switch {
+	case m.onWindows():
+		return bodyWindows
 	case m.taskView && m.tasks != nil:
 		return bodyTasks
 	case m.notifView && m.notifs != nil:
 		return bodyNotifications
-	case m.presentation != nil:
-		return bodyApp
 	}
 	switch m.currentMode() {
 	case modeLauncher:
@@ -260,18 +260,46 @@ const (
 	screenPrompt
 	screenTasks
 	screenNotifications
+	screenWindows
 )
 
-// tabScreens is the screen of each tab, by its index in tabs. The app
-// view's tab, last while one is open, is always the active one.
-var tabScreens = []screen{screenHome, screenApps, screenPrompt, screenTasks, screenNotifications}
+// tabScreens is the screen of each tab, by its index in tabs. The Windows
+// tab is last and shows only while a window is open.
+var tabScreens = []screen{screenHome, screenApps, screenPrompt, screenTasks, screenNotifications, screenWindows}
 
-// switchScreen shows screen to, closing an open app view, as its F-key
-// does. With toggle, as for the key pressed again on its own screen, it
-// goes back to the prompt instead; the tab of the screen shown is never
-// clicked, as it is the active one.
+// shownScreen is the screen the body shows.
+func (m *Model) shownScreen() screen {
+	switch m.bodyScreen() {
+	case bodyWindows:
+		return screenWindows
+	case bodyTasks:
+		return screenTasks
+	case bodyNotifications:
+		return screenNotifications
+	case bodyLauncher:
+		return screenApps
+	case bodyHome:
+		return screenHome
+	}
+	return screenPrompt
+}
+
+// switchScreen shows screen to, as its F-key does. Leaving the Windows
+// screen keeps every window open. With toggle, as for the key pressed again
+// on its own screen, it goes back to the prompt instead; the tab of the
+// screen shown is never clicked, as it is the active one.
 func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
-	cancel := m.dismissView()
+	if to == screenWindows {
+		if m.focusedView() != nil {
+			m.showWindows()
+		}
+		return nil
+	}
+	if m.windowsShown {
+		// The key's own screen was not the one shown, so it cannot toggle.
+		m.windowsShown, toggle = false, false
+		m.clearHoverAll()
+	}
 	if to != screenApps {
 		m.leaveShelf()
 	}
@@ -314,7 +342,7 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 		}
 	}
 	m.resetScroll()
-	return tea.Batch(cancel, refresh)
+	return refresh
 }
 
 // tabsNode is the tab row. Clicking a tab other than the active one shows
@@ -642,14 +670,14 @@ func (m *Model) notificationScroll(dy int) tea.Cmd {
 	})
 }
 
-// viewHits are the actions and grid cells the app view shows in b. A click
-// on one focuses it and runs it, as Tab and Enter do.
+// viewHits are the actions and grid cells the focused window shows in b. A
+// click on one focuses it and runs it, as Tab and Enter do.
 func (m *Model) viewHits(b ui.Bounds) []hit {
-	v := m.presentation
-	if v == nil {
+	v := m.focusedView()
+	if !m.onWindows() {
 		return nil
 	}
-	_, targets := m.viewLayout(b.Height)
+	_, targets := m.viewLayout(v, b.Width, b.Height)
 	var hits []hit
 	for _, t := range targets {
 		if t.line >= b.Height || t.x >= b.Width {
@@ -662,7 +690,7 @@ func (m *Model) viewHits(b ui.Bounds) []hit {
 			target = hoverTarget{hoverGridCell, t.id}
 		}
 		hits = append(hits, hit{x: t.x, y: t.line, w: min(t.w, b.Width-t.x), h: 1, hover: target, act: func() tea.Cmd {
-			return m.screenAct(bodyApp, func() tea.Cmd { return m.activateViewTarget(v, t) })
+			return m.screenAct(bodyWindows, func() tea.Cmd { return m.activateViewTarget(v, t) })
 		}})
 	}
 	return hits

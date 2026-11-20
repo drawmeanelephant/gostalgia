@@ -49,10 +49,10 @@ func (it homeItem) key() string {
 	return it.doc.Path
 }
 
-// openHome opens it, as Enter does on it: an app's view, or the document.
+// openHome opens it, as Enter does on it: an app's window, or the document.
 func (m *Model) openHome(it homeItem) tea.Cmd {
 	if it.kind == homeItemApp {
-		return m.openView(it.app)
+		return m.openWindow(it.app)
 	}
 	return m.submit("open " + it.doc.Path)
 }
@@ -330,7 +330,7 @@ func (m *Model) handleHomeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if hv.selected >= 0 {
 			it := hv.items[hv.selected]
 			if it.kind == homeItemApp {
-				return m, m.openView(it.app)
+				return m, m.openWindow(it.app)
 			}
 		}
 		return m, nil

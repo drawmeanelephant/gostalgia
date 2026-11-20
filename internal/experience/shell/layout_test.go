@@ -212,19 +212,21 @@ type modelState struct {
 	focus, cell, regionTop, regionWindow int
 	transcript                           int
 	transcriptPos                        bloom.ViewportPos
+	windowsShown                         bool
+	window                               string
 }
 
 func stateOf(m *Model) modelState {
 	s := modelState{
-		mode: m.currentMode(), input: string(m.input), cursor: m.cursor, scroll: m.scroll,
+		mode: m.currentMode(), input: string(m.input), cursor: m.cursor,
 		selected: m.selected, homeSel: m.homeSelected, paletteOpen: m.paletteOpen,
 		paletteSel: m.paletteSelected, paletteFilter: m.paletteQuery,
 		taskView: m.taskView, notifView: m.notifView, busy: m.busy,
 		taskSel: m.tasks.SelectedIndex(), taskMode: m.tasks.Mode(), transcript: len(m.transcript),
-		transcriptPos: m.transcriptPos,
+		transcriptPos: m.transcriptPos, windowsShown: m.windowsShown, window: m.FocusedWindow(),
 	}
-	if v := m.presentation; v != nil {
-		s.focus, s.cell, s.regionTop, s.regionWindow = v.focus, v.cell, v.regionTop, v.regionWindow
+	if v := m.focusedView(); v != nil {
+		s.focus, s.cell, s.regionTop, s.regionWindow, s.scroll = v.focus, v.cell, v.regionTop, v.regionWindow, v.scroll
 	}
 	return s
 }
@@ -346,22 +348,23 @@ func TestHomeSelectionActsOnVisibleItems(t *testing.T) {
 		t.Fatalf("Down moved onto a hidden document: %d", hv.selected)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if m.presentation == nil || m.presentation.id != "com.gostalgia.clock" {
-		t.Fatalf("Enter did not open the visible Clock app: %+v", m.presentation)
+	if !m.onWindows() || m.focusedView().id != "com.gostalgia.clock" {
+		t.Fatalf("Enter did not open the visible Clock app: %+v", m.focusedView())
 	}
 	if m.busy {
 		t.Fatal("Enter submitted the hidden document's open command")
 	}
 
 	// Growing restores the documents; the selection is the one the keys left.
-	m.presentation = nil
+	// Closing the only window returns to Home.
+	m.Update(tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl})
 	sized(m, 80, 24)
 	if hv := m.homeView(); hv.visible != 4 || hv.selected != 1 {
 		t.Fatalf("grown home: visible %d selected %d", hv.visible, hv.selected)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !m.busy || m.presentation != nil {
+	if !m.busy || m.onWindows() {
 		t.Fatal("Enter on a visible document did not run its open command")
 	}
 }
@@ -434,8 +437,8 @@ func TestLauncherViewOpensHighlightedAppAfterListShrinks(t *testing.T) {
 		t.Fatalf("highlighted app not on screen:\n%s", screen)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
-	if m.presentation == nil || m.presentation.id != "a.clock" {
-		t.Fatalf("F4 opened %+v, want the highlighted zzClock", m.presentation)
+	if !m.onWindows() || m.focusedView().id != "a.clock" {
+		t.Fatalf("F4 opened %+v, want the highlighted zzClock", m.focusedView())
 	}
 }
 
@@ -895,7 +898,6 @@ func TestRootFollowsThemeAndProfileChanges(t *testing.T) {
 	for i := range 40 {
 		m.append(entry{fmt.Sprintf("line %d", i), "output"})
 	}
-	m.scroll = 5
 	m.Update(tea.PasteMsg{Content: "draft 界 text"})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyLeft})
 	m.homeSelected, m.selected = 1, 2

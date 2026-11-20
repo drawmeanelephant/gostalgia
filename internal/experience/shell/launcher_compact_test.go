@@ -193,12 +193,12 @@ func TestMinimumLauncherKeyboardControls(t *testing.T) {
 
 	// F4 opens the live app's view.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
-	if m.presentation == nil {
+	if !m.onWindows() {
 		t.Fatal("F4 at 30x10 did not open the live app view")
 	}
 	press(m, escKey)
-	if m.presentation != nil {
-		t.Fatal("Esc did not close the app view")
+	if m.onWindows() || m.currentMode() != modeLauncher || m.FocusedWindow() != "com.gostalgia.echo" {
+		t.Fatal("Esc did not return to the shelf with the window kept open")
 	}
 
 	// F3 stops the live app through the existing confirmation.

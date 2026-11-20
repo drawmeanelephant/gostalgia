@@ -126,6 +126,8 @@ func hoverScreenKey(s screen) string {
 		return "tasks"
 	case screenNotifications:
 		return "notifications"
+	case screenWindows:
+		return "windows"
 	}
 	return ""
 }
@@ -141,13 +143,13 @@ func hoverHomeKey(kind homeItemType, key string) string {
 	return ""
 }
 
-// pruneGridHover retires a grid cue whose cell the current presentation no
-// longer offers. A cell that remains keeps the pointer's cue across refreshes.
+// pruneGridHover retires a grid cue whose cell the focused window no longer
+// offers. A cell that remains keeps the pointer's cue across refreshes.
 func (m *Model) pruneGridHover() {
 	if m.hover.kind != hoverGridCell {
 		return
 	}
-	v := m.presentation
+	v := m.focusedView()
 	g := (*sdk.Grid)(nil)
 	if v != nil {
 		g = v.grid()

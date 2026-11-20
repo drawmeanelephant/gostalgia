@@ -1,6 +1,6 @@
 +------------------------------------------------------------------------------+
 | G O S T A L G I A  /  PERSONAL COMPUTING                                     |
-|  Home   Apps   Prompt   Tasks   Notifications  [Pad]                         |
+|  Home   Apps   Prompt   Tasks   Notifications  [Windows (1)]                 |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
 | Pad                                                                          |
@@ -19,6 +19,6 @@
 | [SW] > [SE] (disabled)                                                       |
 | waiting                                                                      |
 |                                                                              |
-| C:\users\guest> App view owns focus. Esc returns to prompt.                  |
+| C:\users\guest> Window owns focus. Esc goes back, Ctrl-W closes.             |
 +------------------------------------------------------------------------------+
-Esc CANCEL/BACK | Ctrl-C EXIT | Tab FOCUS | (Enter) ACTION | Up/Down ITEM
+Esc CANCEL/BACK | Ctrl-W CLOSE | Tab FOCUS | (Enter) ACTION | Up/Down ITEM

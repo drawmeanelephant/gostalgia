@@ -27,6 +27,7 @@ func DefaultSettings() map[string]any {
 			"tasks":         "f5",
 			"notifications": "f6",
 			"settings":      "f7",
+			"window_next":   "f8",
 			"palette":       "ctrl+p",
 		},
 	}

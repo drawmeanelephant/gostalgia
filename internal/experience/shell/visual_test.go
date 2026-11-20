@@ -51,19 +51,19 @@ func TestShellVisualSnapshots(t *testing.T) {
 			}
 			if strings.HasPrefix(view, "app") {
 				data := screenData()
-				m.presentation = &appView{
+				m.showWindow(&appView{
 					data: data, instance: data.Instance, values: map[string]string{"text": "A thought worth keeping."},
-				}
+				})
 				switch view {
 				case "app-loading":
-					m.presentation.data.State = sdk.ViewLoading
-					m.presentation.busy = true
+					m.focusedView().data.State = sdk.ViewLoading
+					m.focusedView().busy = true
 				case "app-error":
-					m.presentation.data.State = sdk.ViewError
-					m.presentation.data.Error = "Unable to send. Try again."
+					m.focusedView().data.State = sdk.ViewError
+					m.focusedView().data.Error = "Unable to send. Try again."
 				case "app-disabled":
-					m.presentation.data.Actions[0].Disabled = true
-					m.presentation.focus = 1
+					m.focusedView().data.Actions[0].Disabled = true
+					m.focusedView().focus = 1
 				}
 			}
 			rendered := strings.Split(m.View().Content, "\n")
@@ -134,7 +134,7 @@ func TestPresentationV2Snapshots(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(v)
 			}
-			m.presentation = v
+			m.showWindow(v)
 			rendered := strings.Split(m.View().Content, "\n")
 			for i := range rendered {
 				rendered[i] = strings.TrimRight(rendered[i], " ")
@@ -166,9 +166,9 @@ func TestPresentationV2Snapshots(t *testing.T) {
 	for _, th := range []theme.Theme{theme.Nostalgia(), theme.Midnight()} {
 		m := NewWithTheme(context.Background(), noopCaller{}, nil, th, ui.TrueColor)
 		m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-		m.presentation = &appView{
+		m.showWindow(&appView{
 			data: padData(), instance: "launch", version: 2, values: map[string]string{"text": "draft"},
-		}
+		})
 		stripped = append(stripped, ansi.Strip(m.View().Content))
 	}
 	if stripped[0] != stripped[1] {

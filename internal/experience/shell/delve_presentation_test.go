@@ -74,7 +74,7 @@ func delveModel(t *testing.T, width, height int, view sdk.View) *Model {
 	t.Helper()
 	m := New(context.Background(), noopCaller{}, nil)
 	m.Update(tea.WindowSizeMsg{Width: width, Height: height})
-	m.presentation = &appView{data: view, instance: view.Instance, version: view.Version, values: map[string]string{}}
+	m.showWindow(&appView{data: view, instance: view.Instance, version: view.Version, values: map[string]string{}})
 	return m
 }
 
@@ -115,8 +115,8 @@ func TestFocalBlockViewportKeepsPlayerVisible(t *testing.T) {
 	// narrow terminal where the map crops horizontally as well as vertically.
 	for _, focus := range []sdk.BlockFocus{{X: 0, Y: 0}, {X: 47, Y: 0}, {X: 0, Y: 21}, {X: 47, Y: 21}, {X: 24, Y: 10}} {
 		m = delveModel(t, 30, 10, delveData(focus.X, focus.Y))
-		m.presentation.inspect = true
-		m.presentation.inspectTop = -1
+		m.focusedView().inspect = true
+		m.focusedView().inspectTop = -1
 		view = plainView(t, m)
 		if !strings.Contains(view, "@") {
 			t.Fatalf("compact crop lost the player at %+v:\n%s", focus, view)
@@ -129,7 +129,7 @@ func TestFocalBlockViewportKeepsPlayerVisible(t *testing.T) {
 // arrows scroll it, and returning leaves focus, cell, and item untouched.
 func TestFocalBlockInspectionRetainsSelection(t *testing.T) {
 	m := delveModel(t, 30, 10, delveData(24, 10))
-	v := m.presentation
+	v := m.focusedView()
 	v.focus, v.item, v.cell = 4, 1, 5
 	before := *v
 
@@ -186,14 +186,14 @@ func TestActionRevealedPanelStaysReadable(t *testing.T) {
 
 	for _, size := range [][2]int{{30, 10}, {80, 24}} {
 		m := delveModel(t, size[0], size[1], delveData(24, 10))
-		m.applyView(delveData(24, 10), false)
-		v := m.presentation
+		m.focusedView().apply(delveData(24, 10), false)
+		v := m.focusedView()
 		v.focus = len(v.data.Actions) - 1
 		before := v.focus
 
 		panel := delveData(24, 10)
 		panel.Region = &help
-		m.applyView(panel, true)
+		m.focusedView().apply(panel, true)
 		view := plainView(t, m)
 		if !strings.Contains(view, "Controls") {
 			t.Fatalf("%dx%d: action-revealed Help panel is not readable:\n%s", size[0], size[1], view)
@@ -220,28 +220,28 @@ func TestActionRevealedPanelStaysReadable(t *testing.T) {
 	// ordinary surface: toggling Help shut still restores its base log.
 	door := delveData(24, 10)
 	m := delveModel(t, 80, 24, door)
-	m.applyView(door, false)
-	m.presentation.focus = len(m.presentation.data.Actions) - 1
+	m.focusedView().apply(door, false)
+	m.focusedView().focus = len(m.focusedView().data.Actions) - 1
 	doorPanel := door
 	doorPanel.Region = &help
-	m.applyView(doorPanel, true)
-	m.applyView(doorPanel, false)
-	m.applyView(door, true)
-	if view := plainView(t, m); m.presentation.surface != "" || strings.Contains(view, "Controls") {
-		t.Fatalf("door panel did not clear to its log: surface=%q\n%s", m.presentation.surface, view)
+	m.focusedView().apply(doorPanel, true)
+	m.focusedView().apply(doorPanel, false)
+	m.focusedView().apply(door, true)
+	if view := plainView(t, m); m.focusedView().surface != "" || strings.Contains(view, "Controls") {
+		t.Fatalf("door panel did not clear to its log: surface=%q\n%s", m.focusedView().surface, view)
 	}
 
 	// The same sequence during an ongoing run: the ordinary snapshot returns
 	// to its base surface instead of surfacing the log over the controls.
 	m = delveModel(t, 80, 24, delveData(24, 10))
-	m.applyView(delveData(24, 10), false)
-	m.presentation.focus = len(m.presentation.data.Actions) - 1
+	m.focusedView().apply(delveData(24, 10), false)
+	m.focusedView().focus = len(m.focusedView().data.Actions) - 1
 	panel := delveData(24, 10)
 	panel.Region = &help
-	m.applyView(panel, true)
-	m.applyView(delveData(24, 10), true)
-	if m.presentation.surface != "" {
-		t.Fatalf("returning to the base surface left %q displayed", m.presentation.surface)
+	m.focusedView().apply(panel, true)
+	m.focusedView().apply(delveData(24, 10), true)
+	if m.focusedView().surface != "" {
+		t.Fatalf("returning to the base surface left %q displayed", m.focusedView().surface)
 	}
 	if view := plainView(t, m); !strings.Contains(view, "[Help]") {
 		t.Fatalf("returning from Help did not restore controls:\n%s", view)
@@ -260,8 +260,8 @@ func TestCompactFocalViewKeepsActionsReachable(t *testing.T) {
 		return writeJSON(out, delveData(24, 10))
 	}), nil)
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
-	m.presentation = &appView{data: delveData(24, 10), instance: "launch", version: 3, values: map[string]string{}}
-	v := m.presentation
+	m.showWindow(&appView{data: delveData(24, 10), instance: "launch", version: 3, values: map[string]string{}})
+	v := m.focusedView()
 
 	// The movement pad sits after the nine actions.
 	for range len(v.data.Actions) {
@@ -300,8 +300,8 @@ func TestCompactFocalViewKeepsActionsReachable(t *testing.T) {
 func TestMetersStayWithinFortyCells(t *testing.T) {
 	for _, size := range [][2]int{{30, 10}, {80, 24}, {200, 60}} {
 		m := delveModel(t, size[0], size[1], delveData(24, 10))
-		for _, meter := range m.presentation.data.Meters {
-			if width := ansi.StringWidth(m.meterRow(meter)); width > min(40, m.bodyWidth()) {
+		for _, meter := range m.focusedView().data.Meters {
+			if width := ansi.StringWidth(m.meterRow(meter, m.bodyWidth())); width > min(40, m.bodyWidth()) {
 				t.Fatalf("%dx%d: meter %s row = %d cells, body %d",
 					size[0], size[1], meter.ID, width, m.bodyWidth())
 			}
@@ -311,7 +311,7 @@ func TestMetersStayWithinFortyCells(t *testing.T) {
 		if !ok {
 			t.Fatalf("%dx%d: no body rect", size[0], size[1])
 		}
-		lines, _ := m.viewLayout(rect.Dy())
+		lines, _ := m.viewLayout(m.focusedView(), rect.Dx(), rect.Dy())
 		bars := 0
 		for _, line := range lines {
 			plain := ansi.Strip(line)
@@ -368,8 +368,8 @@ func TestValidatedHintedFocusSurvivesSanitizer(t *testing.T) {
 		t.Fatalf("control-free hinted block rejected: %v", err)
 	}
 	m := delveModel(t, 30, 10, data)
-	m.presentation.inspect = true
-	m.presentation.inspectTop = -1
+	m.focusedView().inspect = true
+	m.focusedView().inspectTop = -1
 	view := plainView(t, m)
 	if !strings.Contains(view, "e\u0301@") {
 		t.Fatalf("crop lost the focal glyph after a combining cluster:\n%s", view)
@@ -413,10 +413,10 @@ func TestDelveSemanticPresentationAcrossThemesAndPlain(t *testing.T) {
 			m := NewWithTheme(context.Background(), noopCaller{}, nil, th, mode)
 			m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 			data := delveData(24, 10)
-			m.presentation = &appView{data: data, instance: "launch", version: 3, values: map[string]string{}}
+			m.showWindow(&appView{data: data, instance: "launch", version: 3, values: map[string]string{}})
 			// Focus the Help action: the secondary window then shows the
 			// reachable control without hiding the primary map.
-			m.presentation.focus = len(data.Actions) - 1
+			m.focusedView().focus = len(data.Actions) - 1
 			view := ansi.Strip(m.View().Content)
 			for _, want := range []string{"Delve", "@", "HP", "[Help]"} {
 				if !strings.Contains(view, want) {
@@ -424,7 +424,7 @@ func TestDelveSemanticPresentationAcrossThemesAndPlain(t *testing.T) {
 				}
 			}
 			// The movement pad is its own reachable stop.
-			m.presentation.focus = len(data.Fields) + len(data.Actions)
+			m.focusedView().focus = len(data.Fields) + len(data.Actions)
 			if view := ansi.Strip(m.View().Content); !strings.Contains(view, "[N]") {
 				t.Fatalf("%s/%v lost the movement pad:\n%s", th.Name, mode, view)
 			}
@@ -433,8 +433,8 @@ func TestDelveSemanticPresentationAcrossThemesAndPlain(t *testing.T) {
 	m := NewWithTheme(context.Background(), noopCaller{}, nil, theme.Midnight(), ui.Plain)
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	data := delveData(24, 10)
-	m.presentation = &appView{data: data, instance: "launch", version: 3, values: map[string]string{}}
-	m.presentation.focus = len(data.Actions) - 1
+	m.showWindow(&appView{data: data, instance: "launch", version: 3, values: map[string]string{}})
+	m.focusedView().focus = len(data.Actions) - 1
 	content := m.View().Content
 	if strings.Contains(content, "\x1b") {
 		t.Fatal("Plain Delve view emitted ANSI")

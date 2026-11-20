@@ -124,8 +124,8 @@ func hoverClasses() []struct {
 			}
 		}},
 		{"app grid cell", func(t *testing.T, m *Model) hoverPoint {
-			m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-				values: map[string]string{"text": "draft"}, focus: 2}
+			m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+				values: map[string]string{"text": "draft"}, focus: 2})
 			r := rectOf(t, m, slotBody)
 			p, ok := findText(m, r, "NE")
 			if !ok {
@@ -135,7 +135,7 @@ func hoverClasses() []struct {
 				class: "app grid cell",
 				point: image.Pt(p.X, p.Y),
 				setup: func(t *testing.T, m *Model) func() any {
-					return func() any { return m.presentation.cell }
+					return func() any { return m.focusedView().cell }
 				},
 				cue: "<NE>",
 			}
@@ -215,16 +215,16 @@ func TestHoverDoesNotChangeMeasurements(t *testing.T) {
 	}
 
 	// A grid cell keeps its target rectangle and every cell's x.
-	m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-		values: map[string]string{"text": "draft"}, focus: 2}
+	m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+		values: map[string]string{"text": "draft"}, focus: 2})
 	body := rectOf(t, m, slotBody)
 	p, ok := findText(m, body, "NE")
 	if !ok {
 		t.Fatal("the NE grid cell is not visible")
 	}
-	_, beforeTargets := m.viewLayout(body.Dy())
+	_, beforeTargets := m.viewLayout(m.focusedView(), body.Dx(), body.Dy())
 	mouse(t, m, tea.MouseMotionMsg{X: p.X, Y: p.Y})
-	_, afterTargets := m.viewLayout(body.Dy())
+	_, afterTargets := m.viewLayout(m.focusedView(), body.Dx(), body.Dy())
 	if len(beforeTargets) != len(afterTargets) {
 		t.Fatalf("hover changed the grid target count from %d to %d", len(beforeTargets), len(afterTargets))
 	}
@@ -419,7 +419,7 @@ func TestHoverRespectsPaletteAndDialogBoundaries(t *testing.T) {
 		t.Fatal("a Home hover cue was drawn under the palette")
 	}
 	clickAt(t, m, p)
-	if m.presentation != nil || m.currentMode() != modeHome {
+	if m.onWindows() || m.currentMode() != modeHome {
 		t.Fatal("a click under the palette reached the Home row")
 	}
 	m.closePalette()

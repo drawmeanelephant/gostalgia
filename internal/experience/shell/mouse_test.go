@@ -327,8 +327,8 @@ func TestMouseTabsSwitchScreensAsTheirKeysDo(t *testing.T) {
 func TestMouseTabsOfAnAppViewAndTheirGaps(t *testing.T) {
 	m, _ := mouseModel(t, 80, 24)
 	m.setMode(modeHome)
-	m.presentation = &appView{id: "com.test.screen", data: padData(), instance: "launch", version: 2,
-		values: map[string]string{}}
+	m.showWindow(&appView{id: "com.test.screen", data: padData(), instance: "launch", version: 2,
+		values: map[string]string{}})
 	tabs := rectOf(t, m, slotTabs)
 	home := mustFind(t, m, tabs, "Home")
 	apps := mustFind(t, m, tabs, "Apps")
@@ -339,17 +339,17 @@ func TestMouseTabsOfAnAppViewAndTheirGaps(t *testing.T) {
 	if line := []rune(screenText(m.View())[gap.Y]); line[gap.X] != ' ' || line[gap.X-1] != ' ' || line[gap.X+1] != ' ' {
 		t.Fatalf("no gap between Home and Apps: %q", line)
 	}
-	for _, p := range []image.Point{gap, mustFind(t, m, tabs, "Pad"), {X: tabs.Max.X - 1, Y: tabs.Min.Y}} {
+	for _, p := range []image.Point{gap, mustFind(t, m, tabs, "Windows (1)"), {X: tabs.Max.X - 1, Y: tabs.Min.Y}} {
 		clickAt(t, m, p)
-		if stateOf(m) != before || m.presentation == nil {
+		if stateOf(m) != before || !m.onWindows() {
 			t.Fatalf("a click at %v acted", p)
 		}
 	}
-	// Home's tab shows Home: the click names the screen, unlike F1, which
-	// toggles from the screen beneath the app view.
+	// Home's tab shows Home, as F1 does from the Windows screen, and the
+	// window stays open.
 	clickAt(t, m, image.Pt(home.X+1, home.Y))
-	if m.presentation != nil || m.bodyScreen() != bodyHome {
-		t.Fatalf("Home's tab showed %v", m.bodyScreen())
+	if m.onWindows() || m.bodyScreen() != bodyHome || m.FocusedWindow() != "com.test.screen" {
+		t.Fatalf("Home's tab showed %v with window %q", m.bodyScreen(), m.FocusedWindow())
 	}
 }
 
@@ -720,8 +720,8 @@ func TestMouseNotificationsOpenAsEnterDoes(t *testing.T) {
 func appModel(t *testing.T, w, h int, data sdk.View) (*Model, *recordingCaller) {
 	t.Helper()
 	m, rec := mouseModel(t, w, h)
-	m.presentation = &appView{id: "com.test.screen", data: data, instance: "launch", version: data.Version,
-		values: map[string]string{"text": "draft"}}
+	m.showWindow(&appView{id: "com.test.screen", data: data, instance: "launch", version: data.Version,
+		values: map[string]string{"text": "draft"}})
 	return m, rec
 }
 
@@ -810,19 +810,19 @@ func TestMouseAppViewGatesMatchTheKeyboard(t *testing.T) {
 		gate    func(*Model)
 		targets []target
 	}{
-		{"action in flight", func(m *Model) { m.presentation.busy = true }, []target{adopt, nw}},
-		{"loading", func(m *Model) { m.presentation.data.State = sdk.ViewLoading }, []target{adopt, nw}},
-		{"no instance", func(m *Model) { m.presentation.instance = "" }, []target{adopt, nw}},
+		{"action in flight", func(m *Model) { m.focusedView().busy = true }, []target{adopt, nw}},
+		{"loading", func(m *Model) { m.focusedView().data.State = sdk.ViewLoading }, []target{adopt, nw}},
+		{"no instance", func(m *Model) { m.focusedView().instance = "" }, []target{adopt, nw}},
 		{"shell busy", func(m *Model) { m.busy = true }, []target{adopt, nw}},
 		{"disabled", func(m *Model) {
-			m.presentation.data.Actions[0].Disabled = true
-			m.presentation.data.Grid.Cells[0].Disabled = true
+			m.focusedView().data.Actions[0].Disabled = true
+			m.focusedView().data.Grid.Cells[0].Disabled = true
 		}, []target{adopt, nw}},
 		{"vetoed by a same-named disabled action", func(m *Model) {
-			m.presentation.data.Actions = append(m.presentation.data.Actions, sdk.Action{ID: "press", Label: "Press", Disabled: true})
+			m.focusedView().data.Actions = append(m.focusedView().data.Actions, sdk.Action{ID: "press", Label: "Press", Disabled: true})
 		}, []target{nw}},
 		{"gone", func(m *Model) {
-			m.presentation.data.Actions, m.presentation.data.Grid = nil, nil
+			m.focusedView().data.Actions, m.focusedView().data.Grid = nil, nil
 		}, []target{adopt, nw}},
 	} {
 		for _, tg := range tc.targets {
@@ -845,7 +845,7 @@ func TestMouseAppViewGatesMatchTheKeyboard(t *testing.T) {
 					if got := actions(t, rec); len(got) != 0 {
 						t.Fatalf("the click ran %v past the gate", got)
 					}
-					if m.presentation.focus = tg.focus; true {
+					if m.focusedView().focus = tg.focus; true {
 						act(t, m, enterKey)
 					}
 					if got := actions(t, rec); len(got) != 0 {
@@ -998,7 +998,7 @@ func TestMouseWheelMovesListSelectionsWithoutActivating(t *testing.T) {
 				if got := tc.selected(m); got != 0 {
 					t.Fatalf("%s: wheel up past the top selected %d", tc.name, got)
 				}
-				if len(rec.all()) != 0 || m.presentation != nil || m.tasks.Mode() != taskmanager.ModeTable {
+				if len(rec.all()) != 0 || m.onWindows() || m.tasks.Mode() != taskmanager.ModeTable {
 					t.Fatalf("%s: the wheel activated something", tc.name)
 				}
 				if m.notifs.UnseenCount() != 2 {

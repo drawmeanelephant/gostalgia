@@ -314,9 +314,11 @@ func (m *Model) tabs() ([]ui.Tab, int) {
 		{Label: "Tasks"},
 		{Label: notifLabel},
 	}
-	if m.presentation != nil {
-		tabItems = append(tabItems, ui.Tab{Label: viewText(m.presentation.data.Title)})
-		active = len(tabItems) - 1
+	if n := m.windows.Len(); n > 0 {
+		tabItems = append(tabItems, ui.Tab{Label: fmt.Sprintf("Windows (%d)", n)})
+		if m.onWindows() {
+			active = len(tabItems) - 1
+		}
 	}
 	return tabItems, active
 }
@@ -410,9 +412,10 @@ func (m *Model) body(home homeView) bloom.Child {
 	case m.notifView && m.notifs != nil:
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
 			m.notificationHits, m.notificationScroll)
-	case m.presentation != nil:
+	case m.onWindows():
+		v := m.focusedView()
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
-			lines := m.viewLines(b.Height)
+			lines := m.viewLines(v, b.Width, b.Height)
 			for i, line := range lines {
 				lines[i] = m.kit.Truncate(line, b.Width)
 			}
@@ -459,8 +462,8 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 	switch {
 	case m.paletteOpen:
 		prompt = m.kit.Heading("PALETTE> ") + m.kit.Muted(m.kit.Hint("Type to filter · ↑↓ navigate · Enter execute · Esc close"))
-	case m.presentation != nil:
-		prompt += m.kit.Muted("App view owns focus. Esc returns to prompt.")
+	case m.onWindows():
+		prompt += m.kit.Muted("Window owns focus. Esc goes back, Ctrl-W closes.")
 	case m.taskView:
 		prompt += m.kit.Muted("Task Manager owns focus. Esc returns to prompt.")
 	case m.notifView:
@@ -578,15 +581,18 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 			{Key: "n", Help: "DND"}, {Key: "↑↓", Help: "SELECT"},
 			{Key: "Ctrl-C", Help: exitHelp},
 		}
-	case m.presentation != nil:
-		v := m.presentation
+	case m.onWindows():
+		v := m.focusedView()
 		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
 		action := max(0, v.focus-len(v.data.Fields))
 		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
+		// The window keys lead the presentation's own; Ctrl-C, which
+		// every screen shares, gives way first.
 		bindings := []ui.Binding{
-			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-C", Help: exitHelp},
+			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-W", Help: "CLOSE"},
 			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
-			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F2", Help: "APPS"},
+			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
+			{Key: "F2", Help: "APPS"}, {Key: "Ctrl-C", Help: exitHelp},
 		}
 		if v.focalBlock() != nil {
 			// A hinted block's inspection route leads so a 30-cell help bar

@@ -20,6 +20,7 @@ import (
 	"gostalgia/internal/experience/taskmanager"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/themedef"
 )
@@ -44,7 +45,7 @@ const (
 	FocusPrompt FocusState = iota
 	FocusHome
 	FocusLauncher
-	FocusApp
+	FocusWindow
 	FocusPalette
 	FocusTasks
 	FocusNotifications
@@ -57,8 +58,8 @@ func (f FocusState) String() string {
 		return "home"
 	case FocusLauncher:
 		return "launcher"
-	case FocusApp:
-		return "app"
+	case FocusWindow:
+		return "window"
 	case FocusPalette:
 		return "palette"
 	case FocusTasks:
@@ -180,7 +181,6 @@ type Model struct {
 	launcherTop        int // the first card a click left in view; see launcherCards
 	shelf              bool
 	busy               bool
-	scroll             int
 	kit                ui.Kit
 	ui                 *bloom.Root // this model's own root; see root()
 	uiKey              rootKey
@@ -188,17 +188,24 @@ type Model struct {
 	themeMotionDefault bool        // active user or built-in theme's own ReducedMotion token
 	configuredMotion   *bool       // last explicit non-default config value; nil uses the theme default
 	motionOverride     *bool       // session-local motion command; outranks later config refreshes
-	presentation       *appView
-	viewEpoch          uint64
-	viewSub            *ipc.ClientSubscription
-	mode               viewMode
-	homeData           homeData
-	homeSelected       int
-	launcherQuery      string
-	paletteOpen        bool
-	paletteQuery       string
-	paletteSelected    int
-	previousMode       viewMode
+	// windows and views are this shell's open windows; see windows.go.
+	// windowsShown is set while the Windows screen is the body, and
+	// windowsBack is the screen it replaced, which Esc returns to. viewEpoch
+	// numbers every window opened, so a reply to a closed window is dropped.
+	windows         *windows.Service
+	views           map[windows.ID]*appView
+	windowsShown    bool
+	windowsBack     screen
+	viewEpoch       uint64
+	viewSub         *ipc.ClientSubscription
+	mode            viewMode
+	homeData        homeData
+	homeSelected    int
+	launcherQuery   string
+	paletteOpen     bool
+	paletteQuery    string
+	paletteSelected int
+	previousMode    viewMode
 	// confirm is the open confirmation dialog, if any; see confirm.go.
 	confirm *confirmation
 	// procPending is set while a confirmed process stop or reap is in
@@ -335,8 +342,8 @@ func (m *Model) Focus() FocusState {
 	if m.paletteOpen {
 		return FocusPalette
 	}
-	if m.presentation != nil {
-		return FocusApp
+	if m.onWindows() {
+		return FocusWindow
 	}
 	if m.taskView {
 		return FocusTasks
@@ -396,6 +403,8 @@ func NewWithThemeAndNotifs(ctx context.Context, c Caller, closed <-chan struct{}
 		receipts:      receipts.NewStore(50),
 		lastProcs:     make(map[int32]procTracking),
 		user:          "guest",
+		windows:       windows.NewService(nil, ""),
+		views:         make(map[windows.ID]*appView),
 	}
 	m.motion.now = time.Now
 	m.SetTheme(t, mode)
@@ -681,16 +690,14 @@ func (m *Model) openSelectedNotification() tea.Cmd {
 	return nil
 }
 
+// openAppByID opens id's window, launching the app first when it is not
+// running.
 func (m *Model) openAppByID(id string) tea.Cmd {
 	m.closePalette()
-	m.taskView = false
-	m.notifView = false
-	m.leaveShelf()
-	m.shelf = false
 	for _, a := range m.apps {
 		if a.Manifest.ID == id {
 			if a.Running {
-				return m.openView(a)
+				return m.openWindow(a)
 			}
 			ctx := m.ctx
 			client := m.client
@@ -738,6 +745,8 @@ func (m *Model) isShortcut(action, key string) bool {
 			target = "f6"
 		case "settings":
 			target = "f7"
+		case "window_next":
+			target = "f8"
 		case "palette":
 			target = "ctrl+p"
 		}
@@ -1065,13 +1074,13 @@ func (m *Model) reportResultError(msg resultMsg) bool {
 	case originShelfLaunch:
 		return m.showShelfLaunchFailure(msg)
 	case originCommandLine:
-		if m.presentation != nil || m.currentMode() != msg.originMode {
+		if m.onWindows() || m.currentMode() != msg.originMode {
 			return false
 		}
 		m.setMode(modePrompt)
 		return true
 	default:
-		if m.presentation != nil {
+		if m.onWindows() {
 			return false
 		}
 		m.setMode(modePrompt)
@@ -1188,7 +1197,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case openAppMsg:
-		return m, m.openView(msg.app)
+		return m, m.openWindow(msg.app)
 	case bloom.SelectionMsg:
 		// Text selected with the mouse is copied as the selection ends.
 		// The release or delayed double-click completion may belong to a
@@ -1321,10 +1330,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case viewMsg, viewTickMsg, viewCheckMsg, viewCancelMsg, viewSubscribedMsg, viewEventMsg:
 		return m, m.updatePresentation(msg)
 	case closedMsg:
-		if m.presentation != nil && m.presentation.cancel != nil {
-			m.presentation.cancel()
+		// The connection is gone, so no cancel request can reach an app;
+		// only the local waits stop.
+		for _, v := range m.views {
+			if v.cancel != nil {
+				v.cancel()
+			}
 		}
-		m.presentation = nil
+		m.closeAllWindows()
 		return m, tea.Quit
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
@@ -1358,12 +1371,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.clearHoverKind(hoverPaletteItem)
 		}
 		if msg.switchView == "tasks" {
+			m.windowsShown = false
 			m.taskView = true
 			m.leaveShelf()
 			m.shelf = false
 			m.notifView = false
 		} else if msg.switchView == "notifications" {
 			entering := !m.notifView
+			m.windowsShown = false
 			m.notifView = true
 			m.leaveShelf()
 			m.shelf = false
@@ -1374,7 +1389,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if msg.switchView == "shelf" || msg.switchView == "launcher" {
 			cmd = tea.Batch(cmd, m.switchScreen(screenApps, false))
 		} else if msg.switchView == "settings" {
-			return m, m.openAppByID("com.gostalgia.settings")
+			return m, m.openAppByID(settingsAppID)
 		}
 		if msg.toggleDND {
 			val := m.notifs.ToggleDND()
@@ -1604,20 +1619,24 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.switchScreen(screenNotifications, true)
 		}
 		if m.isShortcut("settings", keyStr) {
-			if m.presentation != nil && m.presentation.id == "com.gostalgia.settings" {
-				cancel := m.dismissView()
-				return m, cancel
+			// Pressed again on its own window, F7 goes back, as Esc does.
+			if m.onWindows() && m.focusedView().id == settingsAppID {
+				return m, m.leaveWindows()
 			}
-			cancel := m.dismissView()
-			cmd := m.openAppByID("com.gostalgia.settings")
-			if cancel != nil {
-				return m, tea.Batch(cancel, cmd)
-			}
-			return m, cmd
+			return m, m.openAppByID(settingsAppID)
 		}
 		if m.isShortcut("view", keyStr) {
-			if m.presentation == nil {
+			if !m.onWindows() {
 				return m, m.selectedView()
+			}
+			return m, nil
+		}
+		if m.isShortcut("window_next", keyStr) {
+			// Elsewhere F8 brings back the Windows screen as it was left.
+			if m.onWindows() {
+				m.nextWindow()
+			} else {
+				m.switchScreen(screenWindows, false)
 			}
 			return m, nil
 		}
@@ -1633,11 +1652,33 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.onWindows() {
+			v := m.focusedView()
+			switch keyStr {
+			case "ctrl+w":
+				return m, m.closeWindow(windows.ID(v.id))
+			case "esc":
+				if v.busy {
+					return m, m.cancelViewAction(v)
+				}
+				return m, m.leaveWindows()
+			case "pgup", "pgdown":
+				// A focused version-3 region or an inspected block owns
+				// page scrolling; otherwise the keys page the window's rows.
+				switch {
+				case v.inspect, v.regionFocused():
+					return m, m.viewKey(v, msg)
+				case keyStr == "pgup":
+					v.scroll += max(1, m.height/2)
+				default:
+					v.scroll = max(0, v.scroll-max(1, m.height/2))
+				}
+				return m, nil
+			}
+		}
+
 		switch keyStr {
 		case "esc":
-			if m.presentation != nil {
-				return m, m.viewKey(msg)
-			}
 			if m.taskView {
 				if m.tasks != nil && m.tasks.Mode() != taskmanager.ModeTable {
 					m.tasks.CloseModal()
@@ -1657,18 +1698,9 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.shelf = false
 			return m, nil
 		case "pgup", "pgdown":
-			// A focused version-3 region owns page scrolling, an app view
-			// scrolls its rows, and an open log tail pages; otherwise the
-			// keys page the transcript while it is on screen.
+			// An open log tail pages; otherwise the keys page the
+			// transcript while it is on screen.
 			switch {
-			case m.presentation != nil && m.presentation.inspect:
-				return m, m.viewKey(msg)
-			case m.presentation != nil && m.presentation.regionFocused():
-				return m, m.viewKey(msg)
-			case m.presentation != nil && keyStr == "pgup":
-				m.scroll += max(1, m.height/2)
-			case m.presentation != nil:
-				m.scroll = max(0, m.scroll-max(1, m.height/2))
 			case m.taskView && m.tasks.Mode() == taskmanager.ModeLogs:
 				m.tasks.ScrollLogs(m.solve(), func(v bloom.ViewportView) bloom.ViewportPos {
 					if keyStr == "pgup" {
@@ -1683,14 +1715,14 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The log tail's keys only read what it has, so they work while
 		// a command runs.
-		if m.taskView && m.presentation == nil && m.tasks.Mode() == taskmanager.ModeLogs {
+		if m.taskView && m.tasks.Mode() == taskmanager.ModeLogs {
 			return m.handleLogsKey(msg)
 		}
 		if m.busy {
 			return m, nil
 		}
-		if m.presentation != nil {
-			return m, m.viewKey(msg)
+		if m.onWindows() {
+			return m, m.viewKey(m.focusedView(), msg)
 		}
 		if m.taskView {
 			var confirmCmd tea.Cmd
@@ -1787,8 +1819,8 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.busy {
 			return m, nil
 		}
-		if m.presentation != nil {
-			return m, m.viewKey(tea.KeyPressMsg{Code: tea.KeyExtended, Text: text})
+		if m.onWindows() {
+			return m, m.viewKey(m.focusedView(), tea.KeyPressMsg{Code: tea.KeyExtended, Text: text})
 		}
 		if m.taskView || m.notifView {
 			return m, nil
@@ -1956,7 +1988,6 @@ func (m *Model) handlePromptKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.clearTranscript()
 			m.input = nil
 			m.cursor = 0
-			m.scroll = 0
 			return m, nil
 		}
 		if strings.EqualFold(line, "home") {
@@ -2205,7 +2236,7 @@ func Run(ctx context.Context, c Caller, closed <-chan struct{}, notifs *notifica
 	opts = append(opts, options...)
 	model := NewWithNotifs(ctx, c, closed, notifs)
 	defer func() {
-		if cleanup := model.dismissView(); cleanup != nil {
+		for _, cleanup := range model.closeAllWindows() {
 			cleanup()
 		}
 		RestoreTerminal()
@@ -2225,7 +2256,7 @@ func RunAttached(ctx context.Context, c Caller, closed <-chan struct{}, options 
 	model := New(ctx, c, closed)
 	model.SetAttached(true)
 	defer func() {
-		if cleanup := model.dismissView(); cleanup != nil {
+		for _, cleanup := range model.closeAllWindows() {
 			cleanup()
 		}
 		RestoreTerminal()
@@ -2239,8 +2270,7 @@ func RunAttached(ctx context.Context, c Caller, closed <-chan struct{}, options 
 // the SSH attach listener wires input, output, environment and window size
 // from the SSH session. It returns the program, the model (for
 // SetAttachIdentity and SessionIdentity), and the teardown the caller must
-// run after Program.Run exits: presentation-view dismissal plus context
-// release. Restoring the caller's terminal is the transport's job (Restore).
+// run after Program.Run exits: closing every window plus context release. Restoring the caller's terminal is the transport's job (Restore).
 func AttachedProgram(ctx context.Context, c Caller, closed <-chan struct{}, options ...tea.ProgramOption) (*tea.Program, *Model, func()) {
 	ctx, cancel := context.WithCancel(ctx)
 	opts := []tea.ProgramOption{tea.WithContext(ctx)}
@@ -2249,7 +2279,7 @@ func AttachedProgram(ctx context.Context, c Caller, closed <-chan struct{}, opti
 	model.SetAttached(true)
 	teardown := func() {
 		defer cancel()
-		if cleanup := model.dismissView(); cleanup != nil {
+		for _, cleanup := range model.closeAllWindows() {
 			cleanup()
 		}
 	}
