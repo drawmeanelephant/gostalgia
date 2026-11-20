@@ -8,6 +8,7 @@ import (
 	"bloomfx.dev/bloom/anim"
 	"bloomfx.dev/bloom/fx"
 	tea "charm.land/bubbletea/v2"
+	"gostalgia/internal/experience/windows"
 )
 
 // The finite effects are event-owned and comfortably below the experience
@@ -17,6 +18,7 @@ const (
 	launchShakeDuration   = 160 * time.Millisecond
 	overlayRevealDuration = 140 * time.Millisecond
 	toastEntranceDuration = 160 * time.Millisecond
+	windowRevealDuration  = 140 * time.Millisecond
 	// startupRevealDuration is the once-per-model CRT-style startup reveal.
 	// It stays inside the same 400 ms finite-motion budget.
 	startupRevealDuration = 180 * time.Millisecond
@@ -40,14 +42,18 @@ const (
 // overlay is the palette/confirmation opening reveal. toast is the entrance of
 // the newest toast identity only; toastID remembers which identity was
 // consumed so re-rendering, polling, resizing or a theme change never replays
-// it. startup is the model's one startup reveal, keyed by startupPhase.
-// Values start settled, and only an event Play moves them.
+// it. window is the opening reveal of windowID, the window opened last, so
+// an opening takes the reveal from any window still revealing. startup is
+// the model's one startup reveal, keyed by startupPhase. Values start
+// settled, and only an event Play moves them.
 type motionState struct {
 	now          func() time.Time
 	launchShake  anim.Value
 	overlay      anim.Value
 	toast        anim.Value
 	toastID      string
+	window       anim.Value
+	windowID     windows.ID
 	startup      anim.Value
 	startupPhase startupPhase
 	ready        bool
@@ -68,6 +74,7 @@ func (m *Model) syncMotion() {
 	if m.kit.Theme().ReducedMotion {
 		m.motion.overlay.Set(1)
 		m.motion.toast.Set(1)
+		m.motion.window.Set(1)
 		m.motion.launchShake = anim.Value{}
 		if m.motion.startupPhase == startupRevealing {
 			// Cancellation consumes the once-only event. Set invalidates the
@@ -96,6 +103,11 @@ func (m *Model) syncMotion() {
 			anim.Ease(anim.OutCubic),
 			anim.Clock(m.motionNow),
 		)
+		m.motion.window = anim.NewValue(1,
+			anim.Duration(windowRevealDuration),
+			anim.Ease(anim.OutCubic),
+			anim.Clock(m.motionNow),
+		)
 		m.motion.ready = true
 	}
 }
@@ -104,7 +116,7 @@ func (m *Model) updateMotion(msg tea.Msg) tea.Cmd {
 	if m.kit.Theme().ReducedMotion || !m.motion.ready {
 		return nil
 	}
-	cmd := anim.Update(msg, &m.motion.launchShake, &m.motion.overlay, &m.motion.toast, &m.motion.startup)
+	cmd := anim.Update(msg, &m.motion.launchShake, &m.motion.overlay, &m.motion.toast, &m.motion.window, &m.motion.startup)
 	if m.motion.startupPhase == startupRevealing && !m.motion.startup.Animating() {
 		m.motion.startupPhase = startupConsumed
 	}
@@ -184,6 +196,43 @@ func (m *Model) overlayProgress() (float64, bool) {
 		return 0, false
 	}
 	return m.motion.overlay.Float(), true
+}
+
+// startWindowReveal starts the opening reveal of id's new window. Only a
+// floating window reveals: below the floor no window frame shows, and the
+// focused presentation fills the body as it always has. The window takes
+// keys and clicks from its first frame, because hit testing follows the
+// layout, not the reveal's mask. ReducedMotion returns no command and draws
+// the window settled.
+func (m *Model) startWindowReveal(id windows.ID) tea.Cmd {
+	if m.kit.Theme().ReducedMotion || !m.floatingWindows() {
+		return nil
+	}
+	m.syncMotion()
+	if !m.motion.ready {
+		return nil
+	}
+	m.motion.windowID = id
+	return m.motion.window.Play(0, 1)
+}
+
+// stopWindowReveal settles id's reveal when its window closes, so the
+// outstanding frame schedules nothing more.
+func (m *Model) stopWindowReveal(id windows.ID) {
+	if m.motion.windowID == id {
+		m.motion.window.Set(1)
+	}
+}
+
+// windowProgress reports the opening reveal's progress for id's window while
+// it is active. Every other window, and a settled one, attaches no
+// transition at all.
+func (m *Model) windowProgress(id windows.ID) (float64, bool) {
+	if id != m.motion.windowID || m.kit.Theme().ReducedMotion ||
+		!m.motion.ready || !m.motion.window.Animating() {
+		return 0, false
+	}
+	return m.motion.window.Float(), true
 }
 
 // syncToastMotion consumes the newest toast identity exactly once. It runs on

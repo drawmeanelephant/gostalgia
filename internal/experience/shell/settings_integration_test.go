@@ -111,16 +111,16 @@ func TestShellSettingsCommandAndF7Toggle(t *testing.T) {
 		t.Fatalf("expected openAppMsg, got %T: %+v", msg, msg)
 	}
 	m.Update(openMsg)
-	if m.presentation == nil || m.presentation.id != "com.gostalgia.settings" {
-		t.Fatalf("expected presentation view for settings, got %+v", m.presentation)
+	if !m.onWindows() || m.focusedView().id != "com.gostalgia.settings" {
+		t.Fatalf("expected presentation view for settings, got %+v", m.focusedView())
 	}
 
-	// 3. F7 toggles off active Settings view
-	_, cancelCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyF7})
-	if m.presentation != nil {
-		t.Fatal("expected presentation to be dismissed on F7")
+	// 3. F7 on the focused Settings window goes back, as Esc does, and
+	// keeps the window open.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF7})
+	if m.onWindows() || m.FocusedWindow() != settingsAppID {
+		t.Fatalf("F7 on the Settings window: on windows %v, focused window %q", m.onWindows(), m.FocusedWindow())
 	}
-	_ = cancelCmd
 }
 
 func TestShellLiveConfigUpdates(t *testing.T) {

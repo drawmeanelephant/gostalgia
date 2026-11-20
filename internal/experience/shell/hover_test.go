@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"fmt"
 	"image"
 	"os"
 	"strings"
@@ -24,7 +25,7 @@ type hoverPoint struct {
 	cue string
 }
 
-// hoverClasses drives all six clickable populations named by the contract.
+// hoverClasses drives every clickable population named by the contract.
 func hoverClasses() []struct {
 	name string
 	run  func(t *testing.T, m *Model) hoverPoint
@@ -124,8 +125,8 @@ func hoverClasses() []struct {
 			}
 		}},
 		{"app grid cell", func(t *testing.T, m *Model) hoverPoint {
-			m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-				values: map[string]string{"text": "draft"}, focus: 2}
+			m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+				values: map[string]string{"text": "draft"}, focus: 2})
 			r := rectOf(t, m, slotBody)
 			p, ok := findText(m, r, "NE")
 			if !ok {
@@ -135,19 +136,46 @@ func hoverClasses() []struct {
 				class: "app grid cell",
 				point: image.Pt(p.X, p.Y),
 				setup: func(t *testing.T, m *Model) func() any {
-					return func() any { return m.presentation.cell }
+					return func() any { return m.focusedView().cell }
 				},
 				cue: "<NE>",
+			}
+		}},
+		// Alpha lies beneath Beta with its top border in view; hovering it
+		// must neither focus nor raise it.
+		{"window title", func(t *testing.T, m *Model) hoverPoint {
+			twoWindows(m)
+			r := rectOf(t, m, windowPart{alphaID, windowTitle})
+			return hoverPoint{
+				class: "window title",
+				point: image.Pt(r.Min.X+3, r.Min.Y),
+				setup: windowStacking,
+				cue:   ui.HoverMarker + "Alpha",
+			}
+		}},
+		{"window close", func(t *testing.T, m *Model) hoverPoint {
+			twoWindows(m)
+			r := rectOf(t, m, windowPart{alphaID, windowClose})
+			return hoverPoint{
+				class: "window close",
+				point: image.Pt(r.Min.X+1, r.Min.Y),
+				setup: windowStacking,
+				cue:   closeHoverLabel,
 			}
 		}},
 	}
 }
 
-// TestHoverCuesOnAllSixTargetClasses checks each named population in every
+// windowStacking is the window focus and z-order a hover must not change.
+func windowStacking(t *testing.T, m *Model) func() any {
+	return func() any { return fmt.Sprint(m.FocusedWindow(), m.windows.Order()) }
+}
+
+// TestHoverCuesOnEveryTargetClass checks each named population in every
 // built-in theme and Plain, with hover distinct from the normal and selected
 // states, a cleared cue on leave, and unchanged keyboard selection and
 // geometry.
-func TestHoverCuesOnAllSixTargetClasses(t *testing.T) {
+func TestHoverCuesOnEveryTargetClass(t *testing.T) {
 	for _, tc := range headerBadgeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, class := range hoverClasses() {
@@ -215,16 +243,16 @@ func TestHoverDoesNotChangeMeasurements(t *testing.T) {
 	}
 
 	// A grid cell keeps its target rectangle and every cell's x.
-	m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-		values: map[string]string{"text": "draft"}, focus: 2}
+	m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+		values: map[string]string{"text": "draft"}, focus: 2})
 	body := rectOf(t, m, slotBody)
 	p, ok := findText(m, body, "NE")
 	if !ok {
 		t.Fatal("the NE grid cell is not visible")
 	}
-	_, beforeTargets := m.viewLayout(body.Dy())
+	_, beforeTargets := m.viewLayout(m.focusedView(), body.Dx(), body.Dy())
 	mouse(t, m, tea.MouseMotionMsg{X: p.X, Y: p.Y})
-	_, afterTargets := m.viewLayout(body.Dy())
+	_, afterTargets := m.viewLayout(m.focusedView(), body.Dx(), body.Dy())
 	if len(beforeTargets) != len(afterTargets) {
 		t.Fatalf("hover changed the grid target count from %d to %d", len(beforeTargets), len(afterTargets))
 	}
@@ -419,7 +447,7 @@ func TestHoverRespectsPaletteAndDialogBoundaries(t *testing.T) {
 		t.Fatal("a Home hover cue was drawn under the palette")
 	}
 	clickAt(t, m, p)
-	if m.presentation != nil || m.currentMode() != modeHome {
+	if m.onWindows() || m.currentMode() != modeHome {
 		t.Fatal("a click under the palette reached the Home row")
 	}
 	m.closePalette()

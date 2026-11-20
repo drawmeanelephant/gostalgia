@@ -1,6 +1,6 @@
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ G O S T A L G I A  /  PERSONAL COMPU…┃
-┃  Tasks   Notifications  [Pad]        ┃
+┃  Notifications  [Windows (1)]        ┃
 ┃ ✓ ONLINE   guest · C: environment d… ┃
 ┃                                      ┃
 ┃ Pad                                  ┃
@@ -13,6 +13,6 @@
 ┃ [NW] › [NE]                          ┃
 ┃ waiting                              ┃
 ┃                                      ┃
-┃ C:\users\guest> App view owns focus… ┃
+┃ C:\users\guest> Window owns focus. … ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-Esc CANCEL/BACK · Ctrl-C EXIT
+Esc CANCEL/BACK · Ctrl-W CLOSE

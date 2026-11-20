@@ -10,9 +10,10 @@ import (
 	"bloomfx.dev/bloom/canvas"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
+	"gostalgia/sdk"
 )
 
 // textFilledBase covers every cell with a visible glyph, so a window that is
@@ -26,12 +27,12 @@ func textFilledBase(width, height int) bloom.Child {
 	return bloom.Text(strings.Join(lines, "\n"))
 }
 
-func openTestWindow(t *testing.T, model *Model, service *windows.Service, window windows.Window) {
+func openTestWindow(t *testing.T, model *Model, service *windows.Service, window windows.Window, view sdk.View) {
 	t.Helper()
 	if err := service.Open(window); err != nil {
 		t.Fatal(err)
 	}
-	model.presentations[window.ID] = newPresentationState(window.Presentation)
+	model.presentations[window.ID] = newPresentationState(view)
 	model.activate(window.ID, controlID{})
 	model.View()
 }
@@ -142,8 +143,7 @@ func TestWindowTitlesTruncateWithinBorderAndKeepCloseControl(t *testing.T) {
 			id := windows.ID("titled")
 			openTestWindow(t, model, service, windows.Window{
 				ID: id, Title: tc.title, Bounds: windows.Bounds{X: 0, Y: 0, Width: tc.width, Height: 8},
-				Presentation: fixtures.ScreenData(),
-			})
+			}, fixtures.ScreenData())
 			content := model.View().Content
 			if strings.ContainsRune(content, '\x1b') {
 				t.Fatalf("hostile title injected terminal styling:\n%q", content)

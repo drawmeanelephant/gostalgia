@@ -15,9 +15,9 @@ import (
 	"gioui.org/op"
 	"gioui.org/unit"
 	"gostalgia/internal/events"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/theme"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/sdk"
 )
 
@@ -47,19 +47,21 @@ func newFixtureModel(t *testing.T) (*harness, *windows.Service, *[]events.Envelo
 	t.Cleanup(cancel)
 	service := windows.NewService(bus, "test/gio-adapter")
 	if err := service.Open(windows.Window{
-		ID: screenID, Title: "Screen / form", Bounds: windows.Bounds{X: 8, Y: 8, Width: 280, Height: 240}, Presentation: fixtures.ScreenData(),
+		ID: screenID, Title: "Screen / form", Bounds: windows.Bounds{X: 8, Y: 8, Width: 280, Height: 240},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Open(windows.Window{
-		ID: padID, Title: "Pad / blocks and grid", Bounds: windows.Bounds{X: 320, Y: 8, Width: 280, Height: 240}, Presentation: fixtures.PadData(),
+		ID: padID, Title: "Pad / blocks and grid", Bounds: windows.Bounds{X: 320, Y: 8, Width: 280, Height: 240},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	h := &harness{
 		router: new(input.Router),
-		model:  New(service, theme.Nostalgia()),
-		size:   image.Pt(640, 400),
+		model: New(service, theme.Nostalgia(), map[windows.ID]sdk.View{
+			screenID: fixtures.ScreenData(), padID: fixtures.PadData(),
+		}),
+		size: image.Pt(640, 400),
 	}
 	h.frame()
 	return h, service, envelopes
@@ -515,11 +517,11 @@ func TestSanitizedSemanticLabels(t *testing.T) {
 	view := fixtures.ScreenData()
 	view.Items[0].Label = "unsafe\x1b]52;c;Zg==\aLABEL"
 	if err := service.Open(windows.Window{
-		ID: "unsafe", Title: "title\x1b[2J\x1b]0;bad\a", Bounds: windows.Bounds{X: 0, Y: 0, Width: 300, Height: 240}, Presentation: view,
+		ID: "unsafe", Title: "title\x1b[2J\x1b]0;bad\a", Bounds: windows.Bounds{X: 0, Y: 0, Width: 300, Height: 240},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	h := &harness{router: new(input.Router), model: New(service, theme.Monochrome()), size: image.Pt(400, 300)}
+	h := &harness{router: new(input.Router), model: New(service, theme.Monochrome(), map[windows.ID]sdk.View{"unsafe": view}), size: image.Pt(400, 300)}
 	h.frame()
 	nodes := h.semantics()
 	var dump func(ns []input.SemanticNode, out *strings.Builder)

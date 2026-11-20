@@ -1,9 +1,7 @@
 package windows
 
-import "gostalgia/sdk"
-
-// Draft lifecycle topic names. They are experimental experience events, not
-// additions to the public SDK contract.
+// Lifecycle topic names. They are experience events on the internal bus, not
+// additions to the public SDK contract: apps never observe windows.
 const (
 	EventOpened  = "window.opened"
 	EventFocused = "window.focused"
@@ -11,7 +9,7 @@ const (
 	EventClosed  = "window.closed"
 )
 
-// Opened reports a new window and its initial presentation snapshot.
+// Opened reports a new window and its initial metadata.
 type Opened struct {
 	Window Window
 }
@@ -38,11 +36,9 @@ type Moved struct {
 
 func (Moved) Type() string { return EventMoved }
 
-// Closed reports removal of a window. Its presentation snapshot is included
-// so a subscriber can identify the closed instance without retaining it.
+// Closed reports removal of a window.
 type Closed struct {
-	ID           ID
-	Presentation sdk.View
+	ID ID
 }
 
 func (Closed) Type() string { return EventClosed }

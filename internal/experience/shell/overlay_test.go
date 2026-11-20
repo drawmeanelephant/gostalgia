@@ -36,8 +36,8 @@ func overlayUnderlays() []geometryScreen {
 			m.selected = 2
 		}},
 		{"app", func(m *Model) {
-			m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-				values: map[string]string{"text": "draft"}, focus: 2, cell: 1}
+			m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+				values: map[string]string{"text": "draft"}, focus: 2, cell: 1})
 		}},
 		{"tasks", func(m *Model) { m.taskView = true; m.tasks.SelectNext() }},
 		{"notifications", func(m *Model) { m.notifView = true; m.notifs.SelectNext() }},
@@ -57,7 +57,7 @@ func underlayOf(m *Model) underlay {
 	s := stateOf(m)
 	s.paletteOpen, s.paletteSel, s.paletteFilter = false, 0, ""
 	u := underlay{modelState: s, launcherQuery: m.launcherQuery, notifSel: m.notifs.SelectedIndex()}
-	if v := m.presentation; v != nil {
+	if v := m.focusedView(); v != nil {
 		u.instance, u.values = v.instance, fmt.Sprint(v.values)
 	}
 	return u

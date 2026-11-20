@@ -58,10 +58,11 @@ go run ./cmd/gctl --root ./.gostalgia-demo shutdown
 The shell provides a DOS-style prompt, Home dashboard and FIGlet wordmark,
 searchable launcher, command palette and confirmations, Task Manager and log
 tails, notifications and toasts, bounded searchable transcript history,
-presentation-data app views, themes and accessible color modes, keyboard and
-additive mouse input, policy-controlled host clipboard writes, detachable SSH
-sessions, and bounded per-session motion. Every mouse action retains a keyboard
-route. See [docs/shell.md](docs/shell.md) for commands and keybindings.
+presentation-data app views in floating windows, themes and accessible color
+modes, keyboard and additive mouse input, policy-controlled host clipboard
+writes, detachable SSH sessions, and bounded per-session motion. Every mouse
+action retains a keyboard route. See [docs/shell.md](docs/shell.md) for
+commands and keybindings.
 
 ## What is here
 
@@ -97,11 +98,12 @@ See [docs/applications.md](docs/applications.md) for the app-writing spec,
 [docs/architecture.md](docs/architecture.md) for design decisions and risks,
 and [docs/](docs/) for subsystem guides.
 
-## Experimental, nonproduction window spike
+## Experimental, nonproduction window adapters
 
-A deliberately unwired draft window service with bloom and Gio adapters lives
-under `internal/experience/experimental/windows`. Run their standalone
-demonstrations:
+The shell's windows use the window service in `internal/experience/windows`;
+see [docs/windows.md](docs/windows.md). Experimental bloom and Gio adapters of
+that service stay under `internal/experience/experimental/windows`. Run their
+standalone demonstrations:
 
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
@@ -117,7 +119,7 @@ action or grid cell, and **Ctrl-W** to close the focused window. **Ctrl-C**
 exits and restores the terminal. The two drafts and semantic action requests
 remain independent, and lifecycle events use the existing typed event bus.
 
-This is not production multiwindow support and is not registered with the
+These demos are not the shell's windows, and they are not registered with the
 normal shell or runtime. The Gio demo's `giodemo` build tag keeps the
 cgo-bound `gioui.org/app` host out of default builds; building it verifies
 compile only, not a running window. Demos keep fixture actions local rather
@@ -126,7 +128,6 @@ use, and the terminal demo is most useful at 80×24 or larger. The
 toolkit-neutral draft and the observed side-by-side bloom/Gio leak inventory
 are in
 [docs/architecture.md §4.6](docs/architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
-The proposed production design is in [docs/windows.md](docs/windows.md).
 
 ## Checks
 
@@ -135,14 +136,14 @@ Run focused experience and experimental tests during development:
 ```sh
 go test -count=1 ./internal/experience/... ./test/e2e
 go test -count=1 ./internal/experience/experimental/windows/...
-go test -count=1 ./internal/experience/shell -run '^(TestSteepRuntimeScenarios|TestSteepMotionScenarios)$'
+go test -count=1 ./internal/experience/shell -run '^(TestSteepRuntimeScenarios|TestSteepMotionScenarios|TestSteepWindowsScenarios)$'
 ```
 
 The steep scenarios boot a real runtime in an emulated terminal and cover
 navigation, launch/stop, palette, echo, resize, bracketed paste, mouse, toast
-geometry, finite motion, and terminal restoration. Snapshot updates are always
-explicit developer actions, never automatic in CI. Real local PTY and OpenSSH
-checks remain separate release validation; see
+geometry, finite motion, app windows, and terminal restoration. Snapshot
+updates are always explicit developer actions, never automatic in CI. Real
+local PTY and OpenSSH checks remain separate release validation; see
 [docs/development.md](docs/development.md).
 
 Before submitting a change, run the complete build, vet, race, formatting,

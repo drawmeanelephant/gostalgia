@@ -12,16 +12,17 @@ import (
 	"charm.land/lipgloss/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/internal/ipc"
 	"gostalgia/sdk"
 )
 
-// appView is shell-owned state. No app supplies a tea.Model, keymap, style, or
-// terminal handle. Epoch/sequence guards reject replies after dismissal,
-// cancellation, or a later operation. version is the negotiated presentation
-// protocol; cell is the selected grid cell when a version-2 grid exists.
-// regionTop/regionPinned/regionWindow drive the version-3 scroll region; the
-// window is written by the renderer so key handling clamps against the same
+// appView is one window's shell-owned presentation state. No app supplies a
+// tea.Model, keymap, style, or terminal handle. Epoch/sequence guards reject
+// replies after the window closes, a cancellation, or a later operation.
+// version is the negotiated presentation protocol; cell is the selected grid
+// cell when a version-2 grid exists. regionTop/regionPinned/regionWindow drive
+// the version-3 scroll region; the window is written by the renderer so key handling clamps against the same
 // line count the user sees. refreshing/refreshQueued coalesce version-3
 // invalidation pushes into at most one in-flight refetch plus one follow-up.
 type appView struct {
@@ -38,6 +39,8 @@ type appView struct {
 	request      string
 	cancel       context.CancelFunc
 	banner       string
+	// scroll is how many rows the user paged the flow up from its focus.
+	scroll int
 
 	regionTop    int
 	regionPinned bool
@@ -66,6 +69,7 @@ type appView struct {
 }
 
 type viewMsg struct {
+	id         windows.ID
 	epoch, seq uint64
 	version    int
 	data       sdk.View
@@ -89,8 +93,12 @@ type viewEventMsg struct {
 	ok    bool
 }
 
-type viewTickMsg struct{ epoch uint64 }
+type viewTickMsg struct {
+	id    windows.ID
+	epoch uint64
+}
 type viewCheckMsg struct {
+	id         windows.ID
 	epoch, seq uint64
 	apps       []appStatus
 	data       *sdk.View
@@ -148,28 +156,8 @@ func fetchView(ctx context.Context, client Caller, id string, version int) (sdk.
 	}
 }
 
-func (m *Model) openView(a appStatus) tea.Cmd {
-	m.viewEpoch++
-	// A new screen means no old pointer target remains.
-	m.clearHoverAll()
-	v := &appView{
-		id: a.Manifest.ID, pid: a.PID, epoch: m.viewEpoch, version: sdk.PresentationVersion,
-		data:   sdk.View{Title: a.Manifest.Name, State: sdk.ViewLoading},
-		values: make(map[string]string), regionPinned: true,
-	}
-	m.leaveShelf()
-	m.presentation, m.shelf, m.scroll = v, false, 0
-	epoch, ctx, client, id := v.epoch, m.ctx, m.client, v.id
-	return tea.Batch(func() tea.Msg {
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		data, version, err := fetchView(ctx, client, id, sdk.PresentationVersion)
-		return viewMsg{epoch: epoch, version: version, data: data, err: err}
-	}, viewTick(epoch), m.ensureViewSub())
-}
-
-func viewTick(epoch uint64) tea.Cmd {
-	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return viewTickMsg{epoch} })
+func viewTick(id windows.ID, epoch uint64) tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return viewTickMsg{id, epoch} })
 }
 
 // viewEventTopic is the bus topic of the version-3 invalidation signal; the
@@ -217,11 +205,10 @@ func (m *Model) waitViewEvent(sub *ipc.ClientSubscription) tea.Cmd {
 	}
 }
 
-// refreshView refetches the current snapshot at the negotiated version in
-// answer to a version-3 invalidation push. Unlike the poll it skips app/list:
-// liveness keeps coming from the tick.
-func (m *Model) refreshView() tea.Cmd {
-	v := m.presentation
+// refreshView refetches v's snapshot at the negotiated version in answer to
+// a version-3 invalidation push. Unlike the poll it skips app/list: liveness
+// keeps coming from the tick.
+func (m *Model) refreshView(v *appView) tea.Cmd {
 	v.refreshing = true
 	epoch, seq, id, version := v.epoch, v.seq, v.id, v.version
 	ctx, client := m.ctx, m.client
@@ -236,23 +223,12 @@ func (m *Model) refreshView() tea.Cmd {
 		if err == nil && data.Version > version {
 			err = fmt.Errorf("presentation: view stamped version %d exceeds requested %d", data.Version, version)
 		}
-		return viewMsg{epoch: epoch, seq: seq, version: version, data: data, err: err, refresh: true}
+		return viewMsg{id: windows.ID(id), epoch: epoch, seq: seq, version: version, data: data, err: err, refresh: true}
 	}
 }
 
-// dismissView retracts focus and data immediately. Cancel uses a separate IPC
+// cancelViewAction cancels v's in-flight action. Cancel uses a separate IPC
 // call because canceling a socket client's wait alone cannot stop server work.
-func (m *Model) dismissView() tea.Cmd {
-	v := m.presentation
-	m.presentation = nil
-	m.viewEpoch++
-	m.clearHoverAll()
-	if v == nil || v.cancel == nil {
-		return nil
-	}
-	return m.cancelViewAction(v)
-}
-
 func (m *Model) cancelViewAction(v *appView) tea.Cmd {
 	v.cancel()
 	v.cancel = nil
@@ -269,15 +245,14 @@ func (m *Model) cancelViewAction(v *appView) tea.Cmd {
 	}
 }
 
-func (m *Model) checkView() tea.Cmd {
-	v := m.presentation
+func (m *Model) checkView(v *appView) tea.Cmd {
 	epoch, seq, id, pid, busy, version := v.epoch, v.seq, v.id, v.pid, v.busy, v.version
 	negotiated := v.instance != ""
 	ctx, client := m.ctx, m.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		msg := viewCheckMsg{epoch: epoch, seq: seq}
+		msg := viewCheckMsg{id: windows.ID(id), epoch: epoch, seq: seq}
 		msg.err = client.Call(ctx, "app/list", nil, &msg.apps)
 		if msg.err == nil && !busy {
 			for _, a := range msg.apps {
@@ -312,12 +287,11 @@ func (m *Model) checkView() tea.Cmd {
 	}
 }
 
-// applyView adopts a snapshot, preserving semantic selection by identity.
+// apply adopts a snapshot, preserving semantic selection by identity.
 // fromAction marks a reply to a user action: an action that reveals a
 // different output surface than the view's ordinary one surfaces it from the
 // top, so the panel the user asked for is actually readable.
-func (m *Model) applyView(data sdk.View, fromAction bool) bool {
-	v := m.presentation
+func (v *appView) apply(data sdk.View, fromAction bool) bool {
 	if v.instance != "" && v.instance != data.Instance {
 		return false
 	}
@@ -412,8 +386,10 @@ func (m *Model) applyView(data sdk.View, fromAction bool) bool {
 	return true
 }
 
+// updatePresentation routes a window's replies, ticks, and pushes by window
+// ID. Each window has its own epoch and request sequence, so a late reply for
+// one window can never change another, or a window opened again since.
 func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
-	v := m.presentation
 	switch msg := msg.(type) {
 	case viewSubscribedMsg:
 		if msg.err == nil && msg.sub != nil {
@@ -425,7 +401,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 	case viewEventMsg:
 		if !msg.ok {
 			// The stream ended (unsubscribe or disconnect); the next
-			// openView retries the subscription.
+			// window to open retries the subscription.
 			m.viewSub = nil
 			return nil
 		}
@@ -433,8 +409,9 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 		if m.viewSub != nil {
 			wait = m.waitViewEvent(m.viewSub)
 		}
-		if v == nil || v.instance == "" || msg.event.Event.Type != viewEventTopic ||
-			msg.event.Event.Source != "app/"+v.id {
+		appID, ok := strings.CutPrefix(msg.event.Event.Source, "app/")
+		v := m.views[windows.ID(appID)]
+		if !ok || v == nil || v.instance == "" || msg.event.Event.Type != viewEventTopic {
 			return wait
 		}
 		// A matching push coalesces into at most one in-flight refetch:
@@ -445,12 +422,13 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			return wait
 		}
 		v.refreshQueued = false
-		return tea.Batch(wait, m.refreshView())
+		return tea.Batch(wait, m.refreshView(v))
 	case viewMsg:
+		v := m.views[msg.id]
 		if v == nil {
 			return nil
 		}
-		if msg.refresh {
+		if msg.refresh && msg.epoch == v.epoch {
 			v.refreshing = false
 		}
 		if msg.epoch != v.epoch || msg.seq != v.seq {
@@ -473,25 +451,27 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			if v.version == 0 {
 				v.version = msg.data.Version
 			}
-			if !m.applyView(msg.data, msg.action) {
-				m.append(entry{"App instance changed; view closed.", "error"})
-				return m.dismissView()
+			if !v.apply(msg.data, msg.action) {
+				m.append(entry{"App instance changed; window closed.", "error"})
+				return m.closeWindow(msg.id)
 			}
+			m.windows.Retitle(msg.id, viewText(v.data.Title))
 			m.pruneGridHover()
 			v.banner = ""
 		}
-		if msg.action && v.id == "com.gostalgia.settings" {
+		if msg.action && v.id == settingsAppID {
 			return m.fetchConfigCmd()
 		}
 		if v.refreshQueued && !v.busy {
 			v.refreshQueued = false
-			return m.refreshView()
+			return m.refreshView(v)
 		}
 	case viewTickMsg:
-		if v != nil && msg.epoch == v.epoch {
-			return m.checkView()
+		if v := m.views[msg.id]; v != nil && msg.epoch == v.epoch {
+			return m.checkView(v)
 		}
 	case viewCheckMsg:
+		v := m.views[msg.id]
 		if v == nil || msg.epoch != v.epoch {
 			return nil
 		}
@@ -500,12 +480,12 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			alive = alive || a.Manifest.ID == v.id && a.Running && a.PID == v.pid
 		}
 		if msg.err != nil || !alive {
-			text := "App exited or stopped; view closed."
+			text := "App exited or stopped; window closed."
 			if msg.err != nil {
 				text = "App view unavailable: " + msg.err.Error()
 			}
 			m.append(entry{text, "error"})
-			return m.dismissView()
+			return m.closeWindow(msg.id)
 		}
 		m.apps = msg.apps
 		// A fresh app/list answer outranks an older process-derived state;
@@ -518,13 +498,14 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			if msg.version != 0 {
 				v.version = msg.version
 			}
-			if !m.applyView(*msg.data, false) {
-				m.append(entry{"App instance changed; view closed.", "error"})
-				return m.dismissView()
+			if !v.apply(*msg.data, false) {
+				m.append(entry{"App instance changed; window closed.", "error"})
+				return m.closeWindow(msg.id)
 			}
+			m.windows.Retitle(msg.id, viewText(v.data.Title))
 			m.pruneGridHover()
 		}
-		return viewTick(v.epoch)
+		return viewTick(msg.id, v.epoch)
 	case viewCancelMsg:
 		if msg.err != nil {
 			m.append(entry{"Cancel request: " + msg.err.Error(), "error"})
@@ -600,21 +581,11 @@ func (v *appView) scrollBlock(delta int) {
 	v.inspectTop = min(maxTop, max(0, top+delta))
 }
 
-// bodyWidth is the app body's cell width: the horizontal bound every cropped
-// block and meter fits inside.
-func (m *Model) bodyWidth() int {
-	return max(1, m.kit.PanelContentBounds(ui.Bounds{Width: m.width, Height: max(1, m.height-1)}).Width)
-}
-
-// viewPanes splits a body height between a hinted focal block, pinned meters,
-// and the focus-windowed secondary flow. A narrow body keeps controls whole
-// and leaves the block to the inspection route.
-func (m *Model) viewPanes(height int) presentationPanes {
-	v := m.presentation
-	visible := max(1, height-len(m.viewHeader())-1)
-	if v == nil {
-		return presentationPanes{secondary: visible}
-	}
+// viewPanes splits v's content height between a hinted focal block, pinned
+// meters, and the focus-windowed secondary flow. A narrow body keeps controls
+// whole and leaves the block to the inspection route.
+func (m *Model) viewPanes(v *appView, width, height int) presentationPanes {
+	visible := max(1, height-len(m.viewHeader(v, width))-1)
 	block := v.focalBlock()
 	if block == nil {
 		return presentationPanes{secondary: visible}
@@ -697,14 +668,12 @@ func clipBlockLine(line string, left, width int) string {
 
 // primaryBlockRows draws a hinted block in at most rows lines, keeping the
 // focal cell visible both vertically and horizontally. The snapshot keeps the
-// whole block; only this viewport crops it. inspect uses the user's scroll
-// offset, while the ordinary split view always centers on the focal cell.
-func (m *Model) primaryBlockRows(block *sdk.Block, rows int, inspect bool) []string {
-	v := m.presentation
+// whole block; only this viewport crops it, width cells wide. inspect uses
+// the user's scroll offset, while the ordinary split view always centers on
+// the focal cell.
+func (m *Model) primaryBlockRows(v *appView, block *sdk.Block, width, rows int, inspect bool) []string {
 	if block == nil || rows <= 0 {
-		if v != nil {
-			v.blockTop, v.blockWindow = 0, max(0, rows)
-		}
+		v.blockTop, v.blockWindow = 0, max(0, rows)
 		return nil
 	}
 	all := textLines(block.Text)
@@ -727,7 +696,7 @@ func (m *Model) primaryBlockRows(block *sdk.Block, rows int, inspect bool) []str
 	if label != "" {
 		out = append(out, m.kit.Muted(label))
 	}
-	width := m.bodyWidth()
+	width = max(1, width)
 	focusLine := ""
 	if focusY >= 0 && focusY < len(all) {
 		focusLine = all[focusY]
@@ -742,12 +711,12 @@ func (m *Model) primaryBlockRows(block *sdk.Block, rows int, inspect bool) []str
 	return out
 }
 
-// meterRow draws one gauge. The whole meter fits the body width and, per
+// meterRow draws one gauge. The whole meter fits the content width and, per
 // Delve's fixed contract, the whole meter never exceeds forty cells, so its
 // bar can never sprawl past forty either.
-func (m *Model) meterRow(meter sdk.Meter) string {
+func (m *Model) meterRow(meter sdk.Meter, width int) string {
 	return m.kit.Progress(ui.Progress{Label: meter.Label, Value: meter.Value},
-		max(1, min(40, m.bodyWidth())))
+		max(1, min(40, width)))
 }
 
 // textLines splits text the way the renderer and the validator count it: a
@@ -794,11 +763,10 @@ func (v *appView) moveCell(dcol, drow int) {
 	v.cell = min(len(g.Cells)-1, row*cols+col)
 }
 
-// viewRun dispatches a semantic action for the focused action or cell. Callers
-// set Action, CellID, and ItemID; the request picks up the negotiated version,
-// instance, a bounded request ID, and current field values.
-func (m *Model) viewRun(p sdk.ActionRequest) tea.Cmd {
-	v := m.presentation
+// viewRun dispatches a semantic action for v's focused action or cell.
+// Callers set Action, CellID, and ItemID; the request picks up the negotiated
+// version, instance, a bounded request ID, and current field values.
+func (m *Model) viewRun(v *appView, p sdk.ActionRequest) tea.Cmd {
 	p.Version, p.Instance = v.version, v.instance
 	p.RequestID = "r" + strings.ToLower(rand.Text())
 	p.Values = make(map[string]string, len(v.values))
@@ -828,18 +796,13 @@ func (m *Model) viewRun(p sdk.ActionRequest) tea.Cmd {
 			}, nil)
 			stop()
 		}
-		return viewMsg{epoch: epoch, seq: seq, version: p.Version, data: data, err: err, action: true}
+		return viewMsg{id: windows.ID(id), epoch: epoch, seq: seq, version: p.Version, data: data, err: err, action: true}
 	}
 }
 
-func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
-	v := m.presentation
-	if key.String() == "esc" {
-		if v.busy {
-			return m.cancelViewAction(v)
-		}
-		return m.dismissView()
-	}
+// viewKey handles a key for v's presentation. The window keys, Esc among
+// them, are routed before it.
+func (m *Model) viewKey(v *appView, key tea.KeyPressMsg) tea.Cmd {
 	if v.busy || v.instance == "" {
 		return nil
 	}
@@ -867,7 +830,7 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			case "m":
 				v.inspect = false
 				v.inspectTop = -1
-				m.scroll = 0
+				v.scroll = 0
 			case "up":
 				v.scrollBlock(-1)
 			case "down":
@@ -883,13 +846,13 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			v.inspect = true
 			v.inspectTop = -1
 			v.itemFocus = false
-			m.scroll = 0
+			v.scroll = 0
 			return nil
 		}
 	}
 	switch key.String() {
 	case "tab", "shift+tab":
-		v.itemFocus, m.scroll = false, 0
+		v.itemFocus, v.scroll = false, 0
 		if total > 0 {
 			delta := 1
 			if key.String() == "shift+tab" {
@@ -907,7 +870,7 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			v.itemFocus = true
 			v.item = max(0, v.item-1)
 		}
-		m.scroll = 0
+		v.scroll = 0
 	case "down":
 		switch {
 		case v.gridFocused():
@@ -918,26 +881,26 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			v.itemFocus = true
 			v.item = min(max(0, len(v.data.Items)-1), v.item+1)
 		}
-		m.scroll = 0
+		v.scroll = 0
 	case "pgup":
 		if v.regionFocused() {
 			v.scrollRegion(-v.regionWindow)
-			m.scroll = 0
+			v.scroll = 0
 		}
 	case "pgdown":
 		if v.regionFocused() {
 			v.scrollRegion(v.regionWindow)
-			m.scroll = 0
+			v.scroll = 0
 		}
 	case "left":
 		if v.gridFocused() {
 			v.moveCell(-1, 0)
-			m.scroll = 0
+			v.scroll = 0
 		}
 	case "right":
 		if v.gridFocused() {
 			v.moveCell(1, 0)
-			m.scroll = 0
+			v.scroll = 0
 		}
 	case "enter", "shift+enter", "ctrl+enter":
 		if v.data.State == sdk.ViewLoading {
@@ -951,7 +914,7 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			// skips newline insertion and dispatches below, giving
 			// multiline forms a submit chord that only a disambiguating
 			// terminal can name.
-			v.itemFocus, m.scroll = false, 0
+			v.itemFocus, v.scroll = false, 0
 			v.values[fields[v.focus].ID] += "\n"
 			return nil
 		}
@@ -970,9 +933,9 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if v.gridFocused() {
-			return m.runViewCell()
+			return m.runViewCell(v)
 		}
-		return m.runViewAction(max(0, v.focus-len(fields)))
+		return m.runViewAction(v, max(0, v.focus-len(fields)))
 	default:
 		if !fieldFocused {
 			return nil
@@ -986,7 +949,7 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 		// refreshes, which upstream's internal buffer can't express.
 		f := fields[v.focus]
 		id := f.ID
-		v.itemFocus, m.scroll = false, 0
+		v.itemFocus, v.scroll = false, 0
 		value := []rune(v.values[id])
 		limit := 4096
 		if f.Multiline {
@@ -1015,20 +978,18 @@ func (m *Model) viewKey(key tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
-// runViewCell runs the selected grid cell's action, as Enter does on it.
-func (m *Model) runViewCell() tea.Cmd {
-	v := m.presentation
+// runViewCell runs v's selected grid cell's action, as Enter does on it.
+func (m *Model) runViewCell(v *appView) tea.Cmd {
 	c := v.grid().Cells[v.cell]
 	if c.Disabled || c.Action == "" || v.topActionDisabled(c.Action) {
 		return nil
 	}
-	return m.viewRun(sdk.ActionRequest{Action: c.Action, CellID: c.ID})
+	return m.viewRun(v, sdk.ActionRequest{Action: c.Action, CellID: c.ID})
 }
 
-// runViewAction runs action index, as Enter does on it, for the selected
+// runViewAction runs v's action index, as Enter does on it, for the selected
 // item and grid cell.
-func (m *Model) runViewAction(index int) tea.Cmd {
-	v := m.presentation
+func (m *Model) runViewAction(v *appView, index int) tea.Cmd {
 	actions := v.data.Actions
 	if index >= len(actions) || actions[index].Disabled {
 		return nil
@@ -1042,7 +1003,7 @@ func (m *Model) runViewAction(index int) tea.Cmd {
 	if g := v.grid(); g != nil && !g.Cells[v.cell].Disabled {
 		p.CellID = g.Cells[v.cell].ID
 	}
-	return m.viewRun(p)
+	return m.viewRun(v, p)
 }
 
 // viewTargetKind is what a click target in an app view is.
@@ -1065,11 +1026,11 @@ type viewTarget struct {
 }
 
 // activateViewTarget focuses t in v and runs it, as Tab to it and Enter
-// do, if v is still the view open and t still in it. The gates Enter
+// do, if v's window is still open and t still in it. The gates Enter
 // checks apply here too: nothing runs while an action is in flight or the
 // view is loading, or for a disabled action or cell.
 func (m *Model) activateViewTarget(v *appView, t viewTarget) tea.Cmd {
-	if m.presentation != v || v.busy || v.instance == "" || v.data.State == sdk.ViewLoading {
+	if m.views[windows.ID(v.id)] != v || v.busy || v.instance == "" || v.data.State == sdk.ViewLoading {
 		return nil
 	}
 	fields, actions := v.data.Fields, v.data.Actions
@@ -1078,24 +1039,23 @@ func (m *Model) activateViewTarget(v *appView, t viewTarget) tea.Cmd {
 		if t.index >= len(actions) || actions[t.index].ID != t.id {
 			return nil
 		}
-		v.focus, v.itemFocus, m.scroll = len(fields)+t.index, false, 0
-		return m.runViewAction(t.index)
+		v.focus, v.itemFocus, v.scroll = len(fields)+t.index, false, 0
+		return m.runViewAction(v, t.index)
 	case viewTargetCell:
 		g := v.grid()
 		if g == nil || t.index >= len(g.Cells) || g.Cells[t.index].ID != t.id {
 			return nil
 		}
-		v.focus, v.cell, v.itemFocus, m.scroll = len(fields)+len(actions), t.index, false, 0
-		return m.runViewCell()
+		v.focus, v.cell, v.itemFocus, v.scroll = len(fields)+len(actions), t.index, false, 0
+		return m.runViewCell(v)
 	}
 	return nil
 }
 
 func viewText(s string) string { return strings.ReplaceAll(safe(s), "\n", " ") }
 
-// viewHeader is the presentation's title, key hints and state lines.
-func (m *Model) viewHeader() []string {
-	v := m.presentation
+// viewHeader is v's title, key hints and state lines, width cells wide.
+func (m *Model) viewHeader(v *appView, width int) []string {
 	hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
 	switch {
 	case v.grid() != nil && v.region() != nil:
@@ -1123,7 +1083,7 @@ func (m *Model) viewHeader() []string {
 	}
 	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(m.kit.Hint(hints))}
 	if v.busy || v.data.State == sdk.ViewLoading {
-		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, m.width-4)))
+		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, width)))
 	}
 	if v.banner != "" {
 		lines = append(lines, m.kit.StatusText(viewText(v.banner), theme.Error))
@@ -1134,15 +1094,14 @@ func (m *Model) viewHeader() []string {
 	return lines
 }
 
-// regionWindow reports the scroll region's window height and top line for a
-// body of height rows. The region delegates its clamp to bubbles/viewport
-// (issue #185); regionPinned means "stay at the tail", so GotoBottom is the
-// pin.
-func (m *Model) regionWindow(height int) (window, top int) {
-	v := m.presentation
-	visible := max(1, height-len(m.viewHeader())-1)
+// regionWindow reports v's scroll region window height and top line for a
+// content box of width×height cells. The region delegates its clamp to
+// bubbles/viewport (issue #185); regionPinned means "stay at the tail", so
+// GotoBottom is the pin.
+func (m *Model) regionWindow(v *appView, width, height int) (window, top int) {
+	visible := max(1, height-len(m.viewHeader(v, width))-1)
 	window = min(20, max(4, visible/2))
-	if p := m.viewPanes(height); p.primary > 0 {
+	if p := m.viewPanes(v, width, height); p.primary > 0 {
 		// Beside a focal block the region lives in the independently
 		// focus-windowed flow, so its own window must fit there.
 		window = min(20, max(1, p.secondary/2))
@@ -1157,21 +1116,21 @@ func (m *Model) regionWindow(height int) (window, top int) {
 	return window, vp.YOffset()
 }
 
-// syncPresentationWindow stores the region window the body is about to show.
-// The regionTop field stays canonical: scrollRegion moves it between renders
-// by the window drawn last, and tests observe it directly.
+// syncPresentationWindow stores the region window the focused window is
+// about to show. The regionTop field stays canonical: scrollRegion moves it
+// between renders by the window drawn last, and tests observe it directly.
 func (m *Model) syncPresentationWindow() {
-	v := m.presentation
-	if v == nil || v.region() == nil || m.paletteOpen || m.taskView || m.notifView {
+	v := m.focusedView()
+	if !m.onWindows() || v.region() == nil || m.paletteOpen {
 		return
 	}
-	if r, ok := m.solve().Rect(slotBody); ok {
-		v.regionWindow, v.regionTop = m.regionWindow(r.Dy())
+	if w, h := m.windowContentSize(v); w > 0 && h > 0 {
+		v.regionWindow, v.regionTop = m.regionWindow(v, w, h)
 	}
 }
 
-func (m *Model) viewLines(height int) []string {
-	lines, _ := m.viewLayout(height)
+func (m *Model) viewLines(v *appView, width, height int) []string {
+	lines, _ := m.viewLayout(v, width, height)
 	return lines
 }
 
@@ -1179,14 +1138,13 @@ func (m *Model) viewLines(height int) []string {
 // a bounded window over the block. Focus, the selected grid cell, the
 // selected item, and field drafts are untouched, so returning to controls
 // resumes exactly where the user left off.
-func (m *Model) inspectLayout(height int) []string {
-	v := m.presentation
+func (m *Model) inspectLayout(v *appView, width, height int) []string {
 	hint := "Map · m controls · ↑↓ scroll"
-	if m.width < 60 {
+	if width < 56 {
 		hint = "Map · m controls"
 	}
 	lines := []string{m.kit.Muted(m.kit.Hint(hint))}
-	return append(lines, m.primaryBlockRows(v.focalBlock(), max(0, height-1), true)...)
+	return append(lines, m.primaryBlockRows(v, v.focalBlock(), width, max(0, height-1), true)...)
 }
 
 // surfaceLayout shows an action-revealed region from its first line as a
@@ -1194,9 +1152,8 @@ func (m *Model) inspectLayout(height int) []string {
 // meters, and focused control for the same few rows. The next ordinary
 // navigation clears it and returns to the control window, while Enter still
 // reaches the focused action so the same key can toggle a panel shut.
-func (m *Model) surfaceLayout(height int) []string {
-	v := m.presentation
-	lines := m.viewHeader()
+func (m *Model) surfaceLayout(v *appView, width, height int) []string {
+	lines := m.viewHeader(v, width)
 	contentRows := max(1, height-len(lines)-1)
 	label := viewText(v.region().Label)
 	if label != "" && contentRows > 1 {
@@ -1216,18 +1173,17 @@ func (m *Model) surfaceLayout(height int) []string {
 	return lines
 }
 
-// viewLayout is the app view's lines in a body of height rows, and where
+// viewLayout is v's lines in a content box of width×height cells, and where
 // they show its actions and grid cells.
-func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
-	v := m.presentation
-	panes := m.viewPanes(height)
+func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarget) {
+	panes := m.viewPanes(v, width, height)
 	if panes.inspect {
-		return m.inspectLayout(height), nil
+		return m.inspectLayout(v, width, height), nil
 	}
 	if v.surface != "" && v.region() != nil && v.region().ID == v.surface {
-		return m.surfaceLayout(height), nil
+		return m.surfaceLayout(v, width, height), nil
 	}
-	lines := m.viewHeader()
+	lines := m.viewHeader(v, width)
 	var rows []string
 	// rowTargets holds the targets on each row, by its index in rows.
 	rowTargets := map[int][]viewTarget{}
@@ -1248,7 +1204,7 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 	}
 	if panes.primary == 0 {
 		for _, meter := range v.data.Meters {
-			rows = append(rows, m.meterRow(meter))
+			rows = append(rows, m.meterRow(meter, width))
 		}
 	}
 	itemBase := len(rows)
@@ -1281,7 +1237,7 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 			continue
 		}
 		value := viewText(v.values[field.ID])
-		room := max(1, m.width-8-lipgloss.Width(label))
+		room := max(1, width-4-lipgloss.Width(label))
 		text := label + ui.Tail(value, room)
 		if i == v.focus {
 			text = m.kit.FocusText(text + " ")
@@ -1361,7 +1317,7 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 	regionBase := -1
 	if r := v.region(); r != nil {
 		all := textLines(r.Text)
-		window, top := m.regionWindow(height)
+		window, top := m.regionWindow(v, width, height)
 		label := viewText(r.Label)
 		if len(all) > window {
 			label += " " + m.kit.Muted(m.kit.Hint(fmt.Sprintf("– %d/%d", top+1, len(all))))
@@ -1385,14 +1341,14 @@ func (m *Model) viewLayout(height int) ([]string, []viewTarget) {
 	case gridBase >= 0 && v.gridFocused():
 		focus = gridBase + gridRow
 	}
-	start := max(0, min(focus-visible+1, max(0, len(rows)-visible))-m.scroll)
+	start := max(0, min(focus-visible+1, max(0, len(rows)-visible))-v.scroll)
 	// The primary viewport and pinned meters never scroll away with the
 	// focused control; the secondary flow gets its own window around focus.
-	primaryRows := m.primaryBlockRows(v.focalBlock(), panes.primary, false)
+	primaryRows := m.primaryBlockRows(v, v.focalBlock(), width, panes.primary, false)
 	lines = append(lines, primaryRows...)
 	if panes.meters > 0 {
 		for i := 0; i < min(panes.meters, len(v.data.Meters)); i++ {
-			lines = append(lines, m.meterRow(v.data.Meters[i]))
+			lines = append(lines, m.meterRow(v.data.Meters[i], width))
 		}
 	}
 	var targets []viewTarget
@@ -1414,20 +1370,20 @@ func (m *Model) selectedView() tea.Cmd {
 	if m.currentMode() == modeLauncher {
 		filtered := m.filteredApps()
 		if sel := min(m.selected, len(filtered)-1); sel >= 0 && filtered[sel].Running {
-			return m.openView(filtered[sel])
+			return m.openWindow(filtered[sel])
 		}
 	}
 	if m.currentMode() == modeHome {
 		if hv := m.homeView(); hv.selected >= 0 && hv.items[hv.selected].kind == homeItemApp {
-			return m.openView(hv.items[hv.selected].app)
+			return m.openWindow(hv.items[hv.selected].app)
 		}
 	}
 	if len(m.apps) > 0 && m.selected < len(m.apps) && m.apps[m.selected].Running {
-		return m.openView(m.apps[m.selected])
+		return m.openWindow(m.apps[m.selected])
 	}
 	for _, a := range m.apps {
 		if a.Running {
-			return m.openView(a)
+			return m.openWindow(a)
 		}
 	}
 	m.append(entry{"Launch an app before opening its view.", "error"})

@@ -481,7 +481,7 @@ func TestOverlayEntrancesPreserveInputAndModalGuards(t *testing.T) {
 		}
 		m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
 		clickAt(t, m, p)
-		if m.presentation != nil || m.currentMode() != modeHome {
+		if m.onWindows() || m.currentMode() != modeHome {
 			t.Fatal("a click under the opening palette reached the Home row")
 		}
 		if len(rec.all()) != 0 {
@@ -501,7 +501,7 @@ func TestOverlayEntrancesPreserveInputAndModalGuards(t *testing.T) {
 		}
 		m.openConfirm(confirmation{kind: confirmShutdown})
 		clickAt(t, m, p)
-		if m.presentation != nil || m.currentMode() != modeHome {
+		if m.onWindows() || m.currentMode() != modeHome {
 			t.Fatal("a click under the opening dialog reached the Home row")
 		}
 		if len(rec.all()) != 0 {

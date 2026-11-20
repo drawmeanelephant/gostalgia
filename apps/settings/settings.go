@@ -352,10 +352,11 @@ func (s *Settings) buildItems() []sdk.Item {
 			{"home", "Home Dashboard", "f1"},
 			{"launcher", "App Shelf Launcher", "f2"},
 			{"stop", "Stop Active App", "f3"},
-			{"view", "App Presentation View", "f4"},
+			{"view", "Open App Window", "f4"},
 			{"tasks", "Task Manager", "f5"},
 			{"notifications", "Notifications & Alerts", "f6"},
 			{"settings", "Preferences & Settings", "f7"},
+			{"window_next", "Next Window", "f8"},
 			{"palette", "Command Palette", "ctrl+p"},
 		}
 		for _, a := range actions {

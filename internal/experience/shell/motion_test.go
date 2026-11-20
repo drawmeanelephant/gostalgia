@@ -40,6 +40,7 @@ func settleFiniteMotion(m *Model) {
 	m.motion.launchShake.Set(1)
 	m.motion.overlay.Set(1)
 	m.motion.toast.Set(1)
+	m.motion.window.Set(1)
 	m.motion.startup.Set(1)
 	m.motion.startupPhase = startupConsumed
 }

@@ -158,7 +158,7 @@ func (m *Model) showShelfLaunchFailure(msg resultMsg) bool {
 	if msg.originSeq != m.launchSent || msg.originEpoch != m.shelfEpoch {
 		return false
 	}
-	if m.currentMode() != modeLauncher || m.presentation != nil {
+	if m.currentMode() != modeLauncher || m.onWindows() {
 		return false
 	}
 	listed := false
@@ -215,7 +215,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(filtered) > 0 && m.selected < len(filtered) {
 			a := filtered[m.selected]
 			if a.Running {
-				return m, m.openView(a)
+				return m, m.openWindow(a)
 			}
 			m.append(entry{"Launch an app before opening its view.", "error"})
 		}

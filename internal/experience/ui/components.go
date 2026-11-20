@@ -39,6 +39,22 @@ func (k Kit) Panel(p Panel, bounds Bounds) string {
 	return k.panel(p, bounds, k.theme.Borders.Panel)
 }
 
+// WindowStyle is the frame of a floating window: the panel border, in the
+// focus border color while the window is focused, with every cell, border
+// glyphs included, on the theme's surface, so nothing beneath shows through.
+// Plain keeps the border glyphs alone.
+func (k Kit) WindowStyle(focused bool) lipgloss.Style {
+	style := k.TextStyle().Border(k.theme.Borders.Panel)
+	if k.mode == Plain {
+		return style
+	}
+	border := k.theme.Palette.Border
+	if focused {
+		border = k.theme.Focus.Border
+	}
+	return style.BorderForeground(k.resolve(border)).BorderBackground(k.resolve(k.theme.Palette.Surface))
+}
+
 func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {
 	if bounds.Width <= 0 || bounds.Height <= 0 {
 		return ""

@@ -761,20 +761,20 @@ func TestBracketedPasteReachesEveryInsertPath(t *testing.T) {
 	m.closePalette()
 
 	// App-view field: single-line folds newlines, multiline keeps them.
-	m.openView(screenStatus())
-	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
+	m.openWindow(screenStatus())
+	m.Update(viewMsg{id: screenID, epoch: m.focusedView().epoch, data: screenData()})
 	m.Update(tea.PasteMsg{Content: "pasted\nvalue"})
-	if got := m.presentation.values["text"]; got != "pasted value" {
+	if got := m.focusedView().values["text"]; got != "pasted value" {
 		t.Fatalf("view field paste = %q", got)
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 
 	data := screenData()
 	data.Fields = []sdk.Field{{ID: "bio", Label: "Bio", Multiline: true}}
-	m.openView(screenStatus())
-	m.Update(viewMsg{epoch: m.presentation.epoch, data: data})
+	m.openWindow(screenStatus())
+	m.Update(viewMsg{id: screenID, epoch: m.focusedView().epoch, data: data})
 	m.Update(tea.PasteMsg{Content: "line one\nline two"})
-	if got := m.presentation.values["bio"]; got != "line one\nline two" {
+	if got := m.focusedView().values["bio"]; got != "line one\nline two" {
 		t.Fatalf("multiline paste = %q", got)
 	}
 }
@@ -918,14 +918,14 @@ func TestKeyReleaseIsInert(t *testing.T) {
 
 	// The same holds inside an app view.
 	m.input, m.cursor = nil, 0
-	m.presentation = &appView{
+	m.showWindow(&appView{
 		data: screenData(), instance: "launch", version: 1,
 		values: map[string]string{},
-	}
+	})
 	if _, cmd := m.Update(tea.KeyReleaseMsg{Code: tea.KeyEnter}); cmd != nil {
 		t.Fatal("view release produced a command")
 	}
-	if m.presentation.busy || len(m.presentation.values) != 0 {
+	if m.focusedView().busy || len(m.focusedView().values) != 0 {
 		t.Fatal("release mutated view state")
 	}
 }

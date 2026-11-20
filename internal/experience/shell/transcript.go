@@ -69,10 +69,8 @@ func (m *Model) clearTranscript() {
 	m.transcriptPos = bloom.ViewportEnd
 }
 
-// resetScroll returns shell output to its tail and an app view's rows to
-// their focus.
+// resetScroll returns shell output to its tail.
 func (m *Model) resetScroll() {
-	m.scroll = 0
 	m.transcriptPos = bloom.ViewportEnd
 }
 
@@ -135,6 +133,8 @@ func (l transcriptLook) style(e entry) string {
 // new kit's styles, from their kept text and kind, without moving.
 func (m *Model) setKit(k ui.Kit) {
 	m.kit = k
+	// The new kit's borders and padding may move the body.
+	m.bodyKnown = bodyMemo{}
 	m.syncMotion()
 	look := transcriptLookOf(k)
 	same := look.id == m.transcriptLook.id

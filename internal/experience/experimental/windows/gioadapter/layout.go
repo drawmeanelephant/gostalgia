@@ -17,9 +17,9 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 )
 
 // gioColors is the theme palette resolved to paint colors. The kit's lipgloss

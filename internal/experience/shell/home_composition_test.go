@@ -97,7 +97,7 @@ func TestHomeCompositionMouseUsesSolvedCoordinates(t *testing.T) {
 		t.Fatalf("Echo at %v is left of the composition %v", p, comp)
 	}
 	clickAt(t, m, p)
-	if m.presentation == nil || m.presentation.data.Title == "" {
+	if !m.onWindows() || m.focusedView().data.Title == "" {
 		t.Fatalf("clicking Echo at %v opened no app view", p)
 	}
 }

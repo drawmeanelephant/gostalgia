@@ -10,9 +10,9 @@ import (
 
 // Hover is the pointer's target, never the keyboard's. It carries a stable
 // semantic identity, so a cue follows the item it was joined to rather than a
-// row index: app IDs, screen names, palette item keys, document paths, PIDs
-// and grid cell IDs. Selection and focus stay in their own fields and are
-// never moved by a hover.
+// row index: app IDs, screen names, palette item keys, document paths, PIDs,
+// grid cell IDs, and window IDs. Selection and focus stay in their own fields
+// and are never moved by a hover.
 type hoverKind uint8
 
 const (
@@ -23,6 +23,8 @@ const (
 	hoverHomeRow
 	hoverTaskRow
 	hoverGridCell
+	hoverWindowTitle
+	hoverWindowClose
 )
 
 type hoverTarget struct {
@@ -126,6 +128,8 @@ func hoverScreenKey(s screen) string {
 		return "tasks"
 	case screenNotifications:
 		return "notifications"
+	case screenWindows:
+		return "windows"
 	}
 	return ""
 }
@@ -141,13 +145,13 @@ func hoverHomeKey(kind homeItemType, key string) string {
 	return ""
 }
 
-// pruneGridHover retires a grid cue whose cell the current presentation no
-// longer offers. A cell that remains keeps the pointer's cue across refreshes.
+// pruneGridHover retires a grid cue whose cell the focused window no longer
+// offers. A cell that remains keeps the pointer's cue across refreshes.
 func (m *Model) pruneGridHover() {
 	if m.hover.kind != hoverGridCell {
 		return
 	}
-	v := m.presentation
+	v := m.focusedView()
 	g := (*sdk.Grid)(nil)
 	if v != nil {
 		g = v.grid()

@@ -206,7 +206,7 @@ The contract permits only event-triggered transitions of **400 ms or less** (rai
 200 ms by #245), with frame commands scheduled only while an effect is active. The bounded
 celebration burst and opt-in screensaver in
 [Motion contract extensions](#motion-contract-extensions-issue-245) are the only exceptions.
-Three event-owned effects implement the contract:
+Four event-owned effects implement the contract:
 
 - A **160 ms `fx.Shake` of the status badge when an application launch fails**, whether
   the failure comes from a typed `launch`/`run` command, the launcher, or a palette
@@ -221,6 +221,13 @@ Three event-owned effects implement the contract:
   identity. Only the incoming toast animates; older toasts already in the stack render
   settled. The shell observes the shared manager's active toasts on its next message, so a
   service-written notification starts its entrance then, not from a background loop.
+- A **140 ms `fx.Iris` opening reveal for a newly opened window** on the Windows screen.
+  Only the newest opening reveals, so a second opening takes the reveal from a window that
+  is still revealing. Focusing, raising, moving, and closing a window are instant, and
+  closing a window during its reveal ends the reveal's frames. The window takes keys and
+  clicks from its first frame, because hit testing follows the layout rather than the
+  reveal's mask. A body below the 32×12 window floor draws no window frame, so nothing
+  reveals there.
 
 A shell model also performs **one 180 ms `fx.Unfold` CRT-style startup reveal**, drawn
 around the whole frame. It starts only after the terminal has delivered usable geometry
@@ -314,17 +321,18 @@ Symbols and words communicate states without relying on color alone. These
 components render state, not behavior: the caller must enforce disabled actions.
 There are no decorative goroutines, spinners, or permanently running animation
 loops. The only finite transition clocks are the event-owned failed-launch shake,
-palette/dialog opening reveal, new-toast entrance, and the once-per-model startup
-reveal described above.
+palette/dialog opening reveal, new-toast entrance, window opening reveal, and the
+once-per-model startup reveal described above.
 
 The current prompt/home and app shelf share panel/title, tabs, status badge,
 focus, and help vocabulary. Shelf app cards expose running PID vs. ready status;
 an empty shelf has a friendly notice. Busy requests use a static working badge
-and disabled editing hints. F4 app presentations from the data/action contract
-(#26) use the same theme, focus tokens, loading/error states, clipping, and
-contextual help. Disabled actions are not highlighted. The shell remains the
-only terminal owner; apps provide SDK data, not Charm views. Existing app
-snapshot/lifecycle polling is functional refresh, not decorative animation.
+and disabled editing hints. App presentations from the data/action contract
+(#26), each in its own window (#246), use the same theme, focus tokens,
+loading/error states, clipping, and contextual help. Disabled actions are not
+highlighted. The shell remains the only terminal owner; apps provide SDK data,
+not Charm views. Existing app snapshot/lifecycle polling is functional refresh,
+not decorative animation.
 Dialogs and progress are reusable building blocks, not new shell commands.
 
 Version 2 of the contract (#115) adds three bounded elements rendered from the
@@ -421,8 +429,8 @@ replaces minimal static shelves with searchable friendly-name application cards:
   matches, an honest `Notice` component is displayed with query clearing advice.
 - **Actions**: `Enter` launches the selected app, `F3` asks to confirm a
   graceful stop of the selected running app (see
-  [Confirmations](#confirmations)), and `F4` switches focus directly to the
-  app's presentation view. On an app that is not running, `F3` is disabled in
+  [Confirmations](#confirmations)), and `F4` opens the app's window on the
+  Windows screen. On an app that is not running, `F3` is disabled in
   the help bar and reports that the app is not running.
 
 ### Command palette overlay
@@ -502,8 +510,10 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 - `FocusLauncher`: Launcher search bar and card list own selection; typing
   filters the app cards, `↑`/`↓` selects, `Enter` runs, `Esc` clears the search
   or returns to the prompt.
-- `FocusApp`: Active app presentation view owns keyboard interaction; `Esc`
-  retracts presentation and restores prompt focus.
+- `FocusWindow`: The focused app window on the Windows screen owns keyboard
+  interaction; `Esc` goes back to the screen the windows replaced and keeps
+  every window open, `Ctrl-W` closes the focused window, and `F8` focuses the
+  next one.
 - `FocusPalette`: The command palette layer owns every keystroke except
   `Ctrl-C` and `Ctrl-D`; `Esc` closes only the palette and restores the view and focus
   beneath it.
@@ -623,7 +633,7 @@ The shell deeply integrates with Gostalgia's configuration engine (`internal/con
 and Settings application (`com.gostalgia.settings`):
 - **Access**: Press `F7`, run `settings`, `preferences`, or `pref`, or choose Settings
   from the Command Palette (`Ctrl-P`).
-- **Dynamic Keybinding Dispatch**: Shell key shortcuts (F1-F7, palette) are evaluated
+- **Dynamic Keybinding Dispatch**: Shell key shortcuts (F1-F8, palette) are evaluated
   dynamically against the effective `shortcuts.*` configuration.
 - **Progressive keyboard enhancements**: The shell requests Kitty-protocol event
   types per session (Bubble Tea already negotiates key disambiguation). Capable
@@ -764,9 +774,10 @@ closures. Rendering needs no cgo, external binary, host shell, or service.
 
 ## Experimental window adapters (Issues #215, #216)
 
-The nonproduction draft under `internal/experience/experimental/windows` keeps
-window identity, titles, logical bounds, focus, z-order, and lifecycle separate
-from its bloom and Gio adapters. Two existing SDK fixtures demonstrate
+The window service in `internal/experience/windows` keeps window identity,
+titles, logical bounds, focus, z-order, and lifecycle separate from any toolkit.
+Its nonproduction bloom and Gio adapters live under
+`internal/experience/experimental/windows`, where two existing SDK fixtures demonstrate
 dragging, border and keyboard close, focus scopes, independent drafts, and
 semantic action requests. Typed open/focus/move/close events use the existing
 event bus; rendering emits no lifecycle events. No production shell or runtime
@@ -791,7 +802,7 @@ Run them with:
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
 go build -tags giodemo -o /tmp/giowindowdemo ./internal/experience/experimental/windows/cmd/giowindowdemo
-go test -count=1 ./internal/experience/experimental/windows/...
+go test -count=1 ./internal/experience/windows/ ./internal/experience/experimental/windows/...
 ```
 
 At 80×24, drag either title or use Alt-arrows to move it, click to focus/raise,
@@ -808,8 +819,8 @@ only, and opening a window requires a display. The complete side-by-side
 adapter-leak inventory is in
 [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred).
 
-The proposed production design that builds on this spike, including which
-surfaces become windows and how input is routed, is in
+The shell's own windows build on this spike. Which surfaces become windows, how
+input is routed, and how windows are placed are in
 [Multi-window shell design](windows.md) (Issue #246).
 
 ## Verification and snapshots
@@ -866,6 +877,15 @@ normal-mouse mode 1000 in both directions. The scenario accounts for those two
 concrete transformations without skipping Windows; emulator mode assertions
 still require normal-mouse state to be reset, and every supported raw reset is
 still checked.
+
+`TestSteepWindowsScenarios` boots the same real runtime at 80×24 and opens the
+Settings and Notes windows. It focuses and raises them with F8 and clicks, moves
+Notes with Alt-arrows and a title drag, and closes windows with `[X]` and Ctrl-W
+while their apps keep running. It checks that no window key or click gets past
+the palette or a confirmation, shows the single-window form at 30×10 and the
+floating windows again after the terminal grows, and runs with ReducedMotion
+without an animation frame. Its snapshots live in
+`internal/experience/shell/testdata/TestSteepWindowsScenarios/`.
 
 Static steep snapshots live in
 `internal/experience/shell/testdata/TestSteepRuntimeScenarios/`. Motion snapshots

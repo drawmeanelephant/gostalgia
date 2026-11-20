@@ -15,6 +15,7 @@ import (
 	windowfixtures "gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/internal/ipc"
 	"gostalgia/sdk"
 )
@@ -32,9 +33,12 @@ func screenData() sdk.View { return windowfixtures.ScreenData() }
 // cell-declared action, a disabled cell, and a datum cell.
 func padData() sdk.View { return windowfixtures.PadData() }
 
+// screenID is the window of the screenStatus app.
+const screenID windows.ID = "com.test.screen"
+
 func screenStatus() appStatus {
 	var a appStatus
-	a.Manifest.ID, a.Manifest.Name, a.Running, a.PID = "com.test.screen", "Screen", true, 42
+	a.Manifest.ID, a.Manifest.Name, a.Running, a.PID = string(screenID), "Screen", true, 42
 	return a
 }
 
@@ -59,7 +63,8 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 	a := screenStatus()
 	m.apps = []appStatus{a}
 	_, open := m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
-	if m.presentation == nil || !strings.Contains(m.View().Content, "Loading") {
+	settleFiniteMotion(m)
+	if !m.onWindows() || !strings.Contains(m.View().Content, "Loading") {
 		t.Fatal("opening has no loading state")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "ignored while loading"})
@@ -69,7 +74,7 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	_, action := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if action == nil || !m.presentation.busy || len(m.input) != 0 {
+	if action == nil || !m.focusedView().busy || len(m.input) != 0 {
 		t.Fatal("app did not own focus while shell retained terminal ownership")
 	}
 	m.Update(action())
@@ -77,12 +82,15 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 		received.Instance != "launch" || received.Version != 1 || received.RequestID == "" {
 		t.Fatalf("semantic action routing: %+v", received)
 	}
-	if m.presentation.busy || !strings.Contains(m.View().Content, "Sent héllo") {
+	if m.focusedView().busy || !strings.Contains(m.View().Content, "Sent héllo") {
 		t.Fatal("action snapshot not rendered")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	if m.presentation != nil {
+	if m.onWindows() || m.Focus() != FocusHome {
 		t.Fatal("Esc did not return focus to the shell")
+	}
+	if v := m.focusedView(); v == nil || v.values["text"] != "héllo" {
+		t.Fatal("Esc closed the window or dropped its draft")
 	}
 }
 
@@ -95,37 +103,40 @@ func TestPresentationCancellationAndLateReplies(t *testing.T) {
 		}
 		return writeJSON(out, screenData())
 	}), nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, data: screenData()})
+	m.openWindow(screenStatus())
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: screenData()})
 	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "x"})
 	_, action := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if action == nil {
 		t.Fatal("action not dispatched")
 	}
-	oldSeq, request := m.presentation.seq, m.presentation.request
+	oldSeq, request := m.focusedView().seq, m.focusedView().request
 	_, cancel := m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
 	if cancel == nil {
 		t.Fatal("no cancellation route")
 	}
 	m.Update(cancel())
-	if canceled.RequestID != request || canceled.Instance != "launch" || m.presentation.busy {
+	if canceled.RequestID != request || canceled.Instance != "launch" || m.focusedView().busy {
 		t.Fatal("Esc did not cancel the owning operation")
 	}
 	late := screenData()
 	late.Status = "late reply must not render"
-	m.Update(viewMsg{epoch: epoch, seq: oldSeq, data: late, action: true})
+	m.Update(viewMsg{id: screenID, epoch: epoch, seq: oldSeq, data: late, action: true})
 	if strings.Contains(m.View().Content, late.Status) {
 		t.Fatal("canceled operation replaced current view")
 	}
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
-	m.openView(screenStatus())
-	m.Update(viewMsg{epoch: epoch, data: late})
-	if m.presentation.data.Status == late.Status {
-		t.Fatal("dismissed view's reply reopened it")
+	m.Update(tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl})
+	if m.focusedView() != nil {
+		t.Fatal("Ctrl-W did not close the window")
+	}
+	m.openWindow(screenStatus())
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: late})
+	if m.focusedView().data.Status == late.Status {
+		t.Fatal("a closed window's reply reached the window opened again")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyF2})
-	if m.presentation != nil || !m.shelf {
+	if m.onWindows() || !m.shelf {
 		t.Fatal("global shelf hotkey lost ownership")
 	}
 }
@@ -135,10 +146,10 @@ func TestPresentationLifecycleRetraction(t *testing.T) {
 		t.Run(cause, func(t *testing.T) {
 			m := New(context.Background(), noopCaller{}, nil)
 			a := screenStatus()
-			m.openView(a)
-			epoch := m.presentation.epoch
-			m.Update(viewMsg{epoch: epoch, data: screenData()})
-			msg := viewCheckMsg{epoch: epoch, apps: []appStatus{a}}
+			m.openWindow(a)
+			epoch := m.focusedView().epoch
+			m.Update(viewMsg{id: screenID, epoch: epoch, data: screenData()})
+			msg := viewCheckMsg{id: screenID, epoch: epoch, apps: []appStatus{a}}
 			switch cause {
 			case "exit":
 				msg.apps[0].Running = false
@@ -152,11 +163,11 @@ func TestPresentationLifecycleRetraction(t *testing.T) {
 				msg.data = &data
 			}
 			m.Update(msg)
-			if m.presentation != nil || !strings.Contains(m.View().Content, "view") {
+			if m.onWindows() || !strings.Contains(m.View().Content, "view") {
 				t.Fatal("lost app still owns focus or view")
 			}
-			m.Update(viewMsg{epoch: epoch, data: screenData()})
-			if m.presentation != nil {
+			m.Update(viewMsg{id: screenID, epoch: epoch, data: screenData()})
+			if m.onWindows() {
 				t.Fatal("late lifecycle reply restored retracted view")
 			}
 			m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "prompt works"})
@@ -169,9 +180,10 @@ func TestPresentationLifecycleRetraction(t *testing.T) {
 
 func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, err: errors.New("view unavailable")})
+	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, err: errors.New("view unavailable")})
 	if !strings.Contains(m.View().Content, "view unavailable") {
 		t.Fatal("load error banner missing")
 	}
@@ -180,7 +192,7 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 	data.Error = "failure\r\x1b[31m"
 	data.State = sdk.ViewError
 	data.Items[0].Detail = strings.Repeat("界", 5000)
-	m.Update(viewMsg{epoch: epoch, data: data})
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: data})
 	for _, size := range [][2]int{{80, 24}, {30, 10}, {20, 8}, {120, 40}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		view := m.View().Content
@@ -192,21 +204,21 @@ func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 		}
 	}
 	m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
-	if m.presentation.data.Title != data.Title {
+	if m.focusedView().data.Title != data.Title {
 		t.Fatal("global quit was routed to an app")
 	}
 }
 
 func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	m.openView(screenStatus())
-	m.applyView(screenData(), false)
-	v := m.presentation
+	m.openWindow(screenStatus())
+	m.focusedView().apply(screenData(), false)
+	v := m.focusedView()
 	v.values["text"], v.focus, v.item = "draft", 1, 1
 	data := screenData()
 	data.Fields = append([]sdk.Field{{ID: "new", Label: "New"}}, data.Fields...)
 	data.Items[0], data.Items[1] = data.Items[1], data.Items[0]
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	if v.values["text"] != "draft" || v.focus != 2 || v.item != 0 || v.data.Items[v.item].ID != "two" {
 		t.Fatal("refresh moved semantic focus/selection or discarded a draft")
 	}
@@ -214,7 +226,7 @@ func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing
 	for i := 0; i < 100; i++ {
 		data.Items = append(data.Items, sdk.Item{ID: fmt.Sprintf("item-%d", i), Label: fmt.Sprintf("ROW-%03d", i)})
 	}
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	m.height = 16
 	if !strings.Contains(m.View().Content, "[Send]") {
 		t.Fatal("focused action hidden below a long list")
@@ -223,8 +235,8 @@ func TestPresentationRefreshPreservesSemanticFocusAndVisibleSelection(t *testing
 	if !strings.Contains(m.View().Content, "ROW-099") {
 		t.Fatal("selected item hidden below a long list")
 	}
-	m.Update(viewCheckMsg{epoch: v.epoch, apps: []appStatus{screenStatus()}, viewErr: errors.New("temporary snapshot failure")})
-	if m.presentation == nil || !strings.Contains(m.View().Content, "temporary snapshot failure") {
+	m.Update(viewCheckMsg{id: screenID, epoch: v.epoch, apps: []appStatus{screenStatus()}, viewErr: errors.New("temporary snapshot failure")})
+	if !m.onWindows() || !strings.Contains(m.View().Content, "temporary snapshot failure") {
 		t.Fatal("recoverable snapshot failure did not keep an error banner")
 	}
 }
@@ -237,7 +249,7 @@ func TestPresentationItemWithoutDetailRendersNoColon(t *testing.T) {
 		{ID: "one", Label: "THE BRASS ELEPHANT"},
 		{ID: "two", Label: "Two", Detail: "second"},
 	}
-	m.presentation = &appView{data: data, instance: data.Instance, values: map[string]string{}}
+	m.showWindow(&appView{data: data, instance: data.Instance, values: map[string]string{}})
 	view := ansi.Strip(m.View().Content)
 	if strings.Contains(view, "THE BRASS ELEPHANT:") {
 		t.Fatalf("item without detail rendered a dangling colon:\n%s", view)
@@ -253,10 +265,10 @@ func TestPresentationUsesExplicitThemeAndFocusTokens(t *testing.T) {
 	custom := NewWithTheme(context.Background(), noopCaller{}, nil, tokens, ui.Plain)
 	data := screenData()
 	data.Actions[0].Disabled = true
-	custom.presentation = &appView{
+	custom.showWindow(&appView{
 		data: data, instance: data.Instance, focus: 1,
 		values: map[string]string{"text": "e\u0301👩‍💻界"},
-	}
+	})
 	view := custom.View().Content
 	if strings.Contains(view, "\x1b") || !strings.Contains(view, "* One") ||
 		!strings.Contains(view, "[Send] (disabled)") || strings.Contains(view, "* [Send]") ||
@@ -266,9 +278,9 @@ func TestPresentationUsesExplicitThemeAndFocusTokens(t *testing.T) {
 	var rendered []string
 	for _, tokens := range []theme.Theme{theme.Nostalgia(), theme.Midnight()} {
 		m := NewWithTheme(context.Background(), noopCaller{}, nil, tokens, ui.TrueColor)
-		m.presentation = &appView{
+		m.showWindow(&appView{
 			data: data, instance: data.Instance, values: map[string]string{"text": "e\u0301👩‍💻界"},
-		}
+		})
 		rendered = append(rendered, m.View().Content)
 		for _, size := range []tea.WindowSizeMsg{
 			{Width: 30, Height: 10}, {Width: 80, Height: 24}, {Width: 120, Height: 40}, {Width: 240, Height: 80},
@@ -294,10 +306,10 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 		}
 		return writeJSON(out, v)
 	}), nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, data: padData()})
-	v := m.presentation
+	m.openWindow(screenStatus())
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: padData()})
+	v := m.focusedView()
 	if v.version != 2 {
 		t.Fatalf("negotiated version = %d, want 2", v.version)
 	}
@@ -354,7 +366,7 @@ func TestPresentationGridNavigationAndCellActions(t *testing.T) {
 	v.cell = 3
 	data := padData()
 	data.Grid.Cells[0], data.Grid.Cells[3] = data.Grid.Cells[3], data.Grid.Cells[0]
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	if !v.gridFocused() || v.data.Grid.Cells[v.cell].ID != "se" {
 		t.Fatalf("refresh lost grid focus/selection: focus=%d cell=%d", v.focus, v.cell)
 	}
@@ -384,10 +396,10 @@ func TestPresentationVersionNegotiationFallback(t *testing.T) {
 		}
 		return writeJSON(out, screenData())
 	}), nil)
-	batch := m.openView(screenStatus())().(tea.BatchMsg)
+	batch := m.openWindow(screenStatus())().(tea.BatchMsg)
 	m.Update(batch[0]())
-	if v := m.presentation; v == nil || v.version != 1 {
-		t.Fatalf("negotiated version = %+v", m.presentation)
+	if v := m.focusedView(); v == nil || v.version != 1 {
+		t.Fatalf("negotiated version = %+v", m.focusedView())
 	}
 	if len(requested) != 3 || requested[0] != 3 || requested[1] != 2 || requested[2] != 1 {
 		t.Fatalf("negotiation requests = %v, want [3 2 1]", requested)
@@ -396,10 +408,10 @@ func TestPresentationVersionNegotiationFallback(t *testing.T) {
 	m2 := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
 		return writeJSON(out, padData())
 	}), nil)
-	batch = m2.openView(screenStatus())().(tea.BatchMsg)
+	batch = m2.openWindow(screenStatus())().(tea.BatchMsg)
 	m2.Update(batch[0]())
-	if v := m2.presentation; v == nil || v.version != 2 || v.data.Grid == nil {
-		t.Fatalf("version-2 negotiation: %+v", m2.presentation)
+	if v := m2.focusedView(); v == nil || v.version != 2 || v.data.Grid == nil {
+		t.Fatalf("version-2 negotiation: %+v", m2.focusedView())
 	}
 }
 
@@ -423,15 +435,15 @@ func TestPresentationRenegotiatesAfterFailedOpen(t *testing.T) {
 		}
 		return writeJSON(out, screenData())
 	}), nil)
-	batch := m.openView(screenStatus())().(tea.BatchMsg)
+	batch := m.openWindow(screenStatus())().(tea.BatchMsg)
 	m.Update(batch[0]())
-	v := m.presentation
+	v := m.focusedView()
 	if v == nil || v.instance != "" || v.data.State != sdk.ViewError {
 		t.Fatalf("open failure did not leave an unnegotiated error view: %+v", v)
 	}
 	// The poll renegotiates instead of hammering a version-1 app at version 2
 	// forever; the stamped version is adopted on recovery.
-	m.Update(m.checkView()())
+	m.Update(m.checkView(m.focusedView())())
 	if v.instance != "launch" || v.version != 1 || v.data.State != sdk.ViewReady {
 		t.Fatalf("renegotiation did not recover: %+v", v)
 	}
@@ -449,12 +461,12 @@ func TestPresentationRejectsNewerStampedVersion(t *testing.T) {
 		}
 		return writeJSON(out, padData()) // always stamps version 2
 	}), nil)
-	m.openView(screenStatus())
-	v := m.presentation
+	m.openWindow(screenStatus())
+	v := m.focusedView()
 	// A v1-negotiated session must refuse a v2-stamped reply: a raw-IPC app
 	// cannot serve elements the shell never asked for.
 	v.instance, v.version = "launch", 1
-	m.Update(m.checkView()())
+	m.Update(m.checkView(m.focusedView())())
 	if v.banner == "" || v.data.Grid != nil {
 		t.Fatalf("newer-stamped snapshot adopted: banner=%q grid=%v", v.banner, v.data.Grid)
 	}
@@ -486,8 +498,8 @@ func TestFetchViewStepsDownAndRejectsNewerStamp(t *testing.T) {
 
 func TestPresentationV2ElementsStayInBounds(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
+	m.openWindow(screenStatus())
+	epoch := m.focusedView().epoch
 	data := padData()
 	// Wide-but-valid art: 32 full-width lines sit inside the line/byte budget,
 	// and the contract itself must accept them before the renderer clips.
@@ -504,7 +516,7 @@ func TestPresentationV2ElementsStayInBounds(t *testing.T) {
 			t.Fatalf("contract accepted a block of %d bytes", len(text))
 		}
 	}
-	m.Update(viewMsg{epoch: epoch, data: data})
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: data})
 	for _, size := range [][2]int{{80, 24}, {30, 10}, {120, 40}} {
 		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		view := m.View().Content
@@ -542,10 +554,11 @@ func TestPresentationV3MultilineFieldEditing(t *testing.T) {
 		}
 		return writeJSON(out, v)
 	}), nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, data: areaData()})
-	v := m.presentation
+	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: areaData()})
+	v := m.focusedView()
 	if v.version != 3 {
 		t.Fatalf("negotiated version = %d, want 3", v.version)
 	}
@@ -589,10 +602,11 @@ func TestPresentationV3MultilineEnhancedChords(t *testing.T) {
 		}
 		return writeJSON(out, v)
 	}), nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, data: areaData()})
-	v := m.presentation
+	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: areaData()})
+	v := m.focusedView()
 
 	m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "first"})
 	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}); cmd != nil {
@@ -635,9 +649,9 @@ func TestPresentationHeldActivationCommitsOnce(t *testing.T) {
 	if !m.keyEnh.SupportsEventTypes() {
 		t.Fatal("negotiated event types not recorded")
 	}
-	m.openView(screenStatus())
-	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
-	v := m.presentation
+	m.openWindow(screenStatus())
+	m.Update(viewMsg{id: screenID, epoch: m.focusedView().epoch, data: screenData()})
+	v := m.focusedView()
 	// Focus starts on the single-line field; Enter submits it.
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
@@ -674,8 +688,8 @@ func TestPresentationLegacyHeldKeyRepeatsAsBefore(t *testing.T) {
 	if m.keyEnh.SupportsEventTypes() {
 		t.Fatal("unnegotiated model claimed event types")
 	}
-	m.openView(screenStatus())
-	m.Update(viewMsg{epoch: m.presentation.epoch, data: screenData()})
+	m.openWindow(screenStatus())
+	m.Update(viewMsg{id: screenID, epoch: m.focusedView().epoch, data: screenData()})
 	for i := range 2 {
 		_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 		if cmd == nil {
@@ -690,11 +704,11 @@ func TestPresentationLegacyHeldKeyRepeatsAsBefore(t *testing.T) {
 
 func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	m.presentation = &appView{
+	m.showWindow(&appView{
 		data: areaData(), instance: "launch", version: 3,
 		values: map[string]string{}, regionPinned: true,
-	}
-	v := m.presentation
+	})
+	v := m.focusedView()
 	m.height = 16
 	// The region is the last focus stop: field, action, then region.
 	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
@@ -739,18 +753,18 @@ func TestPresentationV3RegionScrollAndPinning(t *testing.T) {
 	v.regionTop = 3
 	data := areaData()
 	data.Region.Text += "\nL40\nL41"
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	if v.regionTop != 3 || v.regionPinned {
 		t.Fatalf("unpinned refresh moved the region: top=%d pinned=%v", v.regionTop, v.regionPinned)
 	}
 	v.regionPinned = true
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	m.View()
 	if !v.regionPinned || !strings.Contains(ansi.Strip(m.View().Content), "L41") {
 		t.Fatal("pinned refresh did not follow the appended tail")
 	}
 	data.Region = &sdk.Region{ID: "other", Label: "Transcript", Text: data.Region.Text}
-	m.applyView(data, false)
+	m.focusedView().apply(data, false)
 	if v.regionTop != 0 || !v.regionPinned {
 		t.Fatalf("region id change did not reset scroll: top=%d pinned=%v", v.regionTop, v.regionPinned)
 	}
@@ -767,10 +781,10 @@ func TestPresentationV3InvalidationRefreshesView(t *testing.T) {
 		}
 		return writeJSON(out, screenData())
 	}), nil)
-	m.openView(screenStatus())
-	epoch := m.presentation.epoch
-	m.Update(viewMsg{epoch: epoch, data: areaData(), version: 3})
-	v := m.presentation
+	m.openWindow(screenStatus())
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, data: areaData(), version: 3})
+	v := m.focusedView()
 	// A subscription the socket client would have opened.
 	m.viewSub = &ipc.ClientSubscription{Events: make(chan ipc.Notification, 4)}
 	push := func(source string) tea.Msg {
@@ -806,7 +820,7 @@ func TestPresentationV3InvalidationRefreshesView(t *testing.T) {
 	}
 	// A stale refresh reply still releases the in-flight flag.
 	v.refreshing = true
-	m.Update(viewMsg{epoch: epoch, seq: v.seq + 9, refresh: true, data: areaData()})
+	m.Update(viewMsg{id: screenID, epoch: epoch, seq: v.seq + 9, refresh: true, data: areaData()})
 	if v.refreshing {
 		t.Fatal("dropped refresh wedged the in-flight flag")
 	}
@@ -819,8 +833,8 @@ func TestPresentationV3InvalidationRefreshesView(t *testing.T) {
 
 func TestPresentationV3SubscriptionLifecycle(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
-	// The in-process caller lacks Subscribe: openView degrades to polling.
-	m.openView(screenStatus())
+	// The in-process caller lacks Subscribe: openWindow degrades to polling.
+	m.openWindow(screenStatus())
 	if m.viewSub != nil {
 		t.Fatal("subscription opened without a subscriber client")
 	}

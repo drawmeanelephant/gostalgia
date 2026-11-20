@@ -98,8 +98,8 @@ func geometryScreens() []geometryScreen {
 		}},
 		{"launcher", func(m *Model) { m.setMode(modeLauncher); m.selected = 2 }},
 		{"app", func(m *Model) {
-			m.presentation = &appView{data: padData(), instance: "launch", version: 2,
-				values: map[string]string{"text": "draft"}, focus: 2, cell: 1}
+			m.showWindow(&appView{data: padData(), instance: "launch", version: 2,
+				values: map[string]string{"text": "draft"}, focus: 2, cell: 1})
 		}},
 		{"tasks-table", func(m *Model) { m.taskView = true; m.tasks.SelectNext() }},
 		{"tasks-logs", func(m *Model) {

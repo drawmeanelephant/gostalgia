@@ -8,6 +8,7 @@ import (
 	"bloomfx.dev/bloom/fx"
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 )
 
 type paletteItem struct {
@@ -30,7 +31,7 @@ func (m *Model) paletteItems() []paletteItem {
 				Title:  "Switch to " + name,
 				Detail: fmt.Sprintf("%s%sPID %d (LIVE)", id, m.kit.Separator(), app.PID),
 				Action: func(m *Model) tea.Cmd {
-					return m.openView(app)
+					return m.openWindow(app)
 				},
 			})
 			items = append(items, paletteItem{
@@ -61,6 +62,26 @@ func (m *Model) paletteItems() []paletteItem {
 		}
 	}
 
+	// Windows. Close window and Move window are the keyboard's way to
+	// Ctrl-W and Alt-arrows for terminals that send them elsewhere.
+	if v := m.focusedView(); v != nil {
+		id := windows.ID(v.id)
+		items = append(items, paletteItem{
+			Tag:    "WINDOW",
+			Title:  "Close window",
+			Detail: "Close the " + viewText(v.data.Title) + " window (Ctrl-W)",
+			Action: func(m *Model) tea.Cmd { return m.closeWindow(id) },
+		})
+		if m.floatingWindows() {
+			items = append(items, paletteItem{
+				Tag:    "WINDOW",
+				Title:  "Move window",
+				Detail: "Move the " + viewText(v.data.Title) + " window with the arrow keys (Alt-arrows)",
+				Action: func(m *Model) tea.Cmd { return m.startMovingWindow() },
+			})
+		}
+	}
+
 	// Commands
 	items = append(items,
 		paletteItem{
@@ -73,7 +94,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Tag:    "CMD",
 			Title:  "home",
 			Detail: "Switch to Home screen dashboard (F1)",
-			Action: func(m *Model) tea.Cmd { m.setMode(modeHome); return nil },
+			Action: func(m *Model) tea.Cmd { return m.switchScreen(screenHome, false) },
 		},
 		paletteItem{
 			Tag:    "CMD",
@@ -85,7 +106,7 @@ func (m *Model) paletteItems() []paletteItem {
 			Tag:    "CMD",
 			Title:  "prompt",
 			Detail: "Switch to command prompt (Esc)",
-			Action: func(m *Model) tea.Cmd { m.setMode(modePrompt); return nil },
+			Action: func(m *Model) tea.Cmd { return m.switchScreen(screenPrompt, false) },
 		},
 		paletteItem{
 			Tag:    "CMD",
@@ -131,7 +152,6 @@ func (m *Model) paletteItems() []paletteItem {
 				m.clearTranscript()
 				m.input = nil
 				m.cursor = 0
-				m.scroll = 0
 				return nil
 			},
 		},

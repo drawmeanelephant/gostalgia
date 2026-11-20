@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"image/color"
 	"strings"
 
@@ -163,14 +164,17 @@ func (m *Model) View() tea.View {
 }
 
 // toProfile converts composed frame content to the kit's color profile.
-// Kit output is already in that profile, but backdrop blending mixes colors
-// in 24-bit. Only the content is converted: cursor, screen-mode and keyboard
-// requests travel in the View's own fields and never pass through here.
+// Kit output is already in that profile, but backdrop and window shadow
+// blending mix colors in 24-bit. Only the content is converted: cursor,
+// screen-mode and keyboard requests travel in the View's own fields and
+// never pass through here.
 func (m *Model) toProfile(content string) string {
-	if m.backdrop() == nil || !m.modalOpen() {
+	if m.kit.Mode() != ui.ANSI256 {
 		return content
 	}
-	if m.kit.Mode() != ui.ANSI256 {
+	backdrop := m.backdrop() != nil && m.modalOpen()
+	shadow := m.windowShadow() != nil && m.onWindows() && m.floatingWindows()
+	if !backdrop && !shadow {
 		return content
 	}
 	var buf bytes.Buffer
@@ -252,19 +256,52 @@ func (m *Model) frame(home homeView) bloom.Child {
 			return bloom.Overlay(base, m.toastLayer(ctx.Width, ctx.Height))
 		})
 	}
+	return m.frameNode(m.tabsNode(), m.badgeNode(), body, m.promptNode(), m.kit.HelpBarLeaf(m.bindings(home)))
+}
+
+// frameNode places the frame's rows: a kit Panel around tabs, badge, body
+// and prompt, with the help bar below it.
+func (m *Model) frameNode(tabs, badge, body, prompt, help bloom.Child) bloom.Child {
 	rows := []bloom.Child{
-		bloom.Fixed(1, m.tabsNode()).ID(slotTabs),
-		bloom.Fixed(1, m.badgeNode()).ID(slotBadge),
+		bloom.Fixed(1, tabs).ID(slotTabs),
+		bloom.Fixed(1, badge).ID(slotBadge),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
 		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
-		bloom.Fixed(1, m.promptNode()).ID(slotPrompt),
+		bloom.Fixed(1, prompt).ID(slotPrompt),
 	}
 	panel := m.kit.PanelNode(ui.Panel{Title: frameTitle}, bloom.Column(rows...))
 	return bloom.Column(
 		bloom.Fill(panel).ID(slotPanel),
-		bloom.Fixed(1, m.kit.HelpBarLeaf(m.bindings(home))).ID(slotHelp),
+		bloom.Fixed(1, help).ID(slotHelp),
 	)
+}
+
+// bodySize is the size of the frame's body at the current terminal size and
+// theme, or zero below the smallest frame. It lays out the frame's rows
+// without their content, so layout itself may ask for it. A frame asks
+// several times, so the answer is kept until the size or the kit changes.
+func (m *Model) bodySize() image.Point {
+	if m.width < minFrameWidth || m.height < minFrameHeight {
+		return image.Point{}
+	}
+	if c := m.bodyKnown; c.known && c.width == m.width && c.height == m.height {
+		return c.size
+	}
+	var size image.Point
+	if r, ok := bloom.Solve(m.width, m.height, m.frameNode(nil, nil, nil, nil, nil)).Rect(slotBody); ok {
+		size = r.Size()
+	}
+	m.bodyKnown = bodyMemo{width: m.width, height: m.height, size: size, known: true}
+	return size
+}
+
+// bodyMemo is the body size solved for a terminal size under the current
+// kit.
+type bodyMemo struct {
+	width, height int
+	size          image.Point
+	known         bool
 }
 
 // runningAppCount is how many registered apps run. It reads the accepted
@@ -314,9 +351,11 @@ func (m *Model) tabs() ([]ui.Tab, int) {
 		{Label: "Tasks"},
 		{Label: notifLabel},
 	}
-	if m.presentation != nil {
-		tabItems = append(tabItems, ui.Tab{Label: viewText(m.presentation.data.Title)})
-		active = len(tabItems) - 1
+	if n := m.windows.Len(); n > 0 {
+		tabItems = append(tabItems, ui.Tab{Label: fmt.Sprintf("Windows (%d)", n)})
+		if m.onWindows() {
+			active = len(tabItems) - 1
+		}
 	}
 	return tabItems, active
 }
@@ -410,14 +449,8 @@ func (m *Model) body(home homeView) bloom.Child {
 	case m.notifView && m.notifs != nil:
 		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string { return m.notifs.RenderPanel(m.kit, b) }),
 			m.notificationHits, m.notificationScroll)
-	case m.presentation != nil:
-		return m.withMouse(m.kit.Leaf(func(b ui.Bounds) string {
-			lines := m.viewLines(b.Height)
-			for i, line := range lines {
-				lines[i] = m.kit.Truncate(line, b.Width)
-			}
-			return strings.Join(lines, "\n")
-		}), m.viewHits, nil)
+	case m.onWindows():
+		return m.windowsNode()
 	}
 	switch m.currentMode() {
 	case modeLauncher:
@@ -459,8 +492,10 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 	switch {
 	case m.paletteOpen:
 		prompt = m.kit.Heading("PALETTE> ") + m.kit.Muted(m.kit.Hint("Type to filter · ↑↓ navigate · Enter execute · Esc close"))
-	case m.presentation != nil:
-		prompt += m.kit.Muted("App view owns focus. Esc returns to prompt.")
+	case m.movingWindow():
+		prompt += m.kit.Muted(m.kit.Hint("Moving window. ←→↑↓ move it, Enter or Esc ends."))
+	case m.onWindows():
+		prompt += m.kit.Muted("Window owns focus. Esc goes back, Ctrl-W closes.")
 	case m.taskView:
 		prompt += m.kit.Muted("Task Manager owns focus. Esc returns to prompt.")
 	case m.notifView:
@@ -578,16 +613,27 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 			{Key: "n", Help: "DND"}, {Key: "↑↓", Help: "SELECT"},
 			{Key: "Ctrl-C", Help: exitHelp},
 		}
-	case m.presentation != nil:
-		v := m.presentation
+	case m.movingWindow():
+		return []ui.Binding{
+			{Key: "←→↑↓", Help: "MOVE"}, {Key: "Enter", Help: "DONE"},
+			{Key: "Esc", Help: "DONE"}, {Key: "Ctrl-C", Help: exitHelp},
+		}
+	case m.onWindows():
+		v := m.focusedView()
 		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
 		action := max(0, v.focus-len(v.data.Fields))
 		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
+		// The window keys lead the presentation's own; Ctrl-C, which
+		// every screen shares, gives way first.
 		bindings := []ui.Binding{
-			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-C", Help: exitHelp},
+			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-W", Help: "CLOSE"},
 			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
-			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F2", Help: "APPS"},
+			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
 		}
+		if m.floatingWindows() {
+			bindings = append(bindings, ui.Binding{Key: "Alt-←→↑↓", Help: "MOVE"})
+		}
+		bindings = append(bindings, ui.Binding{Key: "F2", Help: "APPS"}, ui.Binding{Key: "Ctrl-C", Help: exitHelp})
 		if v.focalBlock() != nil {
 			// A hinted block's inspection route leads so a 30-cell help bar
 			// keeps it whole rather than dropping it behind longer hints.

@@ -8,10 +8,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/events"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/sdk"
 )
 
@@ -30,16 +30,18 @@ func newFixtureModel(t *testing.T, mode ui.ColorMode) (*Model, *windows.Service,
 	t.Cleanup(cancel)
 	service := windows.NewService(bus, "test/bloom-adapter")
 	if err := service.Open(windows.Window{
-		ID: screenID, Title: "Screen / form", Bounds: windows.Bounds{X: 1, Y: 1, Width: 38, Height: 20}, Presentation: fixtures.ScreenData(),
+		ID: screenID, Title: "Screen / form", Bounds: windows.Bounds{X: 1, Y: 1, Width: 38, Height: 20},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Open(windows.Window{
-		ID: padID, Title: "Pad / blocks and grid", Bounds: windows.Bounds{X: 41, Y: 1, Width: 38, Height: 20}, Presentation: fixtures.PadData(),
+		ID: padID, Title: "Pad / blocks and grid", Bounds: windows.Bounds{X: 41, Y: 1, Width: 38, Height: 20},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	model := New(service, ui.New(theme.Nostalgia(), mode))
+	model := New(service, ui.New(theme.Nostalgia(), mode), map[windows.ID]sdk.View{
+		screenID: fixtures.ScreenData(), padID: fixtures.PadData(),
+	})
 	model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	model.View()
 	return model, service, bus, envelopes
@@ -371,11 +373,11 @@ func TestPlainSanitizationAndExplicitProfile(t *testing.T) {
 	view := fixtures.ScreenData()
 	view.Items[0].Label = "unsafe\x1b]52;c;Zg==\aLABEL"
 	if err := service.Open(windows.Window{
-		ID: "unsafe", Title: "title\x1b[2J\x1b]0;bad\a", Bounds: windows.Bounds{X: 0, Y: 0, Width: 50, Height: 16}, Presentation: view,
+		ID: "unsafe", Title: "title\x1b[2J\x1b]0;bad\a", Bounds: windows.Bounds{X: 0, Y: 0, Width: 50, Height: 16},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	model := New(service, ui.New(theme.Monochrome(), ui.Plain))
+	model := New(service, ui.New(theme.Monochrome(), ui.Plain), map[windows.ID]sdk.View{"unsafe": view})
 	if cmd := model.Init(); cmd != nil {
 		t.Fatal("experimental Init scheduled host probing or other work")
 	}

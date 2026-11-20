@@ -447,13 +447,15 @@ provides. The toolkit decision remains open: a window service API should keep
 the toolkit behind `desktop/` adapters.
 
 Issues #215 and #216 add **nonproduction experimental spikes**, not a desktop
-toolkit decision or production multiwindow feature. Their shared neutral draft
-is `internal/experience/experimental/windows`; the implementations are the
-adapter-local `bloomadapter` and `gioadapter` packages, each with a standalone
-entry point beneath that experimental subtree (`cmd/windowdemo`, and
+toolkit decision. Their shared neutral service started as a draft in
+`internal/experience/experimental/windows` and now lives in
+`internal/experience/windows`, where the shell uses it for its own windows
+(#246, [Multi-window shell design](windows.md)). The adapter implementations are
+the adapter-local `bloomadapter` and `gioadapter` packages, each with a
+standalone entry point beneath the experimental subtree (`cmd/windowdemo`, and
 `cmd/giowindowdemo` behind the `giodemo` build tag so default builds, vet, and
 tests never reach `gioui.org/app`). The normal shell, runtime, and startup
-paths do not import or register either. The SDK, app-facing presentation
+paths do not import or register either adapter. The SDK, app-facing presentation
 contract, core packages, and event bus implementation are unchanged.
 
 #### Draft and observed bloom behavior
