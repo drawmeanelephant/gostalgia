@@ -155,6 +155,7 @@ terminal owner:
 
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
+go build -tags giodemo ./internal/experience/experimental/windows/cmd/giowindowdemo
 ```
 
 It opens the existing Screen and Pad presentation fixtures in two bloom layers.
@@ -165,12 +166,14 @@ SDK action, Ctrl-W or its border `[X]` to close it, and Ctrl-C to exit. Each
 window retains its own draft. Typed open/focus/move/close events go through the
 existing event bus; drawing publishes no events.
 
-This is an experimental fixture host, not production multiwindow support. Its
-actions remain local, it implements only the presentation elements used by the
-fixtures, and its 30×10 clamped view clips content. See
-[architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-adapter-decision-deferred)
-for observed toolkit leaks and the approved, explicitly unverified Gio baseline.
-No Gio dependency or implementation is included.
+The second command is an equivalent Gio-adapter demo, gated behind the
+`giodemo` build tag because `gioui.org/app` uses cgo on macOS and needs display
+headers on Linux; it is compile-verified only. This is an experimental fixture
+host, not production multiwindow support. Its actions remain local, it
+implements only the presentation elements used by the fixtures, and its 30×10
+clamped view clips content. See
+[architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred)
+for the observed side-by-side toolkit leak inventory.
 
 ## Verification and boundaries
 
