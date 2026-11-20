@@ -14,10 +14,11 @@ import (
 	"gioui.org/app"
 	"gioui.org/op"
 	"gostalgia/internal/events"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/experimental/windows/fixtures"
 	"gostalgia/internal/experience/experimental/windows/gioadapter"
 	"gostalgia/internal/experience/theme"
+	"gostalgia/internal/experience/windows"
+	"gostalgia/sdk"
 )
 
 func main() {
@@ -38,17 +39,17 @@ func loop(w *app.Window) error {
 	service := windows.NewService(bus, "experimental/gio-window-demo")
 	if err := service.Open(windows.Window{
 		ID: "screen", Title: "Screen / form", Bounds: windows.Bounds{X: 8, Y: 8, Width: 280, Height: 240},
-		Presentation: fixtures.ScreenData(),
 	}); err != nil {
 		return err
 	}
 	if err := service.Open(windows.Window{
 		ID: "pad", Title: "Pad / blocks and grid", Bounds: windows.Bounds{X: 320, Y: 8, Width: 280, Height: 240},
-		Presentation: fixtures.PadData(),
 	}); err != nil {
 		return err
 	}
-	model := gioadapter.New(service, theme.Nostalgia())
+	model := gioadapter.New(service, theme.Nostalgia(), map[windows.ID]sdk.View{
+		"screen": fixtures.ScreenData(), "pad": fixtures.PadData(),
+	})
 	var ops op.Ops
 	for {
 		switch e := w.Event().(type) {

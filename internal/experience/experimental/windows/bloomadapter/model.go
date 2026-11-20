@@ -9,8 +9,8 @@ import (
 
 	"bloomfx.dev/bloom"
 	tea "charm.land/bubbletea/v2"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/sdk"
 )
 
@@ -49,9 +49,10 @@ type Model struct {
 	OnAction func(windows.ID, sdk.ActionRequest)
 }
 
-// New builds an adapter over an existing neutral service. It never calls or
-// returns Root.Init; the kit supplies explicit colors.
-func New(service *windows.Service, kit ui.Kit) *Model {
+// New builds an adapter over an existing neutral service and the SDK snapshot
+// each open window shows; the service itself carries no presentation. It never
+// calls or returns Root.Init; the kit supplies explicit colors.
+func New(service *windows.Service, kit ui.Kit, views map[windows.ID]sdk.View) *Model {
 	m := &Model{
 		service:       service,
 		kit:           kit,
@@ -63,7 +64,7 @@ func New(service *windows.Service, kit ui.Kit) *Model {
 	fg, bg := kit.Colors()
 	m.root = bloom.New(bloom.WithColors(fg, bg), bloom.WithCopyFlash(false), bloom.WithFocus(&m.focus))
 	for _, w := range service.Windows() {
-		m.presentations[w.ID] = newPresentationState(w.Presentation)
+		m.presentations[w.ID] = newPresentationState(views[w.ID])
 	}
 	if id, ok := service.Focused(); ok {
 		m.scope = id
@@ -244,11 +245,10 @@ func (m *Model) dispatch(id windows.ID, action, cellID string) {
 	if !ok || action == "" {
 		return
 	}
-	w, ok := m.service.Get(id)
-	if !ok {
+	if _, ok := m.service.Get(id); !ok {
 		return
 	}
-	for _, a := range w.Presentation.Actions {
+	for _, a := range p.view.Actions {
 		if a.ID == action && a.Disabled {
 			return
 		}
@@ -258,7 +258,7 @@ func (m *Model) dispatch(id windows.ID, action, cellID string) {
 			cellID = cell.ID
 		}
 	}
-	request := p.request(w.Presentation, action, cellID)
+	request := p.request(p.view, action, cellID)
 	m.status = fmt.Sprintf("%s: %s", id, action)
 	if m.OnAction != nil {
 		m.OnAction(id, request)

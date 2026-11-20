@@ -12,9 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 )
 
 const (
@@ -203,12 +203,7 @@ func (m *Model) drag(id windows.ID, e on.Event) {
 func (m *Model) presentationBody(id windows.ID) bloom.Child {
 	p := m.presentations[id]
 	if p == nil {
-		w, ok := m.service.Get(id)
-		if !ok {
-			return bloom.Text("")
-		}
-		p = newPresentationState(w.Presentation)
-		m.presentations[id] = p
+		return bloom.Text("")
 	}
 	children := make([]bloom.Child, 0, 20)
 	for i, item := range p.view.Items {

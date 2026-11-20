@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"gostalgia/internal/experience/experimental/windows"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/sdk"
 )
 

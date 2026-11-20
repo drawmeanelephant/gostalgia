@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"gostalgia/internal/events"
-	"gostalgia/internal/experience/experimental/windows/fixtures"
 )
 
 func TestServicePublishesTypedLifecycleInTransitionOrder(t *testing.T) {
@@ -17,8 +16,8 @@ func TestServicePublishesTypedLifecycleInTransitionOrder(t *testing.T) {
 	})
 	defer cancel()
 	service := NewService(bus, "test/windows")
-	screen := Window{ID: "screen", Title: "Screen", Bounds: Bounds{X: 1, Y: 2, Width: 30, Height: 12}, Presentation: fixtures.ScreenData()}
-	pad := Window{ID: "pad", Title: "Pad", Bounds: Bounds{X: 32, Y: 2, Width: 30, Height: 12}, Presentation: fixtures.PadData()}
+	screen := Window{ID: "screen", Title: "Screen", Bounds: Bounds{X: 1, Y: 2, Width: 30, Height: 12}}
+	pad := Window{ID: "pad", Title: "Pad", Bounds: Bounds{X: 32, Y: 2, Width: 30, Height: 12}}
 	if err := service.Open(screen); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +57,7 @@ func TestServicePublishesTypedLifecycleInTransitionOrder(t *testing.T) {
 	if got := envelopes[5].Payload.(Moved); got.ID != "screen" || got.To != to {
 		t.Fatalf("move transition = %+v", got)
 	}
-	if got := envelopes[6].Payload.(Closed); got.ID != "screen" || got.Presentation.Title != "Screen" {
+	if got := envelopes[6].Payload.(Closed); got.ID != "screen" {
 		t.Fatalf("close transition = %+v", got)
 	}
 	if got := envelopes[7].Payload.(FocusChanged); got.Previous != "screen" || got.Current != "pad" {
@@ -83,7 +82,8 @@ func TestServiceRejectsInvalidTransitionsWithoutEvents(t *testing.T) {
 	if err := service.Open(Window{}); err == nil {
 		t.Fatal("empty window opened")
 	}
-	if service.Focus("missing") || service.Move("missing", Bounds{Width: 1, Height: 1}) || service.Close("missing") {
+	if service.Focus("missing") || service.Move("missing", Bounds{Width: 1, Height: 1}) ||
+		service.Retitle("missing", "Title") || service.Close("missing") {
 		t.Fatal("missing-window transition succeeded")
 	}
 	if count != 0 {
@@ -91,8 +91,37 @@ func TestServiceRejectsInvalidTransitionsWithoutEvents(t *testing.T) {
 	}
 }
 
+func TestRetitleChangesMetadataWithoutEvents(t *testing.T) {
+	bus := events.NewBus()
+	service := NewService(bus, "test/windows")
+	if err := service.Open(Window{ID: "notes", Title: "Notes", Bounds: Bounds{Width: 32, Height: 12}}); err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	cancel := bus.Subscribe("*", func(events.Envelope) { count++ })
+	defer cancel()
+	if !service.Retitle("notes", "Notes - draft") {
+		t.Fatal("retitle failed")
+	}
+	if service.Retitle("notes", "Notes - draft") {
+		t.Fatal("retitle to the same title reported a change")
+	}
+	if w, _ := service.Get("notes"); w.Title != "Notes - draft" {
+		t.Fatalf("title = %q", w.Title)
+	}
+	if count != 0 {
+		t.Fatalf("retitle published %d events", count)
+	}
+	if service.Len() != 1 {
+		t.Fatalf("Len = %d", service.Len())
+	}
+}
+
+// TestNeutralAPIAndProductionDependencyBoundaries keeps the service free of
+// toolkits and keeps every experiment out of production builds. The shell may
+// import this package; nothing in production may import experimental/.
 func TestNeutralAPIAndProductionDependencyBoundaries(t *testing.T) {
-	neutral := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "gostalgia/internal/experience/experimental/windows")
+	neutral := exec.Command("go", "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "gostalgia/internal/experience/windows")
 	out, err := neutral.CombinedOutput()
 	if err != nil {
 		t.Fatalf("list neutral dependencies: %v\n%s", err, out)
@@ -108,7 +137,7 @@ func TestNeutralAPIAndProductionDependencyBoundaries(t *testing.T) {
 		t.Fatalf("list production dependencies: %v\n%s", err, out)
 	}
 	for _, pkg := range strings.Fields(string(out)) {
-		if strings.Contains(pkg, "/experimental/windows") {
+		if strings.Contains(pkg, "/experimental/") {
 			t.Errorf("production package depends on experiment: %s", pkg)
 		}
 	}

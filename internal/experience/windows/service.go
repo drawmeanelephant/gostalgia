@@ -1,6 +1,9 @@
-// Package windows contains the toolkit-neutral draft for the experimental
-// window service. It deliberately has no production registration. Bounds are
-// abstract adapter units, not bloom rectangles or terminal cells.
+// Package windows is the toolkit-neutral window service. It owns window
+// identity, titles, bounds, focus, and bottom-to-top z-order, and it reports
+// lifecycle transitions on the existing event bus. It imports no toolkit:
+// bounds are abstract units each adapter defines, which the shell reads as
+// terminal cells inside its body. Apps never see this package; the shell keeps
+// each window's presentation state beside the service.
 package windows
 
 import (
@@ -8,7 +11,6 @@ import (
 	"fmt"
 
 	"gostalgia/internal/events"
-	"gostalgia/sdk"
 )
 
 // ID is stable for the lifetime of one open window.
@@ -22,13 +24,11 @@ type Bounds struct {
 	Height int
 }
 
-// Window couples neutral window metadata to an unchanged SDK presentation
-// snapshot. Applications still supply data, never toolkit views.
+// Window is one open window's neutral metadata.
 type Window struct {
-	ID           ID
-	Title        string
-	Bounds       Bounds
-	Presentation sdk.View
+	ID     ID
+	Title  string
+	Bounds Bounds
 }
 
 // Service owns identity, focus, bottom-to-top z-order, and lifecycle. It is
@@ -41,14 +41,14 @@ type Service struct {
 	focused ID
 }
 
-// NewService uses the supplied existing event bus. A nil bus is useful only
-// for isolated experiments; production wiring is intentionally absent.
+// NewService uses the supplied existing event bus. A nil bus gives the
+// service a private one, for callers that observe no window events.
 func NewService(bus *events.Bus, source string) *Service {
 	if bus == nil {
 		bus = events.NewBus()
 	}
 	if source == "" {
-		source = "experimental/windows"
+		source = "experience/windows"
 	}
 	return &Service{bus: bus, source: source, windows: make(map[ID]Window)}
 }
@@ -63,9 +63,6 @@ func (s *Service) Open(w Window) error {
 	}
 	if w.Bounds.Width <= 0 || w.Bounds.Height <= 0 {
 		return fmt.Errorf("window: %q has nonpositive bounds", w.ID)
-	}
-	if err := w.Presentation.Validate(); err != nil {
-		return fmt.Errorf("window: %q presentation: %w", w.ID, err)
 	}
 	s.windows[w.ID] = w
 	s.order = append(s.order, w.ID)
@@ -112,11 +109,22 @@ func (s *Service) Move(id ID, to Bounds) bool {
 	return true
 }
 
+// Retitle changes one window's title. A title is metadata, not a lifecycle
+// transition, so it publishes no event.
+func (s *Service) Retitle(id ID, title string) bool {
+	w, ok := s.windows[id]
+	if !ok || w.Title == title {
+		return false
+	}
+	w.Title = title
+	s.windows[id] = w
+	return true
+}
+
 // Close removes id. Closing the focused window closes it first, then focuses
 // the remaining topmost window, making the event order deterministic.
 func (s *Service) Close(id ID) bool {
-	w, ok := s.windows[id]
-	if !ok {
+	if _, ok := s.windows[id]; !ok {
 		return false
 	}
 	delete(s.windows, id)
@@ -126,7 +134,7 @@ func (s *Service) Close(id ID) bool {
 			break
 		}
 	}
-	s.bus.Publish(s.source, Closed{ID: id, Presentation: w.Presentation})
+	s.bus.Publish(s.source, Closed{ID: id})
 	if s.focused == id {
 		if len(s.order) > 0 {
 			s.Focus(s.order[len(s.order)-1])
@@ -149,6 +157,9 @@ func (s *Service) Focused() (ID, bool) {
 	_, ok := s.windows[s.focused]
 	return s.focused, ok
 }
+
+// Len reports how many windows are open.
+func (s *Service) Len() int { return len(s.order) }
 
 // Order returns open window IDs from bottom to top.
 func (s *Service) Order() []ID {

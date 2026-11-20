@@ -18,9 +18,9 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/text"
-	"gostalgia/internal/experience/experimental/windows"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
 	"gostalgia/sdk"
 )
 
@@ -54,34 +54,34 @@ type windowState struct {
 	tabOrder []event.Tag
 }
 
-func newWindowState(w windows.Window) *windowState {
+func newWindowState(id windows.ID, view sdk.View) *windowState {
 	s := &windowState{
-		bg:      windowTag{window: w.ID},
+		bg:      windowTag{window: id},
 		fields:  make(map[string]*control),
 		actions: make(map[string]*control),
 		cells:   make(map[string]*control),
 	}
-	s.close = &control{id: controlID{window: w.ID, kind: "close"}}
+	s.close = &control{id: controlID{window: id, kind: "close"}}
 	s.tabOrder = append(s.tabOrder, s.close)
-	for _, f := range w.Presentation.Fields {
-		c := &control{id: controlID{window: w.ID, kind: "field", id: f.ID}}
+	for _, f := range view.Fields {
+		c := &control{id: controlID{window: id, kind: "field", id: f.ID}}
 		s.fields[f.ID] = c
 		s.tabOrder = append(s.tabOrder, c)
 	}
-	for _, a := range w.Presentation.Actions {
+	for _, a := range view.Actions {
 		if a.Disabled {
 			continue
 		}
-		c := &control{id: controlID{window: w.ID, kind: "action", id: a.ID}}
+		c := &control{id: controlID{window: id, kind: "action", id: a.ID}}
 		s.actions[a.ID] = c
 		s.tabOrder = append(s.tabOrder, c)
 	}
-	if g := w.Presentation.Grid; g != nil {
+	if g := view.Grid; g != nil {
 		for _, cell := range g.Cells {
 			if cell.Disabled {
 				continue
 			}
-			c := &control{id: controlID{window: w.ID, kind: "cell", id: cell.ID}}
+			c := &control{id: controlID{window: id, kind: "cell", id: cell.ID}}
 			s.cells[cell.ID] = c
 			s.tabOrder = append(s.tabOrder, c)
 		}
@@ -149,9 +149,10 @@ type Model struct {
 	OnAction func(windows.ID, sdk.ActionRequest)
 }
 
-// New builds an adapter over an existing neutral service. The shaper uses only
-// the embedded Go fonts so frames are identical on every host.
-func New(service *windows.Service, th theme.Theme) *Model {
+// New builds an adapter over an existing neutral service and the SDK snapshot
+// each open window shows; the service itself carries no presentation. The
+// shaper uses only the embedded Go fonts so frames are identical on every host.
+func New(service *windows.Service, th theme.Theme, views map[windows.ID]sdk.View) *Model {
 	m := &Model{
 		service:       service,
 		th:            th,
@@ -165,8 +166,8 @@ func New(service *windows.Service, th theme.Theme) *Model {
 		status:        "Two SDK fixtures; no production window wiring.",
 	}
 	for _, w := range service.Windows() {
-		m.presentations[w.ID] = newPresentationState(w.Presentation)
-		m.states[w.ID] = newWindowState(w)
+		m.presentations[w.ID] = newPresentationState(views[w.ID])
+		m.states[w.ID] = newWindowState(w.ID, views[w.ID])
 	}
 	if id, ok := service.Focused(); ok {
 		m.scope = id
@@ -473,11 +474,10 @@ func (m *Model) dispatch(id windows.ID, action, cellID string) {
 	if !ok || action == "" {
 		return
 	}
-	w, ok := m.service.Get(id)
-	if !ok {
+	if _, ok := m.service.Get(id); !ok {
 		return
 	}
-	for _, a := range w.Presentation.Actions {
+	for _, a := range p.view.Actions {
 		if a.ID == action && a.Disabled {
 			return
 		}
@@ -487,7 +487,7 @@ func (m *Model) dispatch(id windows.ID, action, cellID string) {
 			cellID = cell.ID
 		}
 	}
-	request := p.request(w.Presentation, action, cellID)
+	request := p.request(p.view, action, cellID)
 	m.status = fmt.Sprintf("%s: %s", id, action)
 	if m.OnAction != nil {
 		m.OnAction(id, request)
