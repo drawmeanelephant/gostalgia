@@ -382,6 +382,16 @@ change, a review of upstream changes, inspection of every snapshot diff, and a
 fresh three-OS run. Snapshots are updated only when a developer explicitly sets
 `UPDATE_SNAPSHOTS=true`; CI always performs read-only comparisons.
 
+**Gio (Issue #216).** `gioui.org` (Unlicense OR MIT) is approved as a direct
+dependency **for the experimental window-spike comparison only**, pinned to
+exactly `v0.10.3`. It may be imported — production or test — only by packages
+under `internal/experience/experimental/windows/`. The approval is deliberately
+narrower than bloom's: Gio's native host `gioui.org/app` uses cgo on macOS and
+needs display development headers on Linux, so the `giodemo`-tagged entry
+point is excluded from default builds and CI, and adopting Gio beyond the
+spike is a separate decision
+([§4.6](#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred)).
+
 `go list -deps gostalgia/internal/runtime gostalgia/sdk` contains only Gostalgia
 and standard-library packages. Automated tests in `test/e2e/dependencies_test.go`
 enforce that boundary, verify that Charm and bloom (every `bloomfx.dev/`
@@ -419,21 +429,32 @@ The slice maps `/` onto `<root>/vfs` with lexical confinement. That is
 enough to prove the abstraction boundary; real drivers/virtual backends
 slide in behind the same `vfs.FS` interface later.
 
-### 4.6 Desktop toolkit — experimental bloom adapter; decision deferred
+### 4.6 Desktop toolkit — experimental bloom and Gio adapters; decision deferred
 
 The desktop is Milestone M4. The documented candidate baseline is **Gio**
-(pure Go, no cgo, cross-platform), with Fyne (cgo/OpenGL, more batteries) and
-Ebiten (game-oriented) as alternatives. The toolkit decision remains open: a
-window service API should keep the toolkit behind `desktop/` adapters.
+(immediate-mode, cross-platform), with Fyne (cgo/OpenGL, more batteries) and
+Ebiten (game-oriented) as alternatives. Issue #216 corrected an error in the
+earlier baseline: Gio is not "pure Go, no cgo" across the board. Its core
+packages — the ones the headless adapter imports (`op`, `layout`, `widget`,
+`gesture`, `io/input`, `io/key`, `io/pointer`, `io/semantic`, `text`,
+`font/gofont`, `unit`, `clip`, `paint`) — have a pure-Go dependency closure on
+darwin, linux, and windows, verified with
+`go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}'` and by
+`CGO_ENABLED=0` builds and tests. Its native window host `gioui.org/app` and
+GPU packages are different: they use cgo on macOS (Cocoa/Metal bridges) and
+need X11, Wayland, or EGL development headers on Linux, none of which CI
+provides. The toolkit decision remains open: a window service API should keep
+the toolkit behind `desktop/` adapters.
 
-Issue #215 adds a **nonproduction experimental spike**, not a desktop toolkit
-decision or production multiwindow feature. Its neutral draft is
-`internal/experience/experimental/windows`; the only implementation is the
-adapter-local `bloomadapter`, and `cmd/windowdemo` beneath that experimental
-subtree is its standalone entry point. The normal shell, runtime, and startup
-paths do not import or register it. The SDK, app-facing presentation contract,
-core packages, and event bus implementation are unchanged, and no Gio code or
-dependency was added.
+Issues #215 and #216 add **nonproduction experimental spikes**, not a desktop
+toolkit decision or production multiwindow feature. Their shared neutral draft
+is `internal/experience/experimental/windows`; the implementations are the
+adapter-local `bloomadapter` and `gioadapter` packages, each with a standalone
+entry point beneath that experimental subtree (`cmd/windowdemo`, and
+`cmd/giowindowdemo` behind the `giodemo` build tag so default builds, vet, and
+tests never reach `gioui.org/app`). The normal shell, runtime, and startup
+paths do not import or register either. The SDK, app-facing presentation
+contract, core packages, and event bus implementation are unchanged.
 
 #### Draft and observed bloom behavior
 
@@ -521,25 +542,77 @@ Run the demonstration with
 `go run ./internal/experience/experimental/windows/cmd/windowdemo` and its tests
 with `go test -count=1 ./internal/experience/experimental/windows/...`.
 
-#### Gio comparison status and approved deferral
+#### Observed Gio behavior
 
-There was **no existing Gio spike, adapter, or earlier draft API** in the
-repository or issue history, and no Gio experiment ran in this mission. The only
-Gio-side comparison is therefore with the documented candidate baseline above:
-its pure-Go/no-cgo/cross-platform goals match this repository's constraints, and
-its eventual adapter would need to satisfy the same neutral window and SDK-data
-contracts. Whether Gio would impose different bounds, focus, drag, close, or
-repaint mechanics is **unverified**. Cross-toolkit neutrality is also
-**unverified**; one bloom implementation cannot establish it.
+Issue #216 adds the second adapter, `gioadapter`, pinned to exactly
+`gioui.org v0.10.3` (Unlicense OR MIT). The maintainer approved it **for this
+spike only**, the way #207 approved bloom; production use is a separate
+decision. The fence in `test/e2e/dependencies_test.go` confines every
+`gioui.org/` import — production and test — to
+`internal/experience/experimental/windows/`, and the tagged demo keeps
+`gioui.org/app` out of anything `go build ./...`, `go vet ./...`, or
+`go test ./...` compiles on any OS.
 
-Under the **USER-APPROVED proposal** recorded on
-[#206](https://github.com/drawmeanelephant/gostalgia/issues/206#issuecomment-6990850564),
-this observed-bloom/documented-Gio comparison substitutes for the unavailable
-side-by-side spike. It does not claim empirical Gio fulfillment.
-[#216](https://github.com/drawmeanelephant/gostalgia/issues/216) is the linked
-follow-up for approving a Gio dependency, implementing the same draft behind a
-real Gio adapter, rerunning these behaviors, and replacing every unverified Gio
-entry with observed results.
+The neutral API survived the second toolkit unchanged: `gioadapter` uses the
+same `Service`, `Window`, `Bounds`, and `sdk.View` types as `bloomadapter`, and
+the draft's only leak into the neutral package remains that `Bounds` is in
+adapter-defined logical units (cells for bloom, pixels for Gio).
+
+The deterministic, headless tests lay out frames against a private
+`gioui.org/io/input.Router` — no `app.Window`, no GPU, no display — with
+synthetic pointer and key events, and assert on the router's semantic tree
+(`router.AppendSemantics`), the adapter's equivalent of bloom's solved frame
+rects. They cover the same matrix: two titled fixture windows side by side,
+title dragging that moves only that window through `service.Move`, Alt-arrow
+keyboard moves through the same transition, click-to-raise z-order, F6 window
+cycling, Tab/Shift-Tab confined to the focused window's control scope,
+independent per-window field drafts, Enter emitting unchanged
+`sdk.ActionRequest` values for actions and grid cells, disabled controls that
+emit nothing, border and Ctrl-W closes that leave the survivor usable,
+documented lifecycle-event order, clamping on constraint resize, sanitized
+titles/labels, and rendering that publishes no events. Tests run with
+`CGO_ENABLED=0` and `-race`; the embedded `gofont` collection plus
+`text.NoSystemFonts` keeps shaping host-independent.
+
+The following toolkit leaks and limits were actually observed in the Gio
+adapter, side by side with bloom's:
+
+| Neutral surface | bloom adapter | Gio adapter |
+| --- | --- | --- |
+| `Bounds` units | terminal cells via `Layer` offset/size | Gio pixels via `clip.Rect` + `op.Offset`; exact-constraint canvas |
+| clamping | adapter clamps to canvas, reserves help row (alpha.6 clamps size, not offset) | adapter clamps to canvas, reserves a 32px status band |
+| z-order | `bloom.Overlay` declaration order | op-list paint order (later ops paint and hit-test on top) |
+| title drag | `on.Drag` `Start`/`Screen`/`Done` messages translated to `Move` | `gesture.Drag` on the title tag; deltas accumulate to `Move` |
+| focus scope | `bloom.Focus` retained slots; adapter pushes/pops scopes, remembers controls | `input.Router` + `key.FocusCmd`; adapter keeps a per-window tab list and remembered control |
+| window cycle / keyboard move / close keys | F6, Alt-arrows, Ctrl-W | F6, Alt-arrows, Ctrl-W — same adapter policy |
+| close repaint | removing a layer left stale cells in a PTY; `tea.ClearScreen` workaround | no repaint workaround needed; a pointer close lands mid-layout so the frame it fires in still paints the window, the next frame is clean |
+| text | terminal cells, `ui.Sanitize`, kit styles render directly | `text.Shaper` with embedded Go fonts; **kit/lipgloss output cannot enter a Gio frame — only theme color tokens transfer** |
+| input delivery | Bubble Tea messages against solved frames | router queue against op lists; Tab arrives wrapped in `input.SystemEvent` |
+| test oracle | solved frame rectangles; PTY snapshots possible | `router.AppendSemantics` tree + op-list geometry; no pixel or PTY oracle |
+| semantic metadata | none (terminal has no a11y tree) | `semantic` ops label windows/controls; unused by a terminal but the only machine-readable observable headlessly |
+| cgo footprint | none; terminal toolkit | none in adapter closure; `gioui.org/app` needs cgo on macOS and display headers on Linux |
+
+What the comparison does establish: the draft's `Service`/`Window`/`Bounds`/
+`sdk.View` contract is implementable over both a terminal-cell compositor and
+an immediate-mode op-list toolkit without API changes; the leak surface is
+adapter-local policy (clamping, focus scope, drag translation, styling) rather
+than neutral-type changes; and lifecycle-event ordering is toolkit-independent
+because `Service`, not either adapter, owns it.
+
+What it does not establish: anything about `gioui.org/app`'s real windowing —
+the tagged demo only proves compile, not that a native window opens, paints, or
+handles input correctly on this or any host; pixel-level visual parity with the
+bloom output (no PTY or screenshot oracle exists for Gio); behavior on Windows
+or Linux beyond pure-Go compilation of the core closure; SDK version-3 regions
+or multiline fields, which neither adapter implements; performance; and
+cross-toolkit neutrality as a general property — two adapters narrow the
+question to the table above but cannot close it. Production desktop adoption
+stays deferred behind the M4 decision.
+
+Run the Gio demonstration with
+`go build -tags giodemo ./internal/experience/experimental/windows/cmd/giowindowdemo`
+(with a display to open a window) and its tests with
+`go test -count=1 ./internal/experience/experimental/windows/...`.
 
 ## 5. Milestones
 
