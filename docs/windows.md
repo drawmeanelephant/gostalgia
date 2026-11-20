@@ -1,30 +1,33 @@
 # Multi-window shell design (Issue #246)
 
-**Status: proposed.** [#246](https://github.com/drawmeanelephant/gostalgia/issues/246)
-asks for a design note before any implementation. Merging this note approves the
-decisions below, and each implementation stage then lands as its own pull
-request. The [open questions](#open-questions) list the decisions that most
-change what users see.
+**Status: implemented.** [#246](https://github.com/drawmeanelephant/gostalgia/issues/246)
+asked for a design note before any implementation. The note merged in
+[#256](https://github.com/drawmeanelephant/gostalgia/pull/256), and the shell
+now implements it in the [four stages](#build-it-in-four-stages) below. The
+[answered questions](#answered-questions) record the choices on the decisions
+that most change what users see. Where the implementation settled a detail
+differently from the proposal, this note describes what shipped.
 
 ## Start from the spike and the single-view shell
 
-Two pieces exist today, and this design joins them.
+Two pieces existed before this work, and this design joins them.
 
-The experimental window service in `internal/experience/experimental/windows`
-keeps window identity, titles, bounds, focus, z-order, and lifecycle separate
-from any toolkit. `Service` changes state only through `Open`, `Focus`, `Move`,
-and `Close`, and it publishes `window.opened`, `window.focused`,
-`window.moved`, and `window.closed` on the existing `internal/events` bus.
+The experimental window service, then in
+`internal/experience/experimental/windows`, keeps window identity, titles,
+bounds, focus, z-order, and lifecycle separate from any toolkit. `Service`
+changes state only through `Open`, `Focus`, `Move`, and `Close`, and it
+publishes `window.opened`, `window.focused`, `window.moved`, and
+`window.closed` on the existing `internal/events` bus.
 The bloom adapter draws each window as an opaque layer with a static shadow
 and a title bar that places `[X]` first (#237). The Gio adapter implements the
 same service, which is how #216 showed that the API does not depend on bloom.
-No production package imports the spike, and
-`TestNeutralAPIAndProductionDependencyBoundaries` enforces that.
+No production package imported the spike, and
+`TestNeutralAPIAndProductionDependencyBoundaries` enforced that.
 
-The production shell shows one app presentation at a time. `Model.presentation`
-holds a single `appView`. `openView` replaces it, `dismissView` clears it, and
-`switchScreen` dismisses it before it changes screens. The body slot shows one
-screen, and the tab bar adds one tab with the app's title while a view is open.
+The production shell showed one app presentation at a time. `Model.presentation`
+held a single `appView`. `openView` replaced it, `dismissView` cleared it, and
+`switchScreen` dismissed it before it changed screens. The body slot showed one
+screen, and the tab bar added one tab with the app's title while a view was open.
 
 The spike has no resize, no minimum window size, and no connection to apps. Its
 windows hold two SDK fixtures, drawn by a renderer that implements only the
@@ -120,11 +123,12 @@ The spike cycles windows with F6, but F6 opens the Notification Center in the
 shell. F8 is the first free function key. Like F1 through F7, it becomes a named
 `shortcuts` action, `window_next`, so users can bind it to another key.
 
-Esc no longer closes a presentation. Today Esc calls `dismissView`, which is
-safe while only one view exists. With several windows open, a stray Esc would
-discard a window's drafts. Esc now leaves the Windows screen and closes nothing.
-Ctrl-W or the `[X]` control closes a window. Closing works like `dismissView`
-does now: it cancels the window's in-flight action, and the app keeps running.
+Esc no longer closes a presentation. Before this design, Esc called
+`dismissView`, which was safe while only one view existed. With several
+windows open, a stray Esc would discard a window's drafts. Esc now leaves the
+Windows screen and closes nothing. Ctrl-W or the `[X]` control closes a
+window. Closing works the way `dismissView` did: it cancels the window's
+in-flight action, and the app keeps running.
 
 Some terminals do not report Alt-arrows, or report them as other keys. So that
 every operation still works from the keyboard alone, the palette adds **Close
@@ -159,25 +163,27 @@ previous instance's drafts.
 Each window draws its contents with the shell's presentation renderer
 (`viewLayout`, `viewPanes`, and `inspectLayout`), sized to the window's content
 box. That keeps v3 regions, multiline fields, focal-point blocks, and every
-theme and Plain-mode rule, none of which the spike's renderer has. The spike's
-adapter renderer, `bloomadapter/presentation.go`, is deleted, not ported. Its
-chrome moves into the shell with the service: the opaque body, the static
-shadow, the close control placed before the title, and truncation of wide and
-hostile titles.
+theme and Plain-mode rule, none of which the spike's renderer has. The shell
+does not port the spike's adapter renderer, `bloomadapter/presentation.go`,
+which stays with the experimental bloom demo that still draws the two fixtures
+with it. The spike's chrome moves into the shell with the service: the opaque
+body, the static shadow, the close control placed before the title, and
+truncation of wide and hostile titles.
 
 Each open window refreshes the way the single view refreshes now: on events
 from the shared per-connection `app.view` subscription, routed by app ID, and
 on the 500 ms view tick. Each window has its own epoch and request sequence, so
 a late reply for one window cannot change another. A shell holds at most 8
 windows, which bounds the view fetches on each tick. Opening a ninth window
-reports an error in the status line and opens nothing.
+shows a "Too many windows" warning toast and opens nothing.
 
 ### Window geometry stays simple
 
-The first window opens at the top-left corner of the body. Each later window
-opens 2 columns right and 1 row down from the window opened before it. The
-default size is the body less a margin of 4 columns and 2 rows, and the shell
-then clamps the window inside the body. A window is never smaller than 32×12 cells.
+The first window fills the body, so one window has the room that the single
+presentation had, which an 80×24 focal-block split needs. Each later window is
+the body less a margin of 4 columns and 2 rows, and it opens 2 columns right of
+and 1 row below the window opened before it. The shell then clamps the window
+inside the body. A window is never smaller than 32×12 cells.
 That floor leaves a content area of at least 10 rows, which is the renderer's
 `primaryMinRows`, and room for the `[X]` control and a short title.
 
@@ -199,11 +205,16 @@ now (#228), with other apps still open behind the focused one.
 ### Motion stays finite
 
 Moving and raising a window are direct manipulation, so both are instant and use
-no easing. Closing a window removes it at once. Opening a window may use one
-event-triggered reveal of 400 ms or less, such as the 140 ms `fx.Iris` that the
-palette and dialogs use, and the window takes input from its first frame.
-Shadows are static. ReducedMotion attaches no reveal and settles a running one.
-An idle Windows screen schedules no frames. These are the rules in
+no easing. Closing a window removes it at once, and closing it during its reveal
+also ends the reveal's frames. Opening a window plays one 140 ms `fx.Iris`
+reveal, the one that the palette and dialogs use. Only the newest opening
+reveals: a second opening takes the reveal from a window that is still
+revealing, and focusing a window that is already open plays nothing. The window
+takes keys and clicks from its first frame, because hit testing follows the
+layout and not the reveal's mask. Below the 32×12 floor no window frame shows,
+so nothing reveals. Shadows are static. ReducedMotion attaches no reveal and
+settles a running one. An idle Windows screen schedules no frames. These are
+the rules in
 [Finite per-session motion](experience.md#finite-per-session-motion-issues-213-239-240).
 
 ### Windows belong to one shell session
@@ -239,7 +250,7 @@ Bubble Tea's `Update`, so one service per model needs no locking.
 
 ## Build it in four stages
 
-Each stage leaves `main` working and tested.
+Each stage is one commit that leaves the shell working and tested.
 
 1. **Move the service.** Move the package, drop the `Presentation` field, and
    update both adapters, the demos, and the dependency tests. Users see no
@@ -269,14 +280,14 @@ Each stage leaves `main` working and tested.
 - **Apps supply data, not views:** no SDK change, and the shell owns all window
   geometry.
 
-## Open questions
+## Answered questions
 
-These decisions change the most for users, so they need a maintainer's answer
-before stage 2:
+These decisions change the most for users, so they were answered before
+stage 2. Each answer accepted the proposal:
 
-1. Should windows live on their own Windows screen, as proposed, or float over
-   every screen?
-2. Should Esc leave the Windows screen and keep the window open, as proposed, or
-   close the focused window the way it closes the view today?
-3. Is F8 the right default key for cycling windows?
-4. Is 8 the right limit on open windows?
+1. Windows live on their own Windows screen, rather than floating over every
+   screen.
+2. Esc leaves the Windows screen and keeps every window open. Ctrl-W and `[X]`
+   close a window.
+3. F8 cycles windows by default, as the `window_next` shortcut.
+4. A shell keeps at most 8 windows open.

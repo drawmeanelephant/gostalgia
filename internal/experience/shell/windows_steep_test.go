@@ -74,14 +74,19 @@ func steepBody(t *testing.T, h *steep.Harness) image.Rectangle {
 }
 
 // waitSteepWindow waits until the window titled title shows its top-left
-// corner at x, y in the body, focused or not.
+// corner at x, y in the body, focused or not, with no pointer on its title.
 func waitSteepWindow(t *testing.T, h *steep.Harness, body image.Rectangle, title string, x, y int, focused bool) {
 	t.Helper()
 	marker := " "
 	if focused {
 		marker = theme.Nostalgia().Focus.Marker
 	}
-	want := "┏━" + marker + " " + title
+	waitSteepCorner(t, h, body, "┏━"+marker+" "+title, x, y)
+}
+
+// waitSteepCorner waits until want starts at x, y in the body.
+func waitSteepCorner(t *testing.T, h *steep.Harness, body image.Rectangle, want string, x, y int) {
+	t.Helper()
 	h.WaitFor(reel.ScreenFunc(func(screen string) bool {
 		lines := strings.Split(screen, "\n")
 		row := body.Min.Y + y
@@ -126,11 +131,13 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		waitSteepWindow(t, h, body, steepNotesTitle, 2, 1, true)
 
 		// Alt-Left moves Notes a column; a drag on its title moves it on.
+		// The pointer rests on the moved title, so its cue shows once the
+		// next message after the drag's last frame reaches the root.
 		h.Key("alt+left")
 		waitSteepWindow(t, h, body, steepNotesTitle, 1, 1, true)
 		title := h.Locate(reel.Contains(steepNotesTitle))
 		h.LeftDrag(title.X+2, title.Y, title.X+1, title.Y+1)
-		waitSteepWindow(t, h, body, steepNotesTitle, 0, 2, true)
+		waitSteepCorner(t, h, body, "┏━"+theme.Nostalgia().Focus.Marker+ui.HoverMarker+steepNotesTitle, 0, 2)
 		steepSnapshot(h, "moved")
 
 		// A click on Settings' title raises it, and its [X] closes it.

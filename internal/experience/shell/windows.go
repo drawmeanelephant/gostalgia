@@ -103,7 +103,7 @@ func (m *Model) openWindow(a appStatus) tea.Cmd {
 		defer cancel()
 		data, version, err := fetchView(ctx, client, string(id), sdk.PresentationVersion)
 		return viewMsg{id: id, epoch: epoch, version: version, data: data, err: err}
-	}, viewTick(id, epoch), m.ensureViewSub())
+	}, viewTick(id, epoch), m.ensureViewSub(), m.startWindowReveal(id))
 }
 
 // showWindows makes the Windows screen the body and remembers the screen it
@@ -146,6 +146,7 @@ func (m *Model) dropWindow(id windows.ID) tea.Cmd {
 	}
 	delete(m.views, id)
 	m.windows.Close(id)
+	m.stopWindowReveal(id)
 	m.windowMoving = false
 	m.clearHoverAll()
 	if v.cancel == nil {
@@ -528,6 +529,9 @@ func (m *Model) windowLayer(w windows.Window, body image.Point) bloom.LayerNode 
 		Offset(b.X, b.Y).
 		Size(b.Width, b.Height).
 		Shadow(2, 1, m.windowShadow()...)
+	if progress, ok := m.windowProgress(id); ok {
+		layer = layer.Transition(progress, fx.Iris{})
+	}
 	if !m.mouseOff {
 		layer = layer.On(on.Mouse(func(e on.Event) tea.Cmd {
 			if click, ok := e.Msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {

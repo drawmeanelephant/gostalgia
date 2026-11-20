@@ -63,6 +63,7 @@ func TestPresentationLoadingFocusAndSemanticActions(t *testing.T) {
 	a := screenStatus()
 	m.apps = []appStatus{a}
 	_, open := m.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	settleFiniteMotion(m)
 	if !m.onWindows() || !strings.Contains(m.View().Content, "Loading") {
 		t.Fatal("opening has no loading state")
 	}
@@ -180,6 +181,7 @@ func TestPresentationLifecycleRetraction(t *testing.T) {
 func TestPresentationErrorsBoundsAndTerminalControls(t *testing.T) {
 	m := New(context.Background(), noopCaller{}, nil)
 	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
 	epoch := m.focusedView().epoch
 	m.Update(viewMsg{id: screenID, epoch: epoch, err: errors.New("view unavailable")})
 	if !strings.Contains(m.View().Content, "view unavailable") {
@@ -553,6 +555,7 @@ func TestPresentationV3MultilineFieldEditing(t *testing.T) {
 		return writeJSON(out, v)
 	}), nil)
 	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
 	epoch := m.focusedView().epoch
 	m.Update(viewMsg{id: screenID, epoch: epoch, data: areaData()})
 	v := m.focusedView()
@@ -600,6 +603,7 @@ func TestPresentationV3MultilineEnhancedChords(t *testing.T) {
 		return writeJSON(out, v)
 	}), nil)
 	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
 	epoch := m.focusedView().epoch
 	m.Update(viewMsg{id: screenID, epoch: epoch, data: areaData()})
 	v := m.focusedView()

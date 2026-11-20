@@ -43,9 +43,11 @@ func windowApp(id string, pid int32) appStatus {
 	return a
 }
 
-// openLoaded opens a's window and delivers its first snapshot.
+// openLoaded opens a's window, settles its reveal, and delivers its first
+// snapshot.
 func openLoaded(m *Model, a appStatus) *appView {
 	m.openWindow(a)
+	settleFiniteMotion(m)
 	v := m.views[windows.ID(a.Manifest.ID)]
 	m.Update(viewMsg{id: windows.ID(a.Manifest.ID), epoch: v.epoch, data: screenData()})
 	return v

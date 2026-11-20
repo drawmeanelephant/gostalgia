@@ -64,10 +64,29 @@ an app by itself; Monochrome renders the shell-owned hint text in ASCII.
   `LIVE`/`READY` state, even beside a launch rejection, and the help row uses
   the shorter `Esc BACK` label so `Enter RUN` and `F3 STOP` fit as complete
   hints. Growing the terminal restores the full cards and wording.
-- **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
-  focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
-  busy work or returns to the prompt. F2 returns to the shelf. See
+- **F4**: open the selected running app's data/action view in its window on
+  the Windows screen. Enter on a running app in the shelf or on Home, the
+  palette's **Switch to** items, **F7**, and the `settings` command open
+  windows the same way; F7 and `settings` start Settings first if it is not
+  running. An app that already has a window focuses and raises it instead.
+  Inside a window, Tab/Shift-Tab moves focus, Enter invokes an enabled action,
+  and ↑/↓ selects an item. See
   [the presentation contract](applications.md#7-dataaction-presentation-contract-versions-13).
+- **Windows screen**: each open app has one window, and the `Windows (n)` tab
+  shows while any window is open. **F8** focuses and raises the next window, and
+  from any other screen it brings the Windows screen back. **Alt-arrows** move
+  the focused window by one cell, and **Ctrl-W** closes it. Closing a window
+  never stops its app. **Esc** cancels the focused window's running action;
+  with none running, it returns to the screen that the windows replaced and
+  keeps every window open. F7 pressed on the Settings window does the same.
+  F1–F7 still switch screens. The palette adds **Close window** and **Move
+  window**: move mode moves the focused window with the arrow keys until
+  Enter or Esc, for terminals that do not report Alt-arrows. With the mouse
+  on, click a window to focus and raise it, drag its title to move it, and
+  click its `[X]` to close it. A shell keeps at most 8 windows, and a ninth
+  opening shows a warning toast and opens nothing. Below a 32×12 body only
+  the focused window shows, filling the body without a frame, and every key
+  above still works. See [Multi-window shell design](windows.md).
 - **Keyboard enhancements**: the shell asks the terminal for Kitty-protocol
   event types on top of the disambiguation Bubble Tea v2 requests by default.
   Terminals negotiate support per session; a terminal that doesn't answer keeps
@@ -150,11 +169,12 @@ Terminal controls from file/app output are filtered so OSC/ANSI output cannot
 manipulate the terminal. Small layouts display a resize message; normal layouts
 are clipped to the viewport and never require the core to know terminal size.
 
-## Experimental windows, not shell wiring (Issue #215)
+## Experimental window demos (Issues #215, #216)
 
-The standalone command below demonstrates the draft window service without
-changing this shell's single-presentation model or creating another production
-terminal owner:
+The shell's windows use the window service in `internal/experience/windows`.
+The experimental bloom and Gio adapters of that service stay under
+`internal/experience/experimental/windows`, and the standalone commands below
+demonstrate them without creating another production terminal owner:
 
 ```sh
 go run ./internal/experience/experimental/windows/cmd/windowdemo
@@ -177,8 +197,7 @@ implements only the presentation elements used by the fixtures, and its 30×10
 clamped view clips content. See
 [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred)
 for the observed side-by-side toolkit leak inventory, and
-[Multi-window shell design](windows.md) for the proposed production design
-(Issue #246).
+[Multi-window shell design](windows.md) for the shell's windows (Issue #246).
 
 ## Verification and boundaries
 
