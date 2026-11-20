@@ -16,9 +16,10 @@ from any toolkit. `Service` changes state only through `Open`, `Focus`, `Move`,
 and `Close`, and it publishes `window.opened`, `window.focused`,
 `window.moved`, and `window.closed` on the existing `internal/events` bus.
 The bloom adapter draws each window as an opaque layer with a static shadow
-and a title bar that places `[X]` first (#237). The Gio adapter implements the same service, which is how #216 showed
-that the API does not depend on bloom. No production package imports the spike,
-and `TestNeutralAPIAndProductionDependencyBoundaries` enforces that.
+and a title bar that places `[X]` first (#237). The Gio adapter implements the
+same service, which is how #216 showed that the API does not depend on bloom.
+No production package imports the spike, and
+`TestNeutralAPIAndProductionDependencyBoundaries` enforces that.
 
 The production shell shows one app presentation at a time. `Model.presentation`
 holds a single `appView`. `openView` replaces it, `dismissView` clears it, and
