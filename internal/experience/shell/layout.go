@@ -64,6 +64,11 @@ const (
 	frameTitle     = "G O S T A L G I A  /  PERSONAL COMPUTING"
 )
 
+// launcherCompactHintsWidth is the narrowest frame that can show
+// "Esc PROMPT · Enter RUN · F3 STOP" (32 cells). Narrower frames keep the
+// shelf's three primary hints whole by using the shorter PROMPT label.
+const launcherCompactHintsWidth = 32
+
 // rootKey is everything a bloom root is built from. A kit change that keeps
 // it equal keeps the root.
 type rootKey struct {
@@ -418,17 +423,49 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 	case m.currentMode() == modeHome:
 		prompt += m.kit.Muted(m.kit.Hint("Home view owns focus. Esc returns to prompt · Ctrl-P palette."))
 	default:
-		// Show a cursor-centered slice rather than allowing long pasted
-		// input to push the prompt off screen. Cell width, not bytes,
-		// controls the slice; the cursor's cell stays reserved so the
-		// insertion point is on screen at the end of the input too.
-		room := max(1, w-lipgloss.Width(prefix)-1)
-		before := ui.Tail(string(m.input[:m.cursor]), room/2)
-		after := ui.Fit(string(m.input[m.cursor:]), ui.Bounds{Width: room + 1 - lipgloss.Width(before), Height: 1})
-		x = lipgloss.Width(prefix) + lipgloss.Width(before)
+		// A draft that fits with its cursor is shown whole, even when it
+		// exceeds half of the row. Only an overflowing draft scrolls, and
+		// then its viewport slides around the cursor across every
+		// available cell (see promptDraftViewport).
+		prefixWidth := lipgloss.Width(prefix)
+		before, after, offset := promptDraftViewport(m.input, m.cursor, max(1, w-prefixWidth))
+		x = prefixWidth + offset
 		return m.kit.Truncate(prompt+m.kit.Text(before)+m.kit.Text(after), w), x, x < w
 	}
 	return m.kit.Truncate(prompt, w), 0, false
+}
+
+// promptDraftViewport fits the editable draft into width cells. A draft that
+// leaves a cell for the insertion cursor is returned whole. Otherwise the
+// viewport slides around the cursor using the full width: one cell always
+// stays free for the cursor, the grapheme after the cursor keeps its cells,
+// and the text on the shorter side of the cursor gives way first so an end
+// cursor reaches the row edge instead of stopping mid-row. offset is the
+// cursor's cell within the returned text.
+func promptDraftViewport(input []rune, cursor, width int) (before, after string, offset int) {
+	if width <= 0 {
+		return "", "", 0
+	}
+	if cursor < 0 || cursor > len(input) {
+		cursor = max(0, min(cursor, len(input)))
+	}
+	if lipgloss.Width(string(input)) < width {
+		before = string(input[:cursor])
+		return before, string(input[cursor:]), lipgloss.Width(before)
+	}
+	// Leave a cell for the cursor and show the text after it up to half the
+	// row, always whole for the next cluster; the rest goes to the text
+	// before the cursor. Near either end that side takes the remaining
+	// space, so an end cursor sits against the row edge instead of mid-row.
+	next := 0
+	if cursor < len(input) {
+		next = max(1, ui.GraphemeWidth(ui.FirstCluster(string(input[cursor:]))))
+	}
+	afterBudget := min(lipgloss.Width(string(input[cursor:])), max(next, width/2))
+	beforeBudget := min(width-1, width-afterBudget)
+	before = ui.Tail(string(input[:cursor]), beforeBudget)
+	after = ui.Fit(string(input[cursor:]), ui.Bounds{Width: max(0, width-lipgloss.Width(before)), Height: 1})
+	return before, after, lipgloss.Width(before)
 }
 
 func (m *Model) bindings(home homeView) []ui.Binding {
@@ -493,11 +530,18 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)
+		back := "PROMPT"
+		if m.width < launcherCompactHintsWidth {
+			// "Esc PROMPT · Enter RUN · F3 STOP" needs 32 cells. The 30-cell
+			// frame shows all three primaries with the shorter label, and the
+			// help bar drops any binding that would not fit whole.
+			back = "BACK"
+		}
 		return []ui.Binding{
-			{Key: "Esc", Help: "PROMPT"},
+			{Key: "Esc", Help: back},
 			{Key: "Enter", Help: "RUN", Disabled: m.busy || len(filtered) == 0},
 			{Key: "F3", Help: "STOP", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
-			{Key: "F4", Help: "VIEW", Disabled: m.busy || len(filtered) == 0},
+			{Key: "F4", Help: "VIEW", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
 			{Key: "F5", Help: "TASKS"},
 			{Key: "↑↓", Help: "SELECT", Disabled: m.busy || len(filtered) == 0},
 			{Key: "Ctrl-P", Help: "PALETTE"},

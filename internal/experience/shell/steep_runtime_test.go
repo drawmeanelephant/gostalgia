@@ -283,6 +283,52 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		steepStopSelectedEcho(t, h, client)
 	})
 
+	t.Run("launcher_external_lifecycle_refresh", func(t *testing.T) {
+		h, client := newSteepRuntime(t)
+		h.Key("f2").Wait("SEARCH: type to filter apps...")
+		h.Type("echo").Wait("LIVE / PID")
+		steepAppRunning(t, client, "com.gostalgia.echo", true)
+
+		// Another authenticated client stops Echo while the shelf is open.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		if err := client.Call(ctx, "app/stop", map[string]string{"id": "com.gostalgia.echo"}, nil); err != nil {
+			t.Fatalf("external app/stop: %v", err)
+		}
+		steepAppRunning(t, client, "com.gostalgia.echo", false)
+
+		// No prompt command runs in between: clearing the filter, leaving
+		// and reopening the shelf must read the registry again.
+		h.KeyEsc().KeyEsc()
+		h.Key("f2").Wait("SEARCH: type to filter apps...")
+		h.Type("echo").Wait("Enter launches Echo").WaitNot("LIVE / PID")
+
+		var launched struct {
+			ID  string `json:"id"`
+			PID int32  `json:"pid"`
+		}
+		ctx2, cancel2 := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel2()
+		if err := client.Call(ctx2, "app/launch", map[string]string{"id": "com.gostalgia.echo"}, &launched); err != nil {
+			t.Fatalf("external app/launch: %v", err)
+		}
+		if launched.PID == 0 {
+			t.Fatalf("external app/launch returned no PID: %+v", launched)
+		}
+		steepAppRunning(t, client, "com.gostalgia.echo", true)
+
+		h.KeyEsc().KeyEsc()
+		h.Key("f2").Wait("SEARCH: type to filter apps...")
+		h.Type("echo").Wait(fmt.Sprintf("LIVE / PID %d", launched.PID))
+	})
+
+	t.Run("apps_command_opens_shelf", func(t *testing.T) {
+		h, client := newSteepRuntime(t)
+		h.Type("apps").Key("enter").Wait("SEARCH: type to filter apps...")
+		h.Type("echo").Wait("LIVE / PID")
+		steepAppRunning(t, client, "com.gostalgia.echo", true)
+	})
+
 	t.Run("palette", func(t *testing.T) {
 		h, client := newSteepRuntime(t)
 		h.Key("ctrl+p").Wait("COMMAND PALETTE")

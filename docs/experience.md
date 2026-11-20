@@ -219,12 +219,12 @@ not restart on later renders or polls.
 |---|---|
 | `Panel` | Total outer bounds include the border, filled title, and padding. `PanelContentBounds` reports the available body rectangle. |
 | `Tabs` | One padded row; keeps the active tab visible when leading tabs must be dropped. Brackets show selection; parentheses show disabled tabs. |
-| `AppCard` | Name/focus header, real status badge, identity/version, and optional description. Compact layouts prioritize name and status. |
+| `AppCard` | Name/focus header, real status badge, identity/version, and optional description. Compact layouts prioritize name and status; a one-row card packs the name and full status, cutting the name before the state. |
 | `Badge` | Bounded inline symbol and label; an empty label uses the state label. |
 | `Dialog` | A box at most 48 cells wide: double border, title, word-wrapped message, and selectable/disabled actions. Actions take priority over a long body. `Kit.Dialog` centers it on a canvas of its own; `Kit.DialogLayer` returns it as a centered modal bloom layer, a focus scope the caller composes over the current screen with `bloom.Overlay`. The kit only renders: the caller owns visibility, input routing, target validation, and what confirming does. The kit sends no requests, and apps never supply dialogs or terminal views. |
 | `Progress` | Static clamped fraction/percentage, or indeterminate text without a fabricated percentage. No tick or animation command. |
 | `Notice` | Friendly default or caller-supplied empty, busy, disabled, success, and error messages. |
-| `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. |
+| `HelpBar` | One bounded contextual keybinding row; disabled keys use parentheses. Put essential bindings first. A binding that would not fit whole is dropped, never clipped mid-action. |
 | `Leaf`, `TabsLeaf`, `HelpBarLeaf` | bloom adapters: a `bloom.Layouter` that renders kit output into exactly the rectangle its slot gets. `Kit.Leaf` paints panel-body lines on the surface; `Sized` places output as rendered; `Natural` sets the size an `Auto` slot asks for. Render functions must not change state. |
 | `PanelNode` | `Panel` as a bloom node: draws the same border, title and padding as `Panel` and lays its child out in `PanelContentRect`, the body's offset and `PanelContentBounds` size. |
 
@@ -431,10 +431,16 @@ A strict single terminal owner contract ensures input is never dropped or ambigu
 
 Applications follow the platform single-instance contract. When launching an
 app that is already running or rejected by the runtime, the shell handles the
-rejection gracefully: the error is recorded in the transcript, focus safely
-transitions to the prompt to display the diagnostic message, and the terminal
-state remains intact. Stopping an application via `F3`, the palette, or
-`stop <app-id>` issues a graceful IPC stop request once it is confirmed.
+rejection gracefully and reports it where the launch came from. A launch from
+the Apps shelf keeps the shelf focused, with its filter, selected card and the
+existing live instance unchanged, and shows the rejection as a `LAUNCH FAILED`
+line there; only the newest launch from the current visit to the shelf may show
+one, so a late answer never pulls the user back after they navigate away. A
+typed `launch <app-id>` still records the error in the transcript and reports
+it on the command line, which comes to the front only while the user is still
+on the screen they submitted from. The terminal state remains intact in both
+cases. Stopping an application via `F3`, the palette, or `stop <app-id>` issues
+a graceful IPC stop request once it is confirmed.
 
 ## Task Manager, Notifications, and Crash Receipts
 
@@ -446,7 +452,9 @@ directly into the shell via dedicated tabs, commands, and overlay notifications:
 The live Task Manager displays real-time supervised process state and metrics in a
 scrollable table:
 - **Columns**: Selection pointer, `PID`, `NAME`, `STATE`, `CPU` (user/system usage),
-  `RAM` (resident memory), `RESTARTS`, and `EXIT` code / runtime duration.
+  `MEMORY` (resident memory), and `RESTARTS`. When no process in the table
+  reports supported resource metrics, `CPU` and `MEMORY` are omitted rather
+  than shown as dashes, and their width goes to `NAME`.
 - **Navigation & Controls**:
   - `↑` / `↓` / `k` / `j`: Navigate through processes.
   - `l` or `Enter`: Open child log tail viewer modal (`proc/logs`), which

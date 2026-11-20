@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/pkg"
@@ -40,12 +42,35 @@ type sysStatusData struct {
 	ServicesCount int
 }
 
+// openAppsPrefix marks a command result whose text is followed by the
+// Apps listing and that leaves the shell on the Apps shelf.
+const openAppsPrefix = "__OPEN_APPS__"
+
+// resultOrigin says where a submitted line came from. A shelf launch reports
+// a rejection in the shelf; a command-line result belongs to the prompt. The
+// zero value marks a result no submission produced, such as an internal
+// caller's or a test's, and keeps the command-line behavior for it.
+type resultOrigin int
+
+const (
+	originUnsubmitted resultOrigin = iota
+	originCommandLine
+	originShelfLaunch
+)
+
 type resultMsg struct {
-	text             string
-	err              error
-	failedLaunch     bool
+	text         string
+	err          error
+	failedLaunch bool
+	// origin is where the submitted line came from, originMode the screen
+	// showing then. originSeq and originApp identify a shelf launch, and
+	// originEpoch is the shelfEpoch it was launched in.
+	origin           resultOrigin
+	originMode       viewMode
+	originSeq        uint64
+	originApp        string
+	originEpoch      uint64
 	cwd              string
-	apps             []appStatus
 	status           sysStatusData
 	documents        []docShortcut
 	hasStatus        bool
@@ -76,7 +101,7 @@ type resultMsg struct {
 }
 
 const helpText = `COMMAND CENTER
-  apps                     installed apps and their grants
+  apps                     open the app shelf (also lists grants)
   pkg / package            list, inspect, install, update, uninstall, rollback
   backup                   export, inspect, preview, restore portable backups
   launch / run APP-ID       start a manifest-declared app
@@ -175,6 +200,9 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 	} else if strings.HasPrefix(result.text, "__SWITCH_VIEW__:") {
 		result.switchView = strings.TrimPrefix(result.text, "__SWITCH_VIEW__:")
 		result.text = ""
+	} else if strings.HasPrefix(result.text, openAppsPrefix) {
+		result.switchView = "shelf"
+		result.text = strings.TrimPrefix(strings.TrimPrefix(result.text, openAppsPrefix), "\n")
 	} else if strings.HasPrefix(result.text, "__SHOW_RECEIPT__:") {
 		var pid int32
 		fmt.Sscan(strings.TrimPrefix(result.text, "__SHOW_RECEIPT__:"), &pid)
@@ -225,15 +253,6 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		result.text = fmt.Sprintf("Switched to profile %s", targetID)
 	}
 	if !quit {
-		var apps []appStatus
-		if refreshErr := c.Call(ctx, "app/list", nil, &apps); refreshErr != nil {
-			if result.err == nil {
-				result.err = fmt.Errorf("refresh apps: %w", refreshErr)
-			}
-		} else {
-			result.apps = apps
-		}
-
 		var status struct {
 			UptimeSeconds float64 `json:"uptime_seconds"`
 			User          string  `json:"user"`
@@ -283,6 +302,25 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 	return result
 }
 
+// commandChangesApps reports whether line names a command that can change
+// which apps exist or run. The shell refreshes the app registry after such a
+// command instead of carrying the registry in its result, so a slow command
+// answer cannot overwrite a newer shelf refresh. Failed commands change
+// nothing and need no refresh.
+func commandChangesApps(line string) bool {
+	args, err := words(line)
+	if err != nil || len(args) == 0 {
+		return false
+	}
+	switch strings.ToLower(args[0]) {
+	case "launch", "run", "stop", "call", "open", "pkg", "package", "backup", "recovery":
+		return true
+	}
+	return false
+}
+
+// command executes line and reports its output. App state lives in the
+// shelf's own app/list refresh, not in this result.
 func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(string) string) (string, string, bool, error) {
 	ok := func(s string) (string, string, bool, error) { return s, cwd, false, nil }
 	fail := func(err error) (string, string, bool, error) { return "", cwd, false, err }
@@ -535,7 +573,10 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 			}
 			rows = append(rows, fmt.Sprintf("%s  %s v%s\n  %s%scaps: %s", safe(a.Manifest.ID), safe(a.Manifest.Name), safe(a.Manifest.Version), state, separator, strings.Join(a.Manifest.Permissions, ", ")))
 		}
-		return ok(strings.Join(rows, "\n"))
+		// The command opens the Apps shelf too; the listing stays in the
+		// transcript behind it. openAppsPrefix tells execute to switch view
+		// without parsing the command line again.
+		return ok(openAppsPrefix + "\n" + strings.Join(rows, "\n"))
 	case "launch", "run", "stop":
 		if len(args) != 1 {
 			return fail(fmt.Errorf("usage: %s APP-ID", cmd))
@@ -934,6 +975,10 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		}
 		return "Shutdown requested", cwd, true, nil
 	default:
+		if suggestions := unknownCommandSuggestions(ctx, c, cmd); len(suggestions) > 0 {
+			return fail(fmt.Errorf("unknown command %q %s%s", cmd,
+				hint("— did you mean: "), strings.Join(suggestions, ", ")+"? (type help)"))
+		}
 		return fail(fmt.Errorf("unknown command %q %s", cmd, hint("— type help")))
 	}
 }
@@ -1005,4 +1050,160 @@ func formatDuration(d time.Duration) string {
 		return d.Round(time.Millisecond).String()
 	}
 	return d.Round(time.Second).String()
+}
+
+// maxUnknownCommandSuggestions bounds the hint to a readable list.
+const maxUnknownCommandSuggestions = 3
+
+// acceptedCommandNames is every name the prompt accepts, including aliases:
+// the switch in command plus the lines handlePromptKey resolves itself. Keep
+// it in step with both. A suggestion only displays this name; it never runs
+// it.
+var acceptedCommandNames = []string{
+	"?", "alerts", "apps", "backup", "call", "cat", "cd", "clear", "cls",
+	"detach", "dir", "dnd", "echo", "exit", "favorites", "find", "help",
+	"history", "home", "launch", "launcher", "log", "logs", "ls", "motion",
+	"mouse", "notifications", "open", "package", "palette", "pkg", "pref",
+	"preferences", "profile", "profiles", "ps", "quit", "reap", "receipt",
+	"receipts", "recents", "recovery", "run", "search", "session",
+	"settings", "shelf", "shutdown", "status", "stop", "tasks",
+	"taskmanager", "theme", "top", "type",
+}
+
+// unknownCommandSuggestions lists at most maxUnknownCommandSuggestions
+// explicit next steps for an unknown command. Installed apps whose name or
+// ID the token matches suggest `launch APP-ID`; near-miss command names come
+// next, nearest first with name order breaking ties. A registry lookup
+// failure only removes the app suggestions: it never fails the command or
+// waits on the registry beyond the bounded lookup.
+func unknownCommandSuggestions(ctx context.Context, c Caller, token string) []string {
+	var suggestions []string
+	if len(token) >= 2 {
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		var apps []appStatus
+		err := c.Call(lookupCtx, "app/list", nil, &apps)
+		cancel()
+		if err == nil {
+			for _, id := range matchingAppIDs(token, apps) {
+				suggestions = append(suggestions, "launch "+id)
+				if len(suggestions) == maxUnknownCommandSuggestions {
+					return suggestions
+				}
+			}
+		}
+	}
+	for _, name := range nearCommandNames(token) {
+		suggestions = append(suggestions, name)
+		if len(suggestions) == maxUnknownCommandSuggestions {
+			break
+		}
+	}
+	return suggestions
+}
+
+// matchingAppIDs returns the installed apps whose friendly name or full ID
+// the token names, sorted by ID so the hint is deterministic. Names compare
+// case-insensitively, and without spaces or separators so `taskmanager`
+// finds "Task Manager".
+func matchingAppIDs(token string, apps []appStatus) []string {
+	want := normalizedAppName(token)
+	var ids []string
+	seen := map[string]bool{}
+	for _, app := range apps {
+		id := strings.TrimSpace(viewText(app.Manifest.ID))
+		if id == "" {
+			continue
+		}
+		name := app.Manifest.Name
+		if !strings.EqualFold(token, app.Manifest.ID) &&
+			!strings.EqualFold(token, name) &&
+			(want == "" || normalizedAppName(name) != want) {
+			continue
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func normalizedAppName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '-', '_':
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, name)
+}
+
+// nearCommandNames returns accepted command names within the token's bounded
+// edit distance, ordered by distance and then name.
+func nearCommandNames(token string) []string {
+	limit := suggestionDistanceLimit(token)
+	if limit == 0 {
+		return nil
+	}
+	token = strings.ToLower(token)
+	type near struct {
+		name string
+		dist int
+	}
+	var matches []near
+	for _, name := range acceptedCommandNames {
+		if d := editDistance(token, name); d > 0 && d <= limit {
+			matches = append(matches, near{name: name, dist: d})
+		}
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].dist != matches[j].dist {
+			return matches[i].dist < matches[j].dist
+		}
+		return matches[i].name < matches[j].name
+	})
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		names = append(names, match.name)
+	}
+	return names
+}
+
+// suggestionDistanceLimit bounds how many single-character edits a near miss
+// may have. Short tokens keep a tight bound so only a one-letter slip
+// matches; longer names tolerate a second edit. Distant input matches
+// nothing and keeps the plain help fallback.
+func suggestionDistanceLimit(token string) int {
+	switch n := utf8.RuneCountInString(token); {
+	case n < 2:
+		return 0
+	case n <= 3:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// editDistance is the Levenshtein distance over runes.
+func editDistance(a, b string) int {
+	ar, br := []rune(a), []rune(b)
+	prev := make([]int, len(br)+1)
+	current := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		current[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 1
+			if ar[i-1] == br[j-1] {
+				cost = 0
+			}
+			current[j] = min(prev[j]+1, current[j-1]+1, prev[j-1]+cost)
+		}
+		prev, current = current, prev
+	}
+	return prev[len(br)]
 }
