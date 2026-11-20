@@ -265,7 +265,9 @@ func steepStopSelectedEcho(t *testing.T, h *steep.Harness, client *ipc.Client) {
 func TestSteepRuntimeScenarios(t *testing.T) {
 	t.Run("home", func(t *testing.T) {
 		h, _ := newSteepRuntime(t)
-		h.Wait([]string{"SYSTEM ACTIVITY", "RUNNING APPLICATIONS", "DOCUMENT SHORTCUTS"})
+		// The boot golden pins Echo's row and the Apps badge, which arrive with
+		// a later process poll than the headings on a loaded runner.
+		h.Wait([]string{"SYSTEM ACTIVITY", "RUNNING APPLICATIONS", "DOCUMENT SHORTCUTS", "Apps (1)", "LIVE / PID"})
 		steepSnapshot(h, "boot")
 	})
 
