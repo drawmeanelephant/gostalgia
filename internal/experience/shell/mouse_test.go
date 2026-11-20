@@ -831,7 +831,9 @@ func TestMouseAppViewGatesMatchTheKeyboard(t *testing.T) {
 			// it arrives, not what was drawn.
 			for _, late := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%s/%s/late=%v", tc.name, tg.label, late), func(t *testing.T) {
-					m, rec := appModel(t, 80, 24, padData())
+					// The window's border takes two of the body's rows; at
+					// 80×26 the pad's grid row is on screen.
+					m, rec := appModel(t, 80, 26, padData())
 					p := mustFind(t, m, rectOf(t, m, slotBody), tg.label)
 					if late {
 						m.View()
@@ -856,7 +858,7 @@ func TestMouseAppViewGatesMatchTheKeyboard(t *testing.T) {
 		}
 	}
 	// Once the gate clears, the same click runs.
-	m, rec := appModel(t, 80, 24, padData())
+	m, rec := appModel(t, 80, 26, padData())
 	m.busy = true
 	p := mustFind(t, m, rectOf(t, m, slotBody), "[NW]")
 	clickAt(t, m, p)

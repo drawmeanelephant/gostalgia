@@ -3,21 +3,21 @@
 ┃  Home   Apps   Prompt   Tasks   Notifications  [Windows (1)]                 ┃
 ┃ ✓ ONLINE   guest · C: environment drive                                      ┃
 ┃                                                                              ┃
-┃ Pad                                                                          ┃
-┃ Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back             ┃
-┃ Mascot                                                                       ┃
-┃ (\_/)                                                                        ┃
-┃ (o.o)                                                                        ┃
-┃ > ^ <                                                                        ┃
-┃ Charge [━━━━━━━━━━━━━·············]  50%                                     ┃
-┃ Hunger [━━━━━━━━━━━━━━━━━━━━━━━━━━] 100%                                     ┃
-┃ › One: first                                                                 ┃
-┃ Text: draft                                                                  ┃
-┃ [Adopt]                                                                      ┃
-┃ Pad                                                                          ┃
-┃ [NW] › [NE]                                                                  ┃
-┃ [SW] [SE] (disabled)                                                         ┃
-┃ waiting                                                                      ┃
+┃ ┏━› Pad━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[X]━┓ ┃
+┃ ┃Pad                                                                       ┃ ┃
+┃ ┃Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back          ┃ ┃
+┃ ┃(\_/)                                                                     ┃ ┃
+┃ ┃(o.o)                                                                     ┃ ┃
+┃ ┃> ^ <                                                                     ┃ ┃
+┃ ┃Charge [━━━━━━━━━━━━━·············]  50%                                  ┃ ┃
+┃ ┃Hunger [━━━━━━━━━━━━━━━━━━━━━━━━━━] 100%                                  ┃ ┃
+┃ ┃› One: first                                                              ┃ ┃
+┃ ┃Text: draft                                                               ┃ ┃
+┃ ┃[Adopt]                                                                   ┃ ┃
+┃ ┃Pad                                                                       ┃ ┃
+┃ ┃[NW] › [NE]                                                               ┃ ┃
+┃ ┃waiting                                                                   ┃ ┃
+┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┃                                                                              ┃
 ┃ C:\users\guest> Window owns focus. Esc goes back, Ctrl-W closes.             ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

@@ -10,9 +10,9 @@ import (
 
 // Hover is the pointer's target, never the keyboard's. It carries a stable
 // semantic identity, so a cue follows the item it was joined to rather than a
-// row index: app IDs, screen names, palette item keys, document paths, PIDs
-// and grid cell IDs. Selection and focus stay in their own fields and are
-// never moved by a hover.
+// row index: app IDs, screen names, palette item keys, document paths, PIDs,
+// grid cell IDs, and window IDs. Selection and focus stay in their own fields
+// and are never moved by a hover.
 type hoverKind uint8
 
 const (
@@ -23,6 +23,8 @@ const (
 	hoverHomeRow
 	hoverTaskRow
 	hoverGridCell
+	hoverWindowTitle
+	hoverWindowClose
 )
 
 type hoverTarget struct {

@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"fmt"
 	"image"
 	"os"
 	"strings"
@@ -24,7 +25,7 @@ type hoverPoint struct {
 	cue string
 }
 
-// hoverClasses drives all six clickable populations named by the contract.
+// hoverClasses drives every clickable population named by the contract.
 func hoverClasses() []struct {
 	name string
 	run  func(t *testing.T, m *Model) hoverPoint
@@ -140,14 +141,41 @@ func hoverClasses() []struct {
 				cue: "<NE>",
 			}
 		}},
+		// Alpha lies beneath Beta with its top border in view; hovering it
+		// must neither focus nor raise it.
+		{"window title", func(t *testing.T, m *Model) hoverPoint {
+			twoWindows(m)
+			r := rectOf(t, m, windowPart{alphaID, windowTitle})
+			return hoverPoint{
+				class: "window title",
+				point: image.Pt(r.Min.X+3, r.Min.Y),
+				setup: windowStacking,
+				cue:   ui.HoverMarker + "Alpha",
+			}
+		}},
+		{"window close", func(t *testing.T, m *Model) hoverPoint {
+			twoWindows(m)
+			r := rectOf(t, m, windowPart{alphaID, windowClose})
+			return hoverPoint{
+				class: "window close",
+				point: image.Pt(r.Min.X+1, r.Min.Y),
+				setup: windowStacking,
+				cue:   closeHoverLabel,
+			}
+		}},
 	}
 }
 
-// TestHoverCuesOnAllSixTargetClasses checks each named population in every
+// windowStacking is the window focus and z-order a hover must not change.
+func windowStacking(t *testing.T, m *Model) func() any {
+	return func() any { return fmt.Sprint(m.FocusedWindow(), m.windows.Order()) }
+}
+
+// TestHoverCuesOnEveryTargetClass checks each named population in every
 // built-in theme and Plain, with hover distinct from the normal and selected
 // states, a cleared cue on leave, and unchanged keyboard selection and
 // geometry.
-func TestHoverCuesOnAllSixTargetClasses(t *testing.T) {
+func TestHoverCuesOnEveryTargetClass(t *testing.T) {
 	for _, tc := range headerBadgeCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, class := range hoverClasses() {

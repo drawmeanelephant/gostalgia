@@ -192,10 +192,16 @@ type Model struct {
 	// windowsShown is set while the Windows screen is the body, and
 	// windowsBack is the screen it replaced, which Esc returns to. viewEpoch
 	// numbers every window opened, so a reply to a closed window is dropped.
-	windows         *windows.Service
-	views           map[windows.ID]*appView
-	windowsShown    bool
-	windowsBack     screen
+	windows      *windows.Service
+	views        map[windows.ID]*appView
+	windowsShown bool
+	windowsBack  screen
+	// drag is the title drag in progress, if any, and windowMoving is set
+	// by the palette's Move window until Enter or Esc ends move mode.
+	drag         windowDrag
+	windowMoving bool
+	// bodyKnown is bodySize's answer, which setKit forgets.
+	bodyKnown       bodyMemo
 	viewEpoch       uint64
 	viewSub         *ipc.ClientSubscription
 	mode            viewMode
@@ -1342,6 +1348,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.geometryKnown = true
+		m.clampWindows()
 		// Rows and cells moved; the pointer's old target identity no longer
 		// describes what is under it.
 		m.clearHoverAll()
@@ -1652,8 +1659,27 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.windowMoving && !m.movingWindow() {
+			m.windowMoving = false
+		}
+		if m.movingWindow() {
+			// Move mode takes every key the shortcuts above left: the
+			// arrows move the focused window, and Enter or Esc ends it.
+			if dx, dy, ok := arrowDelta(keyStr); ok {
+				m.moveWindow(dx, dy)
+			} else if keyStr == "enter" || keyStr == "esc" {
+				m.windowMoving = false
+			}
+			return m, nil
+		}
 		if m.onWindows() {
 			v := m.focusedView()
+			if key, ok := strings.CutPrefix(keyStr, "alt+"); ok {
+				if dx, dy, ok := arrowDelta(key); ok {
+					m.moveWindow(dx, dy)
+					return m, nil
+				}
+			}
 			switch keyStr {
 			case "ctrl+w":
 				return m, m.closeWindow(windows.ID(v.id))

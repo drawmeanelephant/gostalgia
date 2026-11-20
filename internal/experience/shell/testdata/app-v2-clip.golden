@@ -3,21 +3,23 @@
 |  Notifications  [Windows (1)]        |
 | [OK] ONLINE   guest | C: environm... |
 |                                      |
-| Pad                                  |
-| Tab focus | Enter action | Up/Dow... |
-| Mascot                               |
-| =================================... |
-| (\_/)                                |
-| (o.o)                                |
-| > ^ <                                |
-| Charge [###########-----------]  50% |
-| Hunger [######################] 100% |
-| > One: first                         |
-| Text: draft                          |
-| [Adopt]                              |
-| Pad                                  |
-| [NW] > [NE]                          |
-| waiting                              |
+| +-> Pad------------------------[X]-+ |
+| |Pad                               | |
+| |Tab focus | Enter action | Up/D...| |
+| |Mascot                            | |
+| |===============================...| |
+| |(\_/)                             | |
+| |(o.o)                             | |
+| |> ^ <                             | |
+| |Charge [##########----------]  50%| |
+| |Hunger [####################] 100%| |
+| |> One: first                      | |
+| |Text: draft                       | |
+| |[Adopt]                           | |
+| |Pad                               | |
+| |[NW] > [NE]                       | |
+| |waiting                           | |
+| +----------------------------------+ |
 |                                      |
 | C:\users\guest> Window owns focus... |
 +--------------------------------------+

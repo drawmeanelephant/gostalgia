@@ -83,7 +83,7 @@ func TestMonochromePresentationASCIIClippingPreservesAppUnicode(t *testing.T) {
 		values: map[string]string{"text": "draft"}, focus: 2, cell: 1})
 	screen := strings.Join(checkRendered(t, m.View(), 40, 24), "\n")
 	requireMonochromeChromeASCII(t, screen)
-	for _, want := range []string{"Visible app content: 界 e\u0301 👩‍💻", "=====...", "Up/Dow..."} {
+	for _, want := range []string{"Visible app content: 界 e\u0301 👩‍💻", "=====...", "Up/D..."} {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("presentation lacks %q:\n%s", want, screen)
 		}

@@ -3,21 +3,21 @@
 |  Home   Apps (2)   Prompt   Tasks   Notifications (2)  [Windows (1)]         |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |                                                                              |
-| Pad                                                                          |
-| Tab focus | Enter action | Up/Down item | LRUD grid | Esc cancel/back        |
-| Mascot                                                                       |
-| (\_/)         +----------------------------------------------+               |
-| (o.o)         | > Shut down Gostalgia?                       |               |
-| > ^ <         | Stops every app and service and ends every   |               |
-| Charge [######| attached session.                            |               |
-| Hunger [######|                                              |               |
-| > One: first  | [Cancel]  Shut down                          |               |
-| Text: draft   +----------------------------------------------+               |
-| [Adopt]                                                                      |
-| Pad                                                                          |
-| [NW] > [NE]                                                                  |
-| [SW] [SE] (disabled)                                                         |
-| waiting                                                                      |
+| +-> Pad----------------------------------------------------------------[X]-+ |
+| |Pad                                                                       | |
+| |Tab focus | Enter action | Up/Down item | LRUD grid | Esc cancel/back     | |
+| |(\_/)        +----------------------------------------------+             | |
+| |(o.o)        | > Shut down Gostalgia?                       |             | |
+| |> ^ <        | Stops every app and service and ends every   |             | |
+| |Charge [#####| attached session.                            |             | |
+| |Hunger [#####|                                              |             | |
+| |> One: first | [Cancel]  Shut down                          |             | |
+| |Text: draft  +----------------------------------------------+             | |
+| |[Adopt]                                                                   | |
+| |Pad                                                                       | |
+| |[NW] > [NE]                                                               | |
+| |waiting                                                                   | |
+| +--------------------------------------------------------------------------+ |
 |                                                                              |
 | C:\users\guest> Window owns focus. Esc goes back, Ctrl-W closes.             |
 +------------------------------------------------------------------------------+

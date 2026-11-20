@@ -3,21 +3,21 @@
 |  Home   Apps (2)   Prompt   Tasks   Notifications (2)  [Windows (1)]         |
 | [OK] ONLINE   guest | C: environment drive                                   |
 |      +----------------------------------------------------------------+      |
-| Pad  | > COMMAND PALETTE (Ctrl-P / Esc)                               |      |
-| Tab f| >                                                              |      |
-| Masco|                                                                |      |
-| (\_/)| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |      |
-| (o.o)|   [APP] Stop Echo  Graceful stop com.gostalgia....             |      |
-| > ^ <|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |      |
-| Charg|   [APP] Launch Notes  com.gostalgia.notes                      |      |
-| Hunge|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |      |
-| > One|   [APP] Stop Clock  Graceful stop com.gostalgia....            |      |
-| Text:|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |      |
-| [Adop|   [WINDOW] Close window  Close the Pad window (Ctrl-W)         |      |
-| Pad  |   [CMD] help  Command center help and keyb...                  |      |
-| [NW] +----------------------------------------------------------------+      |
-| [SW] [SE] (disabled)                                                         |
-| waiting                                                                      |
+| +-> P| > COMMAND PALETTE (Ctrl-P / Esc)                               |[X]-+ |
+| |Pad | >                                                              |    | |
+| |Tab |                                                                |    | |
+| |(\_/| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |    | |
+| |(o.o|   [APP] Stop Echo  Graceful stop com.gostalgia....             |    | |
+| |> ^ |   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |    | |
+| |Char|   [APP] Launch Notes  com.gostalgia.notes                      |    | |
+| |Hung|   [APP] Switch to Clock  com.gostalgia.clock | PID 31...       |    | |
+| |> On|   [APP] Stop Clock  Graceful stop com.gostalgia....            |    | |
+| |Text|   [APP] Launch Clock (relaunch)  com.gostalgia.clock (already. |    | |
+| |[Ado|   [WINDOW] Close window  Close the Pad window (Ctrl-W)         |    | |
+| |Pad |   [WINDOW] Move window  Move the Pad window with the...        |    | |
+| |[NW]+----------------------------------------------------------------+    | |
+| |waiting                                                                   | |
+| +--------------------------------------------------------------------------+ |
 |                                                                              |
 | PALETTE> Type to filter | Up/Down navigate | Enter execute | Esc close       |
 +------------------------------------------------------------------------------+

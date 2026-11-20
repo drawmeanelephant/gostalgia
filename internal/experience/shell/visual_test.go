@@ -108,13 +108,13 @@ func TestPresentationV2Snapshots(t *testing.T) {
 		{"app-v2-highcontrast", theme.HighContrast(), 80, 24, nil, nil, ""},
 		{"app-v2-small", theme.Nostalgia(), 30, 10, nil, nil, ""},
 		// An unfocused grid keeps a theme marker on the selected cell.
-		{"app-v2-mono-unfocused", theme.Monochrome(), 80, 24, nil,
+		{"app-v2-mono-unfocused", theme.Monochrome(), 80, 26, nil,
 			func(v *appView) { v.focus = 1 }, "> [NE]"},
 		// A focused cursor on a disabled cell stays visible: marker + dimmed.
 		{"app-v2-mono-disabled-cell", theme.Monochrome(), 80, 24, nil,
 			func(v *appView) { v.cell = 3 }, "> [SE] (disabled)"},
 		// Art wider than the viewport clips honestly with an ellipsis.
-		{"app-v2-clip", theme.Monochrome(), 40, 24, func(v *sdk.View) {
+		{"app-v2-clip", theme.Monochrome(), 40, 26, func(v *sdk.View) {
 			v.Blocks[0].Text = strings.Repeat("=", 60) + "\n" + v.Blocks[0].Text
 		}, nil, "=====..."},
 		// A focused grid keeps its selection marker on a small screen.

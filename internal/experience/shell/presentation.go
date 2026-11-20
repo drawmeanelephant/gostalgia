@@ -581,12 +581,6 @@ func (v *appView) scrollBlock(delta int) {
 	v.inspectTop = min(maxTop, max(0, top+delta))
 }
 
-// bodyWidth is the app body's cell width: the horizontal bound every cropped
-// block and meter fits inside.
-func (m *Model) bodyWidth() int {
-	return max(1, m.kit.PanelContentBounds(ui.Bounds{Width: m.width, Height: max(1, m.height-1)}).Width)
-}
-
 // viewPanes splits v's content height between a hinted focal block, pinned
 // meters, and the focus-windowed secondary flow. A narrow body keeps controls
 // whole and leaves the block to the inspection route.
@@ -1130,8 +1124,8 @@ func (m *Model) syncPresentationWindow() {
 	if !m.onWindows() || v.region() == nil || m.paletteOpen {
 		return
 	}
-	if r, ok := m.solve().Rect(slotBody); ok {
-		v.regionWindow, v.regionTop = m.regionWindow(v, r.Dx(), r.Dy())
+	if w, h := m.windowContentSize(v); w > 0 && h > 0 {
+		v.regionWindow, v.regionTop = m.regionWindow(v, w, h)
 	}
 }
 

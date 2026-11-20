@@ -297,7 +297,7 @@ func (m *Model) switchScreen(to screen, toggle bool) tea.Cmd {
 	}
 	if m.windowsShown {
 		// The key's own screen was not the one shown, so it cannot toggle.
-		m.windowsShown, toggle = false, false
+		m.windowsShown, m.windowMoving, toggle = false, false, false
 		m.clearHoverAll()
 	}
 	if to != screenApps {

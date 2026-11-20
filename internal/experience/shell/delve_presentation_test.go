@@ -300,18 +300,17 @@ func TestCompactFocalViewKeepsActionsReachable(t *testing.T) {
 func TestMetersStayWithinFortyCells(t *testing.T) {
 	for _, size := range [][2]int{{30, 10}, {80, 24}, {200, 60}} {
 		m := delveModel(t, size[0], size[1], delveData(24, 10))
+		w, h := m.windowContentSize(m.focusedView())
+		if w <= 0 || h <= 0 {
+			t.Fatalf("%dx%d: no window content area", size[0], size[1])
+		}
 		for _, meter := range m.focusedView().data.Meters {
-			if width := ansi.StringWidth(m.meterRow(meter, m.bodyWidth())); width > min(40, m.bodyWidth()) {
-				t.Fatalf("%dx%d: meter %s row = %d cells, body %d",
-					size[0], size[1], meter.ID, width, m.bodyWidth())
+			if width := ansi.StringWidth(m.meterRow(meter, w)); width > min(40, w) {
+				t.Fatalf("%dx%d: meter %s row = %d cells, window %d",
+					size[0], size[1], meter.ID, width, w)
 			}
 		}
-		body := m.solve()
-		rect, ok := body.Rect(slotBody)
-		if !ok {
-			t.Fatalf("%dx%d: no body rect", size[0], size[1])
-		}
-		lines, _ := m.viewLayout(m.focusedView(), rect.Dx(), rect.Dy())
+		lines, _ := m.viewLayout(m.focusedView(), w, h)
 		bars := 0
 		for _, line := range lines {
 			plain := ansi.Strip(line)
@@ -323,9 +322,9 @@ func TestMetersStayWithinFortyCells(t *testing.T) {
 			if width := ansi.StringWidth(plain[open+1 : close]); width > 40 {
 				t.Fatalf("%dx%d: meter bar = %d cells: %q", size[0], size[1], width, plain)
 			}
-			if width := ansi.StringWidth(plain); width > min(40, m.bodyWidth()) {
-				t.Fatalf("%dx%d: meter line = %d cells, body %d: %q",
-					size[0], size[1], width, m.bodyWidth(), plain)
+			if width := ansi.StringWidth(plain); width > min(40, w) {
+				t.Fatalf("%dx%d: meter line = %d cells, window %d: %q",
+					size[0], size[1], width, w, plain)
 			}
 		}
 		// The split layouts show pinned vitals; 30x10 spends its single

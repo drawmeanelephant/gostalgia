@@ -21,9 +21,14 @@ func (m *Model) showWindow(v *appView) *appView {
 	if v.values == nil {
 		v.values = map[string]string{}
 	}
+	if v.epoch == 0 {
+		// New windows cascade from the one opened last, by epoch.
+		m.viewEpoch++
+		v.epoch = m.viewEpoch
+	}
 	id := windows.ID(v.id)
 	m.dropWindow(id)
-	if err := m.windows.Open(windows.Window{ID: id, Title: viewText(v.data.Title), Bounds: m.windowBounds()}); err != nil {
+	if err := m.windows.Open(windows.Window{ID: id, Title: viewText(v.data.Title), Bounds: m.placeWindow()}); err != nil {
 		panic(err)
 	}
 	m.views[id] = v

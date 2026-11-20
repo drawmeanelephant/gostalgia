@@ -62,8 +62,8 @@ func (m *Model) paletteItems() []paletteItem {
 		}
 	}
 
-	// Windows. Close window is the keyboard's way to Ctrl-W for terminals
-	// that send it elsewhere.
+	// Windows. Close window and Move window are the keyboard's way to
+	// Ctrl-W and Alt-arrows for terminals that send them elsewhere.
 	if v := m.focusedView(); v != nil {
 		id := windows.ID(v.id)
 		items = append(items, paletteItem{
@@ -72,6 +72,14 @@ func (m *Model) paletteItems() []paletteItem {
 			Detail: "Close the " + viewText(v.data.Title) + " window (Ctrl-W)",
 			Action: func(m *Model) tea.Cmd { return m.closeWindow(id) },
 		})
+		if m.floatingWindows() {
+			items = append(items, paletteItem{
+				Tag:    "WINDOW",
+				Title:  "Move window",
+				Detail: "Move the " + viewText(v.data.Title) + " window with the arrow keys (Alt-arrows)",
+				Action: func(m *Model) tea.Cmd { return m.startMovingWindow() },
+			})
+		}
 	}
 
 	// Commands

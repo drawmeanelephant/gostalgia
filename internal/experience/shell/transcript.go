@@ -133,6 +133,8 @@ func (l transcriptLook) style(e entry) string {
 // new kit's styles, from their kept text and kind, without moving.
 func (m *Model) setKit(k ui.Kit) {
 	m.kit = k
+	// The new kit's borders and padding may move the body.
+	m.bodyKnown = bodyMemo{}
 	m.syncMotion()
 	look := transcriptLookOf(k)
 	same := look.id == m.transcriptLook.id
