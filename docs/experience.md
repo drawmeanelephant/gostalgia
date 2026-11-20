@@ -202,8 +202,11 @@ autodetection or host environment heuristics:
 
 ### Finite per-session motion (Issue #213)
 
-The contract permits only event-triggered transitions of **200 ms or less**, with frame
-commands scheduled only while an effect is active. The implemented subset is deliberately
+The contract permits only event-triggered transitions of **400 ms or less** (raised from
+200 ms by #245), with frame commands scheduled only while an effect is active. The bounded
+celebration burst and opt-in screensaver in
+[Motion contract extensions](#motion-contract-extensions-issue-245) are the only exceptions.
+The implemented subset is deliberately
 one candidate from the approved list: a **160 ms `fx.Shake` of the status badge when an
 application launch fails**, whether the failure comes from a typed `launch`/`run` command,
 the launcher, or a palette action. It starts at progress zero, finishes at progress one,
@@ -225,7 +228,37 @@ in Monochrome, HighContrast, or HighContrastLight.
 An idle shell starts no decorative goroutine, clock, spinner, permanent animation loop, or
 new frame command. The existing 500 ms process/configuration/log refresh and notification
 expiry ticks remain functional polling, not animation. A completed failed-launch shake does
-not restart on later renders or polls.
+not restart on later renders or polls. The opt-in screensaver approved in #245 is the only
+permitted exception, and it is not implemented yet.
+
+### Motion contract extensions (Issue #245)
+
+[#245](https://github.com/drawmeanelephant/gostalgia/issues/245) records the maintainer's
+decision on four proposed extensions. None of them is implemented yet; each approved item
+lists the bounds its implementation must meet. ReducedMotion stays a hard off-switch for all
+of them: under ReducedMotion none of them starts, and turning ReducedMotion on during one ends
+it at once in the static frame. Each belongs to one shell model, so local and SSH-attached
+shells keep independent clocks, settings, and state.
+
+- **Transition budget: approved, raised from 200 ms to 400 ms.** Ordinary transitions (for
+  example palette, dialog, toast, or startup reveals) may run for up to 400 ms. They stay
+  event-triggered and finite, schedule frames only while active, and remove their transition
+  node at progress one. Effects that already fit in 200 ms need no change.
+- **Celebration burst: approved as the only effect longer than 400 ms.** An `fx.Burst`-style
+  celebration may run for at most 1.5 s. Only rare, named successes trigger it: the first
+  successful app launch in a shell session, a Delve victory, or a `reap` that clears the
+  process table. Each occurrence fires at most once, and only one celebration runs at a
+  time. It draws in an overlay layer and never moves layout or takes focus. Input is never
+  delayed or consumed: keys and clicks act on the shell as usual and also end the burst early.
+- **Idle screensaver: approved, opt-in only.** It stays off unless `accessibility.screensaver`
+  is `true`, and the built-in default is off. It starts only after a configured idle period
+  with no input. One timer, re-armed by input, detects idleness, so no new polling is added.
+  It is the only permitted decorative loop: it schedules frames only while shown, at no more
+  than 10 frames per second. Any key, paste, or mouse report dismisses it at once and is
+  consumed, so the dismissing input never reaches the shell. It hides the screen underneath
+  but never changes it.
+- **System sound: rejected.** The shell plays no boot beep, error-toast chime, or other system
+  sound. Apps keep the existing capability-gated `sound/play` route.
 
 ## Components
 
