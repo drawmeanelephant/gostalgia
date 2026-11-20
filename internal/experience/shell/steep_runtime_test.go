@@ -469,6 +469,10 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		if !h.IsAltScreen() {
 			t.Fatal("shell did not enter the alternate screen")
 		}
+		// Interrupt a settled frame, not the startup reveal. ConPTY re-renders
+		// the screen and writes ESC[m only when its pen still holds a style, so
+		// a reveal frame ending in default cells hides the reset on Windows.
+		h.WaitSettle()
 		h.KeyCtrlC()
 		if status := h.ExitStatus(); status != 0 {
 			t.Fatalf("Ctrl-C exit status = %d, want 0", status)
