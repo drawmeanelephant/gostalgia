@@ -14,9 +14,9 @@ The experimental window service in `internal/experience/experimental/windows`
 keeps window identity, titles, bounds, focus, z-order, and lifecycle separate
 from any toolkit. `Service` changes state only through `Open`, `Focus`, `Move`,
 and `Close`, and it publishes `window.opened`, `window.focused`,
-`window.moved`, and `window.closed` on the existing `internal/events` bus. The bloom adapter draws each window as an
-opaque layer with a static shadow and a title bar that places `[X]` first
-(#237). The Gio adapter implements the same service, which is how #216 showed
+`window.moved`, and `window.closed` on the existing `internal/events` bus.
+The bloom adapter draws each window as an opaque layer with a static shadow
+and a title bar that places `[X]` first (#237). The Gio adapter implements the same service, which is how #216 showed
 that the API does not depend on bloom. No production package imports the spike,
 and `TestNeutralAPIAndProductionDependencyBoundaries` enforces that.
 
@@ -128,8 +128,9 @@ does now: it cancels the window's in-flight action, and the app keeps running.
 Some terminals do not report Alt-arrows, or report them as other keys. So that
 every operation still works from the keyboard alone, the palette adds **Close
 window** and **Move window** items. The existing **Switch to** items list every
-running app, so they also focus any open window. **Move window** starts a move mode in which the arrow
-keys move the focused window, and Enter or Esc ends it. The help bar shows the
+running app, so they also focus any open window. **Move window** starts a
+move mode in which the arrow keys move the focused window, and Enter or Esc
+ends it. The help bar shows the
 move-mode keys while the mode lasts.
 
 ### The mouse adds nothing the keyboard lacks
