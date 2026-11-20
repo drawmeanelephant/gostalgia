@@ -60,7 +60,7 @@ Rules for updating this file (milestone syncs):
 | Packages: safe install, update, rollback, permission inspection | ✅ working | `internal/pkg` manager/archive tests; `gctl package` |
 | Recovery: portable backup, export/import, verified restore | ✅ working | `internal/recovery` tests; export omission reporting, hard-fail unreadable targets, profile-scoped restores |
 | Platform opt-ins: clipboard, shared-folder mounts, network egress | ✅ working | `internal/security.PolicyStore` operator policies; sanitized clipboard, `os.Root`-confined host mounts, host/port/HTTPS egress filters |
-| Experimental window spike: draft window service + bloom adapter, standalone `windowdemo` (not registered with the shell) | ⚠️ nonproduction spike | `go test ./internal/experience/experimental/windows/...`; Gio comparison unverified ([#216](https://github.com/drawmeanelephant/gostalgia/issues/216)) |
+| Experimental window spike: draft window service + bloom and Gio adapters, standalone `windowdemo` and tagged `giowindowdemo` (not registered with the shell) | ⚠️ nonproduction spike | `go test ./internal/experience/experimental/windows/...`; Gio adapter observed headless, native windowing compile-only ([#216](https://github.com/drawmeanelephant/gostalgia/issues/216)); production design proposed in [docs/windows.md](docs/windows.md) ([#246](https://github.com/drawmeanelephant/gostalgia/issues/246)) |
 | Cross-platform compile (darwin/linux/windows) | ✅ compiles | `GOOS=` builds in CI matrix |
 | Cross-platform behavior: CI runs the full test suite on ubuntu, macOS, and Windows runners | ✅ CI-green (Windows: full fstest skipped — see `docs/filesystem.md` metadata caveat; structural checks run everywhere) | `.github/workflows/ci.yml` |
 

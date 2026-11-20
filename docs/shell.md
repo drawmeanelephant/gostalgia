@@ -67,7 +67,7 @@ an app by itself; Monochrome renders the shell-owned hint text in ASCII.
 - **F4**: open the selected running app's data/action view. Tab/Shift-Tab moves
   focus, Enter invokes an enabled action, and ↑/↓ selects an item. Esc cancels
   busy work or returns to the prompt. F2 returns to the shelf. See
-  [the presentation contract](applications.md#7-dataaction-presentation-contract-version-1).
+  [the presentation contract](applications.md#7-dataaction-presentation-contract-versions-13).
 - **Keyboard enhancements**: the shell asks the terminal for Kitty-protocol
   event types on top of the disambiguation Bubble Tea v2 requests by default.
   Terminals negotiate support per session; a terminal that doesn't answer keeps
@@ -176,7 +176,9 @@ host, not production multiwindow support. Its actions remain local, it
 implements only the presentation elements used by the fixtures, and its 30×10
 clamped view clips content. See
 [architecture §4.6](architecture.md#46-desktop-toolkit--experimental-bloom-and-gio-adapters-decision-deferred)
-for the observed side-by-side toolkit leak inventory.
+for the observed side-by-side toolkit leak inventory, and
+[Multi-window shell design](windows.md) for the proposed production design
+(Issue #246).
 
 ## Verification and boundaries
 
