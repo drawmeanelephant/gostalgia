@@ -727,6 +727,48 @@ func TestExternalAppHangContainment(t *testing.T) {
 	}
 }
 
+// A route call into a child that never replies must be bounded even when
+// the caller's context has no deadline: without a reply deadline the
+// dispatch pins the connection's in-flight slot forever.
+func TestExternalRouteReplyDeadline(t *testing.T) {
+	old := routeReplyTimeout
+	routeReplyTimeout = 300 * time.Millisecond
+	defer func() { routeReplyTimeout = old }()
+
+	bin := getExternalBinary(t)
+	m, router := newTestManager(t)
+
+	extMan := Manifest{
+		ID:              "com.test.deadapp",
+		Name:            "Dead App",
+		Version:         "1.0.0",
+		Mode:            sdk.ModeExternal,
+		Executable:      bin,
+		Permissions:     []string{sdk.CapIPC},
+		ProtocolVersion: 1,
+	}
+	must(t, m.reg.RegisterExternal(extMan))
+
+	_, err := m.Launch(context.Background(), extMan.ID)
+	must(t, err)
+
+	adminCtx := ipc.WithCapabilities(context.Background(), security.AdminCapabilities())
+	done := make(chan ipc.Response, 1)
+	go func() {
+		done <- router.Dispatch(adminCtx, ipc.Request{Method: "app/com.test.deadapp/hang"})
+	}()
+	select {
+	case resp := <-done:
+		if resp.OK {
+			t.Fatal("route call to a wedged child unexpectedly succeeded")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("route call still waiting: no reply deadline bounds a child that never answers")
+	}
+
+	must(t, m.Stop(extMan.ID, 5*time.Second))
+}
+
 func TestExternalAppStartupFailures(t *testing.T) {
 	m, _ := newTestManager(t)
 
