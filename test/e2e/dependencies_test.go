@@ -213,6 +213,9 @@ func TestApprovedCharmBaseline(t *testing.T) {
 		// the core runtime by TestCoreDependencyBoundary.
 		"charm.land/ssh":      "v0.4.3",
 		"golang.org/x/crypto": "v0.54.0",
+		// x/sys/windows provides the Job Object API behind Windows
+		// process-tree teardown (platform/proc_windows.go only).
+		"golang.org/x/sys": "v0.49.0",
 		// bloom (layout, compositing and input for the experience layer only;
 		// docs/architecture.md §4.1). Pre-1.0 with a single maintainer and
 		// expected breaking changes, so it is pinned exactly and upgraded
