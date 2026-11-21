@@ -52,6 +52,41 @@ func waitSteepMotionBadge(t *testing.T, h *steep.Harness, want string) {
 	}))
 }
 
+// countMessages returns how many messages of type T the program has
+// recorded so far.
+func countMessages[T any](h *steep.Harness) int {
+	n := 0
+	for msg := range h.MessageHistory() {
+		if _, ok := msg.(T); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// waitMoreMessages waits until more than n messages of type T have been
+// recorded, scanning recorded history as well as live arrivals. It is the
+// race-free form of WaitLiveMessage: a message delivered before this call
+// still counts, so fast input on a loaded runner is never missed.
+func waitMoreMessages[T any](t *testing.T, h *steep.Harness, n int) {
+	t.Helper()
+	seen := 0
+	h.WaitMessageWhere(func(T) bool {
+		seen++
+		return seen > n
+	})
+}
+
+// keyPress sends key through the terminal and waits for its KeyPressMsg to
+// reach the program, which is what the waits after Key calls exist to
+// prove before the next assertion runs.
+func keyPress(t *testing.T, h *steep.Harness, key string) {
+	t.Helper()
+	before := countMessages[tea.KeyPressMsg](h)
+	h.Key(key)
+	waitMoreMessages[tea.KeyPressMsg](t, h, before)
+}
+
 // stepSteepMotion sets the injected clock to target and waits for scheduled
 // frames until satisfied reports the expected effect state. A frame left over
 // from an earlier generation advances nothing, so the loop retries with the
@@ -74,7 +109,7 @@ func stepSteepMotion(t *testing.T, h *steep.Harness, clock *fakeMotionClock, tar
 		if satisfied(progress, animating) {
 			return
 		}
-		h.WaitLiveMessage[anim.FrameMsg]()
+		waitMoreMessages[anim.FrameMsg](t, h, countMessages[anim.FrameMsg](h))
 	}
 	t.Fatal("finite motion never advanced on the injected clock")
 }
@@ -161,8 +196,9 @@ func TestSteepMotionScenarios(t *testing.T) {
 			return !animating && progress == 1
 		}
 
+		frames := countMessages[anim.FrameMsg](h)
 		h.Key("ctrl+p")
-		h.WaitLiveMessage[anim.FrameMsg]()
+		waitMoreMessages[anim.FrameMsg](t, h, frames)
 		var start string
 		h.Mutate(func(m *Model) *Model {
 			if !m.motion.overlay.Animating() || m.motion.overlay.Float() != 0 {
@@ -181,16 +217,14 @@ func TestSteepMotionScenarios(t *testing.T) {
 		stepSteepMotion(t, h, clock, base.Add(overlayRevealDuration), readOverlay, settled)
 		steepSnapshot(h, "palette-settled")
 		// Actual routed input still reaches the settled palette.
-		h.Key("down")
-		h.WaitLiveMessage[tea.KeyPressMsg]()
+		keyPress(t, h, "down")
 		h.Mutate(func(m *Model) *Model {
 			if m.paletteSelected != 1 {
 				t.Fatalf("Down in the settled palette selected %d", m.paletteSelected)
 			}
 			return m
 		})
-		h.Key("esc")
-		h.WaitLiveMessage[tea.KeyPressMsg]()
+		keyPress(t, h, "esc")
 		h.Mutate(func(m *Model) *Model {
 			if m.paletteOpen {
 				t.Fatal("Escape did not dismiss the settled palette")
@@ -202,8 +236,9 @@ func TestSteepMotionScenarios(t *testing.T) {
 		// A routed command opens the dialog; Enter on the initial Cancel is
 		// safe at the midpoint, and the settled dialog still cancels.
 		base = clock.Now()
+		frames = countMessages[anim.FrameMsg](h)
 		h.Type("shutdown").Key("enter")
-		h.WaitLiveMessage[anim.FrameMsg]()
+		waitMoreMessages[anim.FrameMsg](t, h, frames)
 		h.Mutate(func(m *Model) *Model {
 			if m.confirm == nil || m.confirm.active != confirmCancel {
 				t.Fatal("dialog did not open on Cancel")
@@ -211,8 +246,7 @@ func TestSteepMotionScenarios(t *testing.T) {
 			return m
 		})
 		stepSteepMotion(t, h, clock, base.Add(overlayRevealDuration/4), readOverlay, midReached)
-		h.Key("enter")
-		h.WaitLiveMessage[tea.KeyPressMsg]()
+		keyPress(t, h, "enter")
 		h.Mutate(func(m *Model) *Model {
 			if m.confirm != nil {
 				t.Fatal("Enter on the initial Cancel left the dialog open")
@@ -223,8 +257,7 @@ func TestSteepMotionScenarios(t *testing.T) {
 		// next scenario.
 		stepSteepMotion(t, h, clock, base.Add(overlayRevealDuration), readOverlay, settled)
 		// A typed destructive line keeps its draft for editing after Cancel.
-		h.Key("ctrl+u")
-		h.WaitLiveMessage[tea.KeyPressMsg]()
+		keyPress(t, h, "ctrl+u")
 		h.Type("echo dialog-cancelled").Key("enter").Wait("[echo #2]")
 	})
 
@@ -243,8 +276,9 @@ func TestSteepMotionScenarios(t *testing.T) {
 			})
 			return m
 		})
+		frames := countMessages[anim.FrameMsg](h)
 		h.SendProgram(tickMsg(clock.Now()))
-		h.WaitLiveMessage[anim.FrameMsg]()
+		waitMoreMessages[anim.FrameMsg](t, h, frames)
 		h.Mutate(func(m *Model) *Model {
 			if m.motion.toastID != "steep-motion-toast" || m.motion.toast.Float() != 0 {
 				t.Fatalf("toast start: id %q progress %v", m.motion.toastID, m.motion.toast.Float())
