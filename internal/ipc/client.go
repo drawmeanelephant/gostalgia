@@ -134,7 +134,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any, buffe
 			return nil, result.err
 		}
 		if !result.response.OK {
-			return nil, errors.New(result.response.Error)
+			return nil, &Error{Code: result.response.Code, Message: result.response.Error}
 		}
 		if out != nil && len(result.response.Data) > 0 {
 			if err := json.Unmarshal(result.response.Data, out); err != nil {

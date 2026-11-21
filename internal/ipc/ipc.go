@@ -8,7 +8,9 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 
 	"gostalgia/internal/security"
 )
@@ -21,12 +23,117 @@ type Request struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
-// Response is the result of one method call.
+// Response is the result of one method call. On failure, Error carries the
+// human-readable message and Code the machine-readable classification; peers
+// speaking an older protocol see the same string in Error and ignore Code.
 type Response struct {
 	ID    int64           `json:"id"`
 	OK    bool            `json:"ok"`
 	Data  json.RawMessage `json:"data,omitempty"`
 	Error string          `json:"error,omitempty"`
+	Code  string          `json:"code,omitempty"`
+}
+
+// Error codes reported on the wire. The filesystem taxonomy matches
+// vfs.ErrorCode; the rest classify transport and handler failures. Every
+// error response carries a code; "unknown" means no finer classification
+// was available.
+const (
+	CodeNotFound           = "not_found"
+	CodeAlreadyExists      = "already_exists"
+	CodeIsDir              = "is_directory"
+	CodeNotDir             = "not_directory"
+	CodeCrossMount         = "cross_mount"
+	CodePathEscape         = "path_escape"
+	CodePermissionDenied   = "permission_denied"
+	CodeReadOnly           = "read_only"
+	CodeTooLarge           = "too_large"
+	CodeInvalid            = "invalid"
+	CodeIO                 = "io"
+	CodeUnauthorized       = "unauthorized"
+	CodeUnknownMethod      = "unknown_method"
+	CodeCanceled           = "canceled"
+	CodeDeadlineExceeded   = "deadline_exceeded"
+	CodePolicyDenied       = "policy_denied"
+	CodeUnsupportedVersion = "unsupported_version"
+	CodeUnavailable        = "unavailable"
+	CodeInternal           = "internal"
+	CodeUnknown            = "unknown"
+)
+
+// Error is an IPC failure carrying a machine-readable Code alongside the
+// human-readable Message. It is produced by RequireCap and reconstructed on
+// the client side from the wire's code field.
+type Error struct {
+	Code    string
+	Message string
+	Err     error
+}
+
+func (e *Error) Error() string { return e.Message }
+
+func (e *Error) Unwrap() error {
+	if e.Err != nil {
+		return e.Err
+	}
+	return sentinelForCode(e.Code)
+}
+
+// ErrorCode exposes the wire code to the router's classification without
+// requiring callers to know the concrete type.
+func (e *Error) ErrorCode() string { return e.Code }
+
+// sentinelForCode maps a wire code to the sentinel error it stands for, so
+// errors.Is works the same on both sides of the transport.
+func sentinelForCode(code string) error {
+	switch code {
+	case CodeNotFound:
+		return fs.ErrNotExist
+	case CodeAlreadyExists:
+		return fs.ErrExist
+	case CodePermissionDenied, CodeReadOnly:
+		return fs.ErrPermission
+	case CodeInvalid, CodeIsDir, CodeNotDir, CodeCrossMount, CodePathEscape:
+		return fs.ErrInvalid
+	case CodeCanceled:
+		return context.Canceled
+	case CodeDeadlineExceeded:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// ErrorCode classifies err for the wire. An error may declare its own code
+// by implementing ErrorCode() string (as *vfs.Error and *Error do); the
+// fs and context sentinels cover the rest, and anything unclassified is
+// reported as "unknown".
+func ErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	var c interface{ ErrorCode() string }
+	if errors.As(err, &c) {
+		if code := c.ErrorCode(); code != "" {
+			return code
+		}
+	}
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return CodeNotFound
+	case errors.Is(err, fs.ErrExist):
+		return CodeAlreadyExists
+	case errors.Is(err, fs.ErrPermission):
+		return CodePermissionDenied
+	case errors.Is(err, fs.ErrInvalid):
+		return CodeInvalid
+	case errors.Is(err, context.Canceled):
+		return CodeCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return CodeDeadlineExceeded
+	default:
+		return CodeUnknown
+	}
 }
 
 // Handler serves one method. Returned errors become response errors;
@@ -73,7 +180,10 @@ func Capabilities(ctx context.Context) *security.Capabilities {
 func RequireCap(ctx context.Context, capability string) error {
 	caps := Capabilities(ctx)
 	if caps == nil || !caps.Has(capability) {
-		return fmt.Errorf("permission denied: missing capability %q", capability)
+		return &Error{
+			Code:    CodePermissionDenied,
+			Message: fmt.Sprintf("permission denied: missing capability %q", capability),
+		}
 	}
 	return nil
 }

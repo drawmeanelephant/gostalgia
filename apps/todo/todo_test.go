@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,9 +21,10 @@ var t0 = time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
 // harness models the app-private VFS partition with an injectable clock.
 // deny simulates a missing fs grant. No test sleeps: time moves via h.now.
 type harness struct {
-	now  time.Time
-	deny bool // fs/read+fs/save denied: simulates missing grants
-	seq  atomic.Int64
+	now     time.Time
+	deny    bool  // fs/read+fs/save denied: simulates missing grants
+	readErr error // if set, the next fs/read fails once with this error
+	seq     atomic.Int64
 
 	fmu   sync.Mutex // guards files; concurrent handlers share the map
 	files map[string][]byte
@@ -75,13 +75,18 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	h.fmu.Lock()
 	defer h.fmu.Unlock()
 	if h.deny {
-		return errors.New("permission denied: caller not authorized")
+		return &sdk.Error{Code: sdk.CodePermissionDenied, Message: "permission denied: caller not authorized"}
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -440,6 +445,48 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	v = h2.act(t, 1, "add_task", "", map[string]string{"new_task": "third"})
 	if findItem(v, "task_3") == nil {
 		t.Errorf("next id after reload should be task_3: %+v", v.Items)
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let the next change overwrite
+// the saved list.
+func TestTransientReadErrorNeverOverwritesSavedTasks(t *testing.T) {
+	h := newHarness(t)
+	data, _ := json.Marshal(diskState{
+		Version: stateVersion,
+		Seq:     3,
+		Tasks: []Task{
+			{ID: "task_1", Title: "renew passport", CreatedAt: t0},
+			{ID: "task_2", Title: "file taxes", CreatedAt: t0},
+			{ID: "task_3", Title: "call the vet", CreatedAt: t0},
+		},
+	})
+	h.files[statePath] = data
+	h.readErr = context.Canceled // first fs/read fails once, transiently
+
+	res, err := h.handlers["view"](context.Background(), json.RawMessage(`{"version":1}`))
+	if err != nil {
+		t.Fatalf("view: %v", err)
+	}
+	v := res.(sdk.View)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry loads the real file; an add then extends it, not replaces it.
+	v = h.act(t, 1, "add_task", "", map[string]string{"new_task": "buy milk"})
+	if findItem(v, "task_4") == nil {
+		t.Fatalf("add after transient failure = %+v", v.Items)
+	}
+	var st diskState
+	if err := json.Unmarshal(h.savedFile(t), &st); err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Tasks) != 4 {
+		t.Fatalf("%d task(s) on disk after one transient read error and one add, want 4: %+v",
+			len(st.Tasks), st.Tasks)
 	}
 }
 

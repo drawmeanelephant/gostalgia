@@ -26,13 +26,15 @@ are correlated by `id` and may arrive out of order. Event notifications have
 {"id":1,"ok":true,"data":{"msg":"hi","echoes":1}}
 ```
 
-Errors: `{"id":1,"ok":false,"error":"..."}`. Handlers may not panic through
-(`Dispatch` recovers). Frames must be smaller than 4 MiB including the
-newline. Invalid JSON, missing IDs/methods, truncated or oversized frames,
-duplicate outstanding IDs, and more than 32 outstanding requests disconnect
-the peer. Oversized responses become a small correlated error response.
-Application-level errors (unknown methods, invalid params, permission errors)
-do not disconnect it.
+Errors: `{"id":1,"ok":false,"error":"...","code":"not_found"}`. `error` is
+the human-readable message; `code` is the machine-readable classification
+and is omitted only by peers speaking the pre-code protocol (see below).
+Handlers may not panic through (`Dispatch` recovers). Frames must be
+smaller than 4 MiB including the newline. Invalid JSON, missing
+IDs/methods, truncated or oversized frames, duplicate outstanding IDs, and
+more than 32 outstanding requests disconnect the peer. Oversized responses
+become a small correlated error response. Application-level errors
+(unknown methods, invalid params, permission errors) do not disconnect it.
 
 The server dispatches handlers concurrently, with a bounded response queue
 and one socket writer. Queued replies take priority over notifications.
@@ -49,6 +51,52 @@ reference and may still run or hang; the bound keeps one wedged handler
 from blocking a cleanup path forever. Handlers run outside the router lock
 (a handler may register routes — application launch does), but a handler
 must not synchronously retract its own route.
+
+## Error codes
+
+Every error response carries two fields: `error`, the human-readable
+message, and `code`, a stable machine-readable classification. Callers
+must branch on `code`, never on the text of `error`, which exists for
+humans and may change. `code` is a new optional field; a peer that omits
+it is running the older protocol and its errors classify only as "some
+failure" — treat such errors as unclassified, not as success or absence.
+
+The filesystem codes mirror `vfs.ErrorCode`; the rest classify transport
+and handler failures. Anything unclassifiable is reported as `unknown`.
+
+| Code | Meaning |
+|---|---|
+| `not_found` | The named object does not exist. For `fs/read` this is the only code that means "no save yet" — every other code is a real failure, not absence. |
+| `already_exists` | Creation collided with an existing object. |
+| `is_directory` / `not_directory` | Path resolved to the wrong kind of node. |
+| `cross_mount` | Operation would span two mounts. |
+| `path_escape` | Path resolves outside the granted root. |
+| `permission_denied` | The caller lacks the capability or grant for this call. Persistent until granted — not transient. |
+| `read_only` | The mount does not accept writes. |
+| `too_large` | Input or output exceeded a size bound. |
+| `invalid` | Params or path are malformed. |
+| `io` | Underlying I/O failure; usually retryable. |
+| `unauthorized` | Handshake or credential validation failed (bad or revoked token). |
+| `policy_denied` | Operator policy rejected the operation (e.g. egress disabled or host not allowlisted). |
+| `unknown_method` | No route serves the requested method. |
+| `unsupported_version` | The peer cannot honor the requested protocol/presentation version; negotiate down. |
+| `canceled` / `deadline_exceeded` | The call context ended before the result. Transient — retrying is expected. |
+| `unavailable` | A bound was hit (in-flight limit, connection budget); retry after backoff. |
+| `internal` | Server-side fault: handler panic, encode failure. |
+| `unknown` | No finer classification was available. |
+
+On the Go side the codes round-trip through `ipc.Error`, `sdk.Error`, and
+`vfs.Error`: each exposes `ErrorCode() string`, and `Unwrap` restores the
+matching `io/fs` or `context` sentinel, so `errors.Is(err, fs.ErrNotExist)`
+gives the same answer in-process and over the wire.
+
+The load/save contract built on this: only `not_found` means an empty
+document legitimately does not exist. `permission_denied`/`policy_denied`
+mean storage is unreachable until the grant changes, and `canceled`,
+`io`, `too_large`, and the rest are transient or real failures. Bundled
+apps treat any non-`not_found` read failure as an honest error and stay
+unloaded, so a failed read can never masquerade as an empty save that the
+next write then persists over real data.
 
 ## Authentication
 

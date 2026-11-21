@@ -479,7 +479,7 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 		}
 		resp := m.router.Dispatch(c, ipc.Request{Method: method, Params: raw})
 		if !resp.OK {
-			return errors.New(resp.Error)
+			return &sdk.Error{Code: resp.Code, Message: resp.Error}
 		}
 		if out != nil {
 			return json.Unmarshal(resp.Data, out)
@@ -621,6 +621,7 @@ type rpcWireMessage struct {
 	OK     bool            `json:"ok,omitempty"`
 	Data   json.RawMessage `json:"data,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	Code   string          `json:"code,omitempty"`
 }
 
 func writeWireMessage(conn io.Writer, mu *sync.Mutex, msg rpcWireMessage) error {
@@ -757,6 +758,7 @@ func childWireLoop(conn net.Conn, reader *bufio.Reader, writeMu *sync.Mutex, pen
 			_ = writeWireMessage(conn, writeMu, rpcWireMessage{
 				ID:    msg.ID,
 				Error: "app: too many in-flight child requests",
+				Code:  ipc.CodeUnavailable,
 			})
 			continue
 		}
@@ -1061,6 +1063,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			ID:    authReq.ID,
 			OK:    false,
 			Error: "invalid application token",
+			Code:  ipc.CodeUnauthorized,
 		})
 		dropConn()
 		_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1130,6 +1133,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			ID:    readyReq.ID,
 			OK:    false,
 			Error: fmt.Sprintf("unsupported protocol version %d", readyParams.ProtocolVersion),
+			Code:  ipc.CodeUnsupportedVersion,
 		})
 		dropConn()
 		_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1145,6 +1149,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			ID:    readyReq.ID,
 			OK:    false,
 			Error: fmt.Sprintf("mismatched app_id %q", readyParams.AppID),
+			Code:  ipc.CodeInvalid,
 		})
 		dropConn()
 		_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1160,6 +1165,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			ID:    readyReq.ID,
 			OK:    false,
 			Error: fmt.Sprintf("too many routes declared (%d > %d)", len(readyParams.Routes), maxAppRoutes),
+			Code:  ipc.CodeInvalid,
 		})
 		dropConn()
 		_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1176,6 +1182,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 				ID:    readyReq.ID,
 				OK:    false,
 				Error: fmt.Sprintf("invalid route name %q", rName),
+				Code:  ipc.CodeInvalid,
 			})
 			dropConn()
 			_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1192,6 +1199,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			ID:    readyReq.ID,
 			OK:    false,
 			Error: fmt.Sprintf("permission denied: missing capability %q", security.CapIPC),
+			Code:  ipc.CodePermissionDenied,
 		})
 		dropConn()
 		_ = m.procs.Stop(proc.ID(), 2*time.Second)
@@ -1290,7 +1298,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 					return nil, fmt.Errorf("app: connection closed")
 				}
 				if !res.OK {
-					return nil, errors.New(res.Error)
+					return nil, &ipc.Error{Code: res.Code, Message: res.Error}
 				}
 				if len(res.Data) > 0 && !bytes.Equal(res.Data, []byte("null")) {
 					return json.RawMessage(res.Data), nil
@@ -1355,6 +1363,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			OK:    resp.OK,
 			Data:  resp.Data,
 			Error: resp.Error,
+			Code:  resp.Code,
 		}
 	}
 	go childWireLoop(conn, reader, &writeMu, &pendingMu, pendingCalls, dispatch, m.log)
