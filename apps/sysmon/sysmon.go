@@ -60,10 +60,9 @@ const (
 
 // liveStates are the states in which a process can still be terminated.
 var liveStates = map[string]bool{
-	"starting":   true,
-	"running":    true,
-	"stopping":   true,
-	"restarting": true,
+	"starting": true,
+	"running":  true,
+	"stopping": true,
 }
 
 //go:embed manifest.json
@@ -94,22 +93,20 @@ type resourceUsage struct {
 // proc/history entry shape — history entries carry the same fields plus
 // a precomputed duration string.
 type procInfo struct {
-	ID           int32         `json:"id"`
-	Name         string        `json:"name"`
-	Kind         string        `json:"kind"`
-	State        string        `json:"state"`
-	User         string        `json:"user,omitempty"`
-	SessionID    string        `json:"session,omitempty"`
-	Caps         []string      `json:"caps,omitempty"`
-	StartedAt    time.Time     `json:"started_at,omitempty"`
-	ExitedAt     time.Time     `json:"exited_at,omitempty"`
-	Duration     string        `json:"duration,omitempty"`
-	Err          string        `json:"error,omitempty"`
-	ExitCode     int           `json:"exit_code,omitempty"`
-	RestartCount int           `json:"restart_count,omitempty"`
-	CrashLoop    bool          `json:"crash_loop,omitempty"`
-	Isolation    string        `json:"isolation,omitempty"`
-	Resources    resourceUsage `json:"resources"`
+	ID        int32         `json:"id"`
+	Name      string        `json:"name"`
+	Kind      string        `json:"kind"`
+	State     string        `json:"state"`
+	User      string        `json:"user,omitempty"`
+	SessionID string        `json:"session,omitempty"`
+	Caps      []string      `json:"caps,omitempty"`
+	StartedAt time.Time     `json:"started_at,omitempty"`
+	ExitedAt  time.Time     `json:"exited_at,omitempty"`
+	Duration  string        `json:"duration,omitempty"`
+	Err       string        `json:"error,omitempty"`
+	ExitCode  int           `json:"exit_code,omitempty"`
+	Isolation string        `json:"isolation,omitempty"`
+	Resources resourceUsage `json:"resources"`
 }
 
 // sysStatus decodes the sys/status fields the monitor renders.
@@ -497,9 +494,6 @@ func (s *Sysmon) procItem(now time.Time, p procInfo) sdk.Item {
 			parts = append(parts, "ended "+ago(now.Sub(p.ExitedAt)))
 		}
 	}
-	if p.RestartCount > 0 {
-		parts = append(parts, fmt.Sprintf("restarts %d", p.RestartCount))
-	}
 	if p.Err != "" {
 		parts = append(parts, "err: "+clip(p.Err, 120))
 	}
@@ -545,9 +539,6 @@ func detailItem(pid int32, now time.Time, snap snapshot) sdk.Item {
 	}
 	if !liveStates[p.State] {
 		parts = append(parts, "exit "+strconv.Itoa(p.ExitCode))
-	}
-	if p.RestartCount > 0 {
-		parts = append(parts, fmt.Sprintf("restarts %d", p.RestartCount))
 	}
 	if p.Err != "" {
 		parts = append(parts, "err: "+clip(p.Err, 120))
@@ -723,15 +714,7 @@ func sortProcs(procs []procInfo, field string) {
 	})
 }
 
-// stateText renders the row's state the way Task Manager does: a
-// crash-looping process reads "crash loop", a restarting one "backoff".
 func stateText(p procInfo) string {
-	if p.CrashLoop {
-		return "crash loop"
-	}
-	if p.State == "restarting" {
-		return "backoff"
-	}
 	return p.State
 }
 

@@ -546,7 +546,7 @@ directly into the shell via dedicated tabs, commands, and overlay notifications:
 The live Task Manager displays real-time supervised process state and metrics in a
 scrollable table:
 - **Columns**: Selection pointer, `PID`, `NAME`, `STATE`, `CPU` (user/system usage),
-  `MEMORY` (resident memory), and `RESTARTS`. When no process in the table
+  and `MEMORY` (resident memory). When no process in the table
   reports supported resource metrics, `CPU` and `MEMORY` are omitted rather
   than shown as dashes, and their width goes to `NAME`.
 - **Navigation & Controls**:
@@ -564,7 +564,7 @@ scrollable table:
 ### Notification Center & Toast Overlays (`internal/experience/notifications`)
 
 - **Toast Overlays**: Transient popups for process lifecycle milestones (clean
-  exits, backoff restart warnings, and crashes) are a stacked layer anchored to
+  exits and crashes) are a stacked layer anchored to
   the bottom-right corner of the body, newest last. The stack is at most 48
   cells wide and a third of the body tall, keeping the newest toasts. It
   covers what is beneath it but never resizes or scrolls the body, takes no
@@ -618,7 +618,7 @@ scrollable table:
 
 Crash receipts provide immediate post-mortem diagnostics for abnormal exits:
 - **Captured Data**: Process ID, name, exit code, state, failure reason/error,
-  restart count, timestamp, and bounded log excerpts.
+  timestamp, and bounded log excerpts.
 - **Safe Bounding & Sanitization**: Log excerpts are bounded to 25 lines and 4 KB,
   and stripped of dangerous ANSI escape sequences, DCS/OSC strings, and non-printable
   control characters using `ui.Sanitize`.

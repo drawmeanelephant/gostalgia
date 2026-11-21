@@ -74,10 +74,8 @@ func (f FocusState) String() string {
 }
 
 type procTracking struct {
-	state        string
-	exitCode     int
-	restartCount int
-	crashLoop    bool
+	state    string
+	exitCode int
 }
 
 type tickMsg time.Time
@@ -810,7 +808,7 @@ func (m *Model) syncRunningAppsFromProcesses(procs []taskmanager.ProcessRow) {
 			continue // not a registered app, or already counted
 		}
 		switch p.State {
-		case "running", "starting", "restarting":
+		case "running", "starting":
 			states[p.Name] = procAppState{running: true, pid: p.ID}
 		}
 	}
@@ -870,25 +868,23 @@ func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
 	for _, p := range procs {
 		prev, existed := m.lastProcs[p.ID]
 		m.lastProcs[p.ID] = procTracking{
-			state:        p.State,
-			exitCode:     p.ExitCode,
-			restartCount: p.RestartCount,
-			crashLoop:    p.CrashLoop,
+			state:    p.State,
+			exitCode: p.ExitCode,
 		}
 
 		if !existed {
 			continue
 		}
 
-		crashed := (p.State == "failed" || (p.State == "stopped" && p.ExitCode != 0) || p.CrashLoop)
-		wasCrashed := (prev.state == "failed" || (prev.state == "stopped" && prev.exitCode != 0) || prev.crashLoop)
+		crashed := (p.State == "failed" || (p.State == "stopped" && p.ExitCode != 0))
+		wasCrashed := (prev.state == "failed" || (prev.state == "stopped" && prev.exitCode != 0))
 
-		if crashed && (!wasCrashed || p.RestartCount > prev.restartCount) {
+		if crashed && !wasCrashed {
 			reason := p.Error
 			if reason == "" {
 				reason = fmt.Sprintf("Process exited with code %d", p.ExitCode)
 			}
-			receipt := receipts.New(p.ID, p.Name, p.State, p.ExitCode, reason, p.RestartCount, "")
+			receipt := receipts.New(p.ID, p.Name, p.State, p.ExitCode, reason, "")
 			m.receipts.Add(receipt)
 
 			m.notifs.Record(notifications.Notification{
@@ -901,15 +897,6 @@ func (m *Model) handleProcessUpdates(procs []taskmanager.ProcessRow) tea.Cmd {
 				Timestamp: time.Now(),
 			})
 			cmds = append(cmds, m.fetchLogsForReceiptCmd(p.ID, receipt.ID))
-		} else if p.State == "restarting" && prev.state != "restarting" {
-			m.notifs.Record(notifications.Notification{
-				Title:     fmt.Sprintf("%s Backoff", p.Name),
-				Message:   fmt.Sprintf("PID %d backoff restart %d", p.ID, p.RestartCount),
-				Level:     notifications.LevelWarning,
-				Source:    "process",
-				PID:       p.ID,
-				Timestamp: time.Now(),
-			})
 		} else if p.State == "stopped" && p.ExitCode == 0 && prev.state != "stopped" && prev.state != "" {
 			m.notifs.Record(notifications.Notification{
 				Title:     fmt.Sprintf("%s Finished", p.Name),

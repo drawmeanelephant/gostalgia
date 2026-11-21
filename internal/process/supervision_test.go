@@ -45,6 +45,37 @@ func TestShutdownCheckDoesNotAcquireManagerLock(t *testing.T) {
 	}
 }
 
+// TestStopEscalatesToKillAfterGraceDeadline: a child that cannot observe a
+// graceful terminate is escalated to a tree kill once the stop deadline
+// passes — a bounded grace phase, never an open-ended wait and never an
+// instant kill.
+func TestStopEscalatesToKillAfterGraceDeadline(t *testing.T) {
+	if testing.Short() {
+		t.Skip("child process test skipped in short mode")
+	}
+	m, _ := newTestManager(t)
+	p, err := m.StartChild(context.Background(), Spec{
+		Name: "term-immune",
+		Args: childHelperArgs(t),
+		Env:  childHelperEnv("term_immune"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	start := time.Now()
+	if err := m.Stop(p.ID(), 300*time.Millisecond); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed < 200*time.Millisecond {
+		t.Fatalf("stop returned in %s: child killed instantly, no grace phase ran", elapsed)
+	}
+	if info := p.Info(); info.State != StateStopped {
+		t.Errorf("state = %q, want stopped after kill escalation", info.State)
+	}
+}
+
 // TestStopAlreadyStoppedProcess: Stop on a process that already exited on
 // its own returns cleanly instead of erroring or hanging.
 func TestStopAlreadyStoppedProcess(t *testing.T) {

@@ -10,7 +10,7 @@ The environment's process model lives in `internal/process`.
 | Mechanism | goroutine + cancellable context | `os/exec` + `CommandContext` |
 | Isolation | logical only (a panic can affect the runtime) | host OS process |
 | Exit status | error returned by `Run` | exit code, signal status |
-| Stop semantics | context cancellation + timeout | context-driven kill + timeout |
+| Stop semantics | context cancellation + timeout | graceful signal + stop deadline, then tree kill |
 
 The distinction is explicit in the API (`process.Kind`), in `Spec`, in `Info`,
 in IPC payloads, and in `gctl ps` output. Nothing treats a goroutine as an OS
@@ -18,43 +18,45 @@ process.
 
 ## Lifecycle
 
-States: `starting → running → restarting → stopping → stopped` (or `failed`, `crashloop`).
+States: `starting → running → stopping → stopped` (or `failed`).
 
 - `Manager.StartInProc(ctx, spec, run)` — starts in-process logic; `run` must
-  honor `p.Context()`. Supervised by the manager according to its restart policy.
+  honor `p.Context()`. Each process runs once under the manager's supervision.
 - `Manager.StartChild(ctx, spec)` — spawns `spec.Args` in an isolated process
   group, inheriting or replacing the environment (`spec.Env`), optional working
   directory.
-- `Manager.Stop(id, timeout)` — sets `stopping`, cancels, terminates child
-  process trees, and waits up to the timeout. Suppresses any automatic restarts.
+- `Manager.Stop(id, timeout)` — sets `stopping`, then delivers the graceful
+  stop signal for the process kind and waits up to the timeout for the process
+  to exit on its own before escalating to a tree kill.
 - Exited processes record exit diagnostics in bounded history buffer; inactive
   in-memory processes are reaped manually via `Reap()` or automatically when
   inactive counts exceed limits.
 
-## Supervision, restart policies, and crash-loop protection
+## Supervision and the stop contract
 
-The process manager provides automated supervision for both `inproc` and `child`
-processes configured via `process.SupervisionConfig`:
+The process manager supervises every process for its whole lifetime. Each
+process runs exactly once — there is no automatic restart policy: an exited
+process transitions to `stopped` or `failed`, and restarting an application is
+an app-manager concern that re-runs the full launch path.
 
-- **Restart policies (`RestartPolicy`):**
-  - `RestartNever` (default): run once; failure transitions to `failed`, normal exit to `stopped`.
-  - `RestartAlways`: automatically restart on any exit, unless stopped by operator or system shutdown.
-  - `RestartOnFailure`: restart only on unexpected exit (non-zero exit code or run error). Clean exits terminate in `stopped`.
-- **User stop & shutdown suppression:** Explicit calls to `Stop(id)` or `StopAll()`
-  flag the process as operator-stopped and cancel the master context, ensuring
-  no restart loops occur when a service is deliberately stopped.
+- **Single run:** Failure transitions to `failed`, a normal exit to `stopped`,
+  and an operator stop to `stopped`. Nothing re-runs a finished process.
+- **Graceful stop phase:** `Stop` first delivers the graceful signal for the
+  process kind and waits up to the timeout for a voluntary exit:
+  - `inproc`: the process context is canceled; `run` must honor it.
+  - external app children: the child's IPC connection is closed, so the SDK's
+    read loop sees EOF, cancels the app context, returns from `Run`, and calls
+    `Instance.Stop(ctx)` — state persisted in `Stop` is not lost.
+  - other children: `platform.TerminateProcessTree` sends `SIGTERM` to the
+    child's process group on Unix. (Windows has no graceful group signal for
+    detached children; external apps still stop gracefully via the conn close.)
+- **Kill escalation:** If the stop deadline passes without an exit,
+  `KillProcessTree` ends the whole tree — `SIGKILL` to the process group on
+  Unix, the child's Job Object on Windows.
 - **Shutdown gate:** Once `BeginShutdown`/`StopAll` marks the manager as
   draining, `StartInProc` and `StartChild` refuse to register new processes
   (callers undo the refused start), so no process can be created during or
   after the shutdown sequence and slip past `StopAll` as an orphan.
-- **Crash loop cutoff:** Tracks restarts within a sliding time window
-  (`Window`, default 1 minute). If restart attempts exceed `MaxRestarts`
-  (default 3) within that window, the process transitions to `crashloop` state
-  and halts further restarts with an explicit error description.
-- **Exponential backoff:** Restarts back off exponentially starting from
-  `InitialBackoff` (default 100ms) up to `MaxBackoff` (default 5s) by
-  `BackoffFactor` (default 2.0). If stopped during backoff, the wait aborts
-  immediately and transitions cleanly to `stopped`.
 
 ## Process tree isolation and cleanup
 
@@ -63,10 +65,15 @@ descendants are managed via platform process group adapters (`platform.SetupProc
 and `platform.KillProcessTree`):
 
 - **Process group isolation:** Child processes are launched in their own process
-  group (`Setpgid: true` on Unix).
+  group (`Setpgid: true` on Unix). On Windows each started child is enrolled in
+  a dedicated Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, so it and
+  every descendant it spawns die together; the assignment happens right after
+  `cmd.Start`, so a descendant spawned in the first instructions can outlive
+  the job — that bounded startup window is the only gap.
 - **Descendant termination:** On `Stop()` or shutdown, `KillProcessTree` sends
-  `SIGKILL` to `-pid` (the process group), killing any background workers or
-  grandchildren that remained in the child's process group. The group signal
+  `SIGKILL` to `-pid` (the process group) on Unix, or terminates the child's
+  Job Object on Windows, killing any background workers or grandchildren that
+  remained in the tree. The group signal
   is only sent while the group provably still belongs to the child (alive or
   unreaped zombie, or a group outliving a freed leader pid), so a pgid
   recycled after `Wait` cannot redirect the kill to an unrelated group.
@@ -81,7 +88,7 @@ and `platform.KillProcessTree`):
 ## Bounded exit history and process reaping
 
 - **Bounded history buffer:** A thread-safe, bounded ring buffer (`HistoryEntry`)
-  records terminal states, exit codes, durations, restart counts, and error
+  records terminal states, exit codes, durations, and error
   diagnostics for terminated processes. Default capacity is 100 entries
   (`DefaultMaxHistory`), evicting the oldest entries when full.
 - **Process reaping:** Live process structs can be pruned from memory via
@@ -93,7 +100,6 @@ and `platform.KillProcessTree`):
 The `proc/list` IPC endpoint returns complete `process.Info` snapshots,
 including:
 - `id`, `name`, `kind`, and `state`
-- `restart_count` and `crash_loop` boolean indicators
 - `session` and `user` ownership
 - `caps` (granted capabilities snapshot)
 - `started_at` and `exited_at` timestamps
@@ -142,15 +148,15 @@ bounded memory ring buffers (`process.RingBuffer`) defaulting to 64KB per stream
 ### Diagnostics and presentation
 
 Exit codes, timings, and logs are integrated across developer and interactive tools:
-- `gctl ps`: displays `PID`, `NAME`, `KIND`, `STATE`, `RESTARTS` (with crashloop indicator), `EXIT` code, and runtime `TIME` duration.
-- `gctl history`: displays bounded exit history, terminal states, restart counts, run durations, and exit errors.
+- `gctl ps`: displays `PID`, `NAME`, `KIND`, `STATE`, `EXIT` code, and runtime `TIME` duration.
+- `gctl history`: displays bounded exit history, terminal states, run durations, and exit errors.
 - `gctl reap`: manually reaps inactive process records from the runtime.
 - `gctl logs <pid> [tail]`: displays process diagnostics, stream byte metrics, drop counters, and captured output with terminal control-character sanitization.
 - Charm shell `ps`: displays process names, states with exit codes, run durations, and capability grants.
 - Charm shell `logs <pid> [tail]`: displays process diagnostics, byte counts, and sanitized stdout/stderr output.
 - Live Task Manager (`F5` or `tasks`/`taskmanager`/`top`): full-screen interactive process table with real-time resource usage, log inspection modal, termination (`x`), and inactive process reaping (`r`).
 - Crash Receipts (`receipt [pid]`): post-mortem exit snapshots for failed processes containing exit codes, failure causes, and bounded, sanitized log excerpts.
-- Notification Center (`F6` or `notifications`/`alerts`): captures process crash, backoff, and completion events with transient toast overlays above the prompt and Do-Not-Disturb (`dnd`) toggle.
+- Notification Center (`F6` or `notifications`/`alerts`): captures process crash and completion events with transient toast overlays above the prompt and Do-Not-Disturb (`dnd`) toggle.
 
 ## Events
 
