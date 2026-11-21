@@ -605,6 +605,15 @@ func (v *VFS) Restore(trashID, dst string, overwrite bool) (string, error) {
 		return "", &Error{Op: "restore", Path: trashID, Code: ErrIO, Err: err, Message: "corrupt trash metadata"}
 	}
 
+	// The payload location is derived from the trash ID and the files/<id>/
+	// tree. The metadata blob — including any recorded trash_path — is
+	// advisory: it is an ordinary document writable through the filesystem,
+	// so it must never select the move source.
+	payloadPath, err := v.trashPayload(trashDir, trashID, entry.Name)
+	if err != nil {
+		return "", err
+	}
+
 	target := entry.OriginalPath
 	if dst != "" {
 		target = dst
@@ -616,7 +625,7 @@ func (v *VFS) Restore(trashID, dst string, overwrite bool) (string, error) {
 
 	if !overwrite {
 		if _, err := v.Stat(target); err == nil {
-			return "", &Error{Op: "restore", Path: entry.TrashPath, Dest: target, Code: ErrExist, Message: "destination already exists"}
+			return "", &Error{Op: "restore", Path: payloadPath, Dest: target, Code: ErrExist, Message: "destination already exists"}
 		}
 	}
 
@@ -627,7 +636,7 @@ func (v *VFS) Restore(trashID, dst string, overwrite bool) (string, error) {
 		}
 	}
 
-	if err := v.Move(entry.TrashPath, target, overwrite); err != nil {
+	if err := v.Move(payloadPath, target, overwrite); err != nil {
 		return "", err
 	}
 
@@ -635,6 +644,46 @@ func (v *VFS) Restore(trashID, dst string, overwrite bool) (string, error) {
 	_ = v.RemoveAll(fmt.Sprintf("%s/files/%s", trashDir, trashID))
 
 	return target, nil
+}
+
+// trashPayload resolves the stored payload for trashID from the
+// files/<id>/ tree itself, never from recorded metadata. A single stored
+// item is used directly; when the item directory holds several entries the
+// advisory name disambiguates. The resolved path is verified to stay inside
+// the files/ tree.
+func (v *VFS) trashPayload(trashDir, trashID, name string) (string, error) {
+	filesDir := trashDir + "/files"
+	itemDir := filesDir + "/" + trashID
+	payloads, err := v.ReadDir(itemDir)
+	if err != nil {
+		return "", &Error{Op: "restore", Path: trashID, Code: ErrNotFound, Err: err, Message: "trash payload not found"}
+	}
+	var payloadPath string
+	switch len(payloads) {
+	case 0:
+		return "", &Error{Op: "restore", Path: trashID, Code: ErrNotFound, Message: "trash payload not found"}
+	case 1:
+		payloadPath = itemDir + "/" + payloads[0].Name()
+	default:
+		for _, p := range payloads {
+			if p.Name() == name {
+				payloadPath = itemDir + "/" + p.Name()
+				break
+			}
+		}
+		if payloadPath == "" {
+			return "", &Error{Op: "restore", Path: trashID, Code: ErrInvalid, Message: "trash payload is ambiguous"}
+		}
+	}
+	filesNorm, err := Normalize(filesDir)
+	if err != nil {
+		return "", err
+	}
+	payloadNorm, err := Normalize(payloadPath)
+	if err != nil || !strings.HasPrefix(payloadNorm, filesNorm+"/") {
+		return "", &Error{Op: "restore", Path: trashID, Code: ErrInvalid, Message: "trash payload resolves outside the trash tree"}
+	}
+	return "/" + payloadNorm, nil
 }
 
 func (v *VFS) ListTrash() ([]TrashEntry, error) {
