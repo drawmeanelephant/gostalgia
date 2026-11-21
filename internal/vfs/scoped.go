@@ -49,8 +49,8 @@ func (s *ScopedVFS) check(op, envPath string, mode AccessMode) error {
 	var authorizedRoot string
 	if IsAppPrivatePath(s.appID, cleanPath) {
 		authorizedRoot = AppDataDir(s.appID)
-	} else if s.vfs.grants != nil {
-		if g, ok := s.vfs.grants.FindMatchingGrant(s.appID, cleanPath); ok {
+	} else if gs := s.vfs.Grants(); gs != nil {
+		if g, ok := gs.FindMatchingGrant(s.appID, cleanPath); ok {
 			authorizedRoot = g.Path
 		}
 	}
@@ -61,6 +61,53 @@ func (s *ScopedVFS) check(op, envPath string, mode AccessMode) error {
 		}
 	}
 	return nil
+}
+
+// checkTree verifies bulk-operation authorization for envPath. Beyond the
+// per-path check, a directory operand reads or mutates every descendant
+// beneath it, so a non-recursive grant covering only the directory entry
+// is not enough: the operation is denied unless app-private storage, a
+// shared host mount, or a recursive grant covers the whole subtree.
+func (s *ScopedVFS) checkTree(op, envPath string, mode AccessMode, dir bool) error {
+	if err := s.check(op, envPath, mode); err != nil {
+		return err
+	}
+	if dir && !s.coversSubtree(envPath, mode) {
+		return &Error{
+			Op:      op,
+			Path:    envPath,
+			Code:    ErrPermission,
+			Message: fmt.Sprintf("permission denied: bulk operation on directory %q requires a recursive grant (a non-recursive grant covers only the directory itself)", envPath),
+		}
+	}
+	return nil
+}
+
+// coversSubtree reports whether appID may perform mode on envPath and every
+// descendant beneath it.
+func (s *ScopedVFS) coversSubtree(envPath string, mode AccessMode) bool {
+	norm, err := Normalize(envPath)
+	if err != nil {
+		return false
+	}
+	cleanPath := "/" + norm
+	if IsAppPrivatePath(s.appID, cleanPath) {
+		return true
+	}
+	if isShared, _, _ := s.vfs.SharedHostInfo(cleanPath); isShared {
+		return true
+	}
+	if gs := s.vfs.Grants(); gs != nil {
+		return gs.CoversSubtree(s.appID, cleanPath, mode)
+	}
+	// No grant store: the VFS is unscoped, matching CheckAccess.
+	return true
+}
+
+// isDir reports whether envPath exists and is a directory.
+func (s *ScopedVFS) isDir(envPath string) bool {
+	info, err := s.vfs.Stat(envPath)
+	return err == nil && info.IsDir()
 }
 
 // checkSymlinkConfinement verifies that the resolved host path does not escape the authorized root.
@@ -185,8 +232,8 @@ func (s *ScopedVFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if err := s.check("readdir", name, AccessRead); err != nil {
 		// If direct access denied, check if this is an ancestor directory
 		// containing explicitly granted subpaths (principal-aware view)
-		if s.vfs.grants != nil {
-			grants := s.vfs.grants.List(s.appID)
+		if gs := s.vfs.Grants(); gs != nil {
+			grants := gs.List(s.appID)
 			var matchingSubEntries map[string]bool
 			for _, g := range grants {
 				if g.Revoked {
@@ -301,7 +348,7 @@ func (s *ScopedVFS) Remove(name string) error {
 	if norm == "apps/data" || norm == "apps/data/"+s.appID {
 		return &Error{Op: "remove", Path: name, Code: ErrInvalid, Message: "cannot remove app private storage root"}
 	}
-	if err := s.check("remove", name, AccessReadWrite); err != nil {
+	if err := s.checkTree("remove", name, AccessReadWrite, s.isDir(name)); err != nil {
 		return err
 	}
 	return s.vfs.Remove(name)
@@ -315,7 +362,7 @@ func (s *ScopedVFS) RemoveAll(name string) error {
 	if norm == "apps/data" || norm == "apps/data/"+s.appID {
 		return &Error{Op: "removeall", Path: name, Code: ErrInvalid, Message: "cannot remove app private storage root"}
 	}
-	if err := s.check("removeall", name, AccessReadWrite); err != nil {
+	if err := s.checkTree("removeall", name, AccessReadWrite, s.isDir(name)); err != nil {
 		return err
 	}
 	return s.vfs.RemoveAll(name)
@@ -337,20 +384,26 @@ func (s *ScopedVFS) RenameOpt(oldPath, newPath string, overwrite bool) error {
 	if oldNorm == "apps/data" || oldNorm == "apps/data/"+s.appID || newNorm == "apps/data" || newNorm == "apps/data/"+s.appID {
 		return &Error{Op: "rename", Path: oldPath, Dest: newPath, Code: ErrInvalid, Message: "cannot rename app private storage root"}
 	}
-	if err := s.check("rename", oldPath, AccessReadWrite); err != nil {
+	// Renaming a directory relocates its whole subtree: both ends need
+	// coverage for every descendant, not just the directory entry.
+	dir := s.isDir(oldPath)
+	if err := s.checkTree("rename", oldPath, AccessReadWrite, dir); err != nil {
 		return err
 	}
-	if err := s.check("rename", newPath, AccessReadWrite); err != nil {
+	if err := s.checkTree("rename", newPath, AccessReadWrite, dir); err != nil {
 		return err
 	}
 	return s.vfs.RenameOpt(oldPath, newPath, overwrite)
 }
 
 func (s *ScopedVFS) Copy(src, dst string, overwrite bool) error {
-	if err := s.check("copy", src, AccessRead); err != nil {
+	// Copying a directory reads every descendant of src and writes a mirror
+	// of them beneath dst: both need coverage for the whole subtree.
+	dir := s.isDir(src)
+	if err := s.checkTree("copy", src, AccessRead, dir); err != nil {
 		return err
 	}
-	if err := s.check("copy", dst, AccessReadWrite); err != nil {
+	if err := s.checkTree("copy", dst, AccessReadWrite, dir); err != nil {
 		return err
 	}
 	if IsAppPrivatePath(s.appID, dst) {
@@ -360,10 +413,13 @@ func (s *ScopedVFS) Copy(src, dst string, overwrite bool) error {
 }
 
 func (s *ScopedVFS) Move(src, dst string, overwrite bool) error {
-	if err := s.check("move", src, AccessReadWrite); err != nil {
+	// Moving a directory removes the whole subtree at src and recreates it
+	// beneath dst: both need coverage for every descendant.
+	dir := s.isDir(src)
+	if err := s.checkTree("move", src, AccessReadWrite, dir); err != nil {
 		return err
 	}
-	if err := s.check("move", dst, AccessReadWrite); err != nil {
+	if err := s.checkTree("move", dst, AccessReadWrite, dir); err != nil {
 		return err
 	}
 	if IsAppPrivatePath(s.appID, dst) {
@@ -373,7 +429,7 @@ func (s *ScopedVFS) Move(src, dst string, overwrite bool) error {
 }
 
 func (s *ScopedVFS) Trash(targetPath string) (*TrashEntry, error) {
-	if err := s.check("trash", targetPath, AccessReadWrite); err != nil {
+	if err := s.checkTree("trash", targetPath, AccessReadWrite, s.isDir(targetPath)); err != nil {
 		return nil, err
 	}
 	return s.vfs.Trash(targetPath)
@@ -399,14 +455,15 @@ func (s *ScopedVFS) Restore(trashID, dst string, overwrite bool) (string, error)
 		return "", &Error{Op: "restore", Code: ErrNotFound, Message: fmt.Sprintf("trash item %q not found", trashID)}
 	}
 
-	// Must have write access to original path
-	if err := s.check("restore", targetEntry.OriginalPath, AccessReadWrite); err != nil {
+	// Must have write access to original path; a directory entry restores a
+	// whole subtree, so it needs recursive coverage too.
+	if err := s.checkTree("restore", targetEntry.OriginalPath, AccessReadWrite, targetEntry.IsDir); err != nil {
 		return "", err
 	}
 
 	// If destination is specified, must have write access to destination
 	if dst != "" {
-		if err := s.check("restore", dst, AccessReadWrite); err != nil {
+		if err := s.checkTree("restore", dst, AccessReadWrite, targetEntry.IsDir); err != nil {
 			return "", err
 		}
 	}
@@ -459,7 +516,7 @@ func (s *ScopedVFS) PurgeTrash(trashID string) error {
 	if targetEntry == nil {
 		return &Error{Op: "purgetrash", Code: ErrNotFound, Message: fmt.Sprintf("trash item %q not found", trashID)}
 	}
-	if err := s.check("purgetrash", targetEntry.OriginalPath, AccessReadWrite); err != nil {
+	if err := s.checkTree("purgetrash", targetEntry.OriginalPath, AccessReadWrite, targetEntry.IsDir); err != nil {
 		return err
 	}
 	return s.vfs.PurgeTrash(trashID)

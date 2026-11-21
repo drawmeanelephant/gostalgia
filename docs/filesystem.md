@@ -166,6 +166,7 @@ Rather than open-ended access to the entire root, applications receive scoped vi
   - `path`: canonical environment path (e.g. `/users/guest/documents/report.txt` or `/shared/workspace`).
   - `access`: access mode (`read` or `read-write`).
   - `recursive`: whether access extends to all descendants of a directory.
+- A non-recursive grant on a directory covers the directory entry only: the app can stat and list it, but never reach its children. Bulk operations that read or mutate an entire subtree — `fs/copy`, `fs/move`, `fs/rename`, `fs/remove`, `fs/trash`, and trash `fs/restore`/`fs/trash/purge` of a directory entry — are denied on directory operands covered only by non-recursive grants. Copying, moving, or renaming a directory into a destination likewise requires recursive coverage at the destination, because descendants are created beneath it.
 - Confinement checks prevent grant expansion:
   - Path traversal (`..`) is rejected.
   - Host symlinks resolving outside the authorized root fail closed with `path_escape`.

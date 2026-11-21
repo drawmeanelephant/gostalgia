@@ -78,11 +78,20 @@ func (h *HandoffManager) Handoff(ctx context.Context, caller security.Principal,
 
 	// Check if document exists on VFS
 	if h.vfs != nil {
-		if _, err := h.vfs.Stat(cleanPath); err != nil {
+		info, err := h.vfs.Stat(cleanPath)
+		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrNotFound, Message: "document not found"}
 			}
 			return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrIO, Message: err.Error()}
+		}
+		// Handoff issues a non-recursive grant covering exactly the handed
+		// path; on a directory that shape confers only the entry itself and
+		// cannot describe subtree access honestly, so directories are not
+		// handoff targets. Directory association (browse a folder in Files)
+		// runs on the app's own standing grants instead.
+		if info.IsDir() {
+			return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrIsDir, Message: "cannot hand off a directory"}
 		}
 	}
 

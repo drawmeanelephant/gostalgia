@@ -462,6 +462,135 @@ func TestScopedVFS_TrashIsolation(t *testing.T) {
 	}
 }
 
+// A non-recursive grant on a directory authorizes the directory entry only.
+// Bulk operations that read or mutate the entire subtree — copy, move,
+// rename, remove, removeall, trash, restore — must fail unless a recursive
+// grant (or app-private/shared coverage) authorizes every descendant.
+func TestScopedGrants_BulkOpsRequireRecursiveCoverage(t *testing.T) {
+	v, _ := setupTestVFS(t)
+	must(t, v.MkdirAll("/shared/tree/sub"))
+	must(t, v.WriteFile("/shared/tree/child.txt", []byte("child"), 0o644))
+	must(t, v.WriteFile("/shared/tree/sub/inner.txt", []byte("inner"), 0o644))
+	must(t, v.MkdirAll("/shared/dst"))
+	must(t, v.MkdirAll("/shared/dst2"))
+
+	appRO := v.ForApp("appRO")
+	appRW := v.ForApp("appRW")
+	appRW2 := v.ForApp("appRW2")
+
+	// Read-only, non-recursive grant on the directory itself.
+	if _, err := v.Grants().Issue("appRO", "/shared/tree", AccessRead, false); err != nil {
+		t.Fatal(err)
+	}
+	// Read-write, non-recursive grant for the mutating ops, plus a
+	// non-recursive destination dir and a recursive one.
+	if _, err := v.Grants().Issue("appRW", "/shared/tree", AccessReadWrite, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Grants().Issue("appRW", "/shared/dst", AccessReadWrite, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Grants().Issue("appRW", "/shared/dst2", AccessReadWrite, true); err != nil {
+		t.Fatal(err)
+	}
+	// appRW2 holds the recursive source coverage for destination checks.
+	if _, err := v.Grants().Issue("appRW2", "/shared/tree", AccessReadWrite, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Grants().Issue("appRW2", "/shared/dst", AccessReadWrite, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// The granted directory itself is listable ...
+	if _, err := appRO.ReadDir("/shared/tree"); err != nil {
+		t.Fatalf("readdir on granted directory: %v", err)
+	}
+	// ... but descendants are not covered by the grant.
+	if _, err := appRO.ReadFile("/shared/tree/child.txt"); err == nil {
+		t.Fatal("read of uncovered descendant succeeded under non-recursive grant")
+	}
+
+	// Copy would exfiltrate the whole subtree into private storage.
+	err := appRO.Copy("/shared/tree", "/apps/data/appRO/tree-copy", true)
+	if err == nil {
+		t.Fatal("copy of subtree under non-recursive grant succeeded")
+	}
+	var vErr *Error
+	if !errors.As(err, &vErr) || vErr.Code != ErrPermission {
+		t.Fatalf("copy subtree: expected ErrPermission, got %v", err)
+	}
+
+	// Mutating bulk ops on the subtree must all be denied.
+	if err := appRW.Move("/shared/tree", "/apps/data/appRW/tree-moved", true); err == nil {
+		t.Fatal("move of subtree under non-recursive grant succeeded")
+	}
+	if err := appRW.Remove("/shared/tree"); err == nil {
+		t.Fatal("remove of subtree under non-recursive grant succeeded")
+	}
+	if err := appRW.RemoveAll("/shared/tree"); err == nil {
+		t.Fatal("removeall of subtree under non-recursive grant succeeded")
+	}
+	if _, err := appRW.Trash("/shared/tree"); err == nil {
+		t.Fatal("trash of subtree under non-recursive grant succeeded")
+	}
+
+	// A directory rename under only a non-recursive grant must be denied
+	// even when the destination is covered by a recursive grant.
+	if err := appRW.Rename("/shared/tree", "/shared/dst2/tree"); err == nil {
+		t.Fatal("rename of subtree under non-recursive grant succeeded")
+	}
+
+	// A directory destination must be covered recursively too: bulk ops
+	// create descendants beneath it, and a non-recursive grant on the
+	// destination authorizes none of them — even with a recursively
+	// granted source.
+	if err := appRW2.Rename("/shared/tree", "/shared/dst"); err == nil {
+		t.Fatal("rename into non-recursively-granted directory succeeded")
+	}
+	if err := appRW2.Copy("/shared/tree", "/shared/dst", true); err == nil {
+		t.Fatal("copy into non-recursively-granted directory succeeded")
+	}
+	if err := appRW2.Move("/shared/tree", "/shared/dst", true); err == nil {
+		t.Fatal("move into non-recursively-granted directory succeeded")
+	}
+
+	// The subtree must be untouched.
+	if _, err := v.Stat("/shared/tree/sub/inner.txt"); err != nil {
+		t.Fatalf("subtree was modified by denied operations: %v", err)
+	}
+	if _, err := v.Stat("/shared/tree"); err != nil {
+		t.Fatalf("granted directory was removed by denied operations: %v", err)
+	}
+
+	// Recursive coverage on the source makes the same operations lawful.
+	if err := appRW2.Copy("/shared/tree", "/apps/data/appRW2/tree-copy", true); err != nil {
+		t.Fatalf("copy under recursive grant: %v", err)
+	}
+	data, err := appRW2.ReadFile("/apps/data/appRW2/tree-copy/sub/inner.txt")
+	if err != nil || string(data) != "inner" {
+		t.Fatalf("copied subtree unreadable: %v, %q", err, data)
+	}
+	if _, err := appRW.Trash("/shared/dst2"); err != nil {
+		t.Fatalf("trash under recursive grant: %v", err)
+	}
+	if err := appRW2.RemoveAll("/shared/tree"); err != nil {
+		t.Fatalf("removeall under recursive grant: %v", err)
+	}
+	if _, err := v.Stat("/shared/tree"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("recursive removeall left the directory behind")
+	}
+
+	// Single-file operands still work under non-recursive grants: a file
+	// has no descendants, so the exact-path check is the whole story.
+	must(t, v.WriteFile("/shared/flat.txt", []byte("flat"), 0o644))
+	if _, err := v.Grants().Issue("appRO", "/shared/flat.txt", AccessRead, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := appRO.Copy("/shared/flat.txt", "/apps/data/appRO/flat.txt", false); err != nil {
+		t.Fatalf("file copy under non-recursive grant: %v", err)
+	}
+}
+
 // #268: re-issuing a session grant for the same (app, path, mode, scope)
 // reuses the live grant instead of accumulating a duplicate per handoff.
 // Revocation reaps grants out of the live set into a bounded tombstone

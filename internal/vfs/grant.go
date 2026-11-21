@@ -453,3 +453,34 @@ func (s *GrantStore) FindMatchingGrant(appID, envPath string) (*Grant, bool) {
 	return nil, false
 }
 
+// CoversSubtree reports whether a live grant authorizes appID to perform
+// mode on envPath and every descendant beneath it — a recursive grant that
+// covers the path with sufficient access. Bulk operations on a directory
+// (copy, move, rename, remove, trash) read or mutate the whole subtree, so
+// a non-recursive grant on the directory itself is not enough: it confers
+// only the directory entry, never its children.
+func (s *GrantStore) CoversSubtree(appID, envPath string, mode AccessMode) bool {
+	normPath, err := Normalize(envPath)
+	if err != nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, id := range s.byApp[appID] {
+		g, ok := s.grants[id]
+		if !ok || !g.Recursive {
+			continue
+		}
+		grantNorm, err := Normalize(g.Path)
+		if err != nil {
+			continue
+		}
+		if normPath != grantNorm && !strings.HasPrefix(normPath, grantNorm+"/") {
+			continue
+		}
+		if mode == AccessRead || g.Access == AccessReadWrite {
+			return true
+		}
+	}
+	return false
+}

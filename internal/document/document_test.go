@@ -734,6 +734,26 @@ func TestHandoffSessionGrantReuseAndReaping(t *testing.T) {
 	}
 }
 
+// doc/handoff issues non-recursive single-document grants; a directory
+// handoff would mint a grant that cannot describe subtree access honestly,
+// so directories are rejected outright.
+func TestHandoffRejectsDirectory(t *testing.T) {
+	v, grants := setupTestVFS(t)
+	assoc := NewAssociationTable()
+	recents := NewRecentsStore(v, grants, "/users/guest/config/recents.json")
+	handoff := NewHandoffManager(v, grants, assoc, recents, newMockLauncher(), newMockDispatcher())
+
+	_, err := handoff.Handoff(context.Background(),
+		security.OperatorPrincipal(security.User{Name: "guest"}),
+		sdk.HandoffRequest{Version: sdk.DocumentHandoffVersion, Path: "/users/guest/documents", AppID: "com.gostalgia.files"})
+	if err == nil {
+		t.Fatal("handoff of a directory succeeded")
+	}
+	if got := len(grants.List("com.gostalgia.files")); got != 0 {
+		t.Fatalf("directory handoff minted %d grants", got)
+	}
+}
+
 func TestDocumentStoreProfileSwitch(t *testing.T) {
 	v := vfs.New(vfs.NewMem())
 	_ = v.MkdirAll("/users/guest/documents")
