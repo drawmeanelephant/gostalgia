@@ -76,6 +76,7 @@ type Runtime struct {
 	user      security.User
 	logFile   *os.File
 	hostFS    *vfs.HostFS   // closed at shutdown; Windows cannot delete an open directory tree
+	rootLock  *os.File      // exclusive root claim, held for the process lifetime
 	done      chan struct{} // closed when shutdown begins
 	completed chan struct{} // closed when shutdown finishes
 	once      sync.Once
@@ -105,6 +106,22 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 	if err != nil {
 		return nil, err
 	}
+	// Claim the root before anything mutates it. The lock is held for the
+	// process lifetime, so a second boot can never slip through the window
+	// between a probe and a write — and process death releases the claim,
+	// so a crashed instance never wedges its root.
+	rootLock, err := platform.TryLockRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			_ = rootLock.Close()
+		}
+	}()
+	if err := checkNotRunning(root); err != nil {
+		return nil, err
+	}
 	if err := InitRoot(root); err != nil {
 		return nil, err
 	}
@@ -117,6 +134,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		Bus:       events.NewBusWithLogger(log),
 		Router:    ipc.NewRouter(),
 		logFile:   logFile,
+		rootLock:  rootLock,
 		done:      make(chan struct{}),
 		completed: make(chan struct{}),
 		user:      security.User{ID: "u-guest", Name: "guest"},
@@ -254,11 +272,6 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		BootedAt:      time.Now(),
 	}
 	rt.svcCtx = svcCtx
-
-	if err := checkNotRunning(root); err != nil {
-		logFile.Close()
-		return nil, err
-	}
 
 	sm := service.NewManager(svcCtx, rt.Bus, log)
 	svcCtx.Services = sm
@@ -444,6 +457,13 @@ func (rt *Runtime) Shutdown(reason string) {
 			rt.Log.Info("shutdown complete")
 			rt.logFile.Close()
 		}
+		if rt.rootLock != nil {
+			// Released last: service stop (which removes this instance's
+			// runtime.json) must finish while the claim is still ours, so
+			// a next boot cannot write its record and then lose it to an
+			// exiting instance's cleanup.
+			_ = rt.rootLock.Close()
+		}
 		close(rt.completed)
 	})
 	<-rt.completed
@@ -474,11 +494,20 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// checkProbeTimeout bounds the auth handshake with a recorded instance.
+// A bound endpoint whose accept loop died still completes Dial but never
+// answers; that must report "occupied" quickly, not after the client's
+// 30 s default call timeout.
+const checkProbeTimeout = 2 * time.Second
+
 // checkNotRunning refuses to boot if a live environment already owns this
 // root. Anything that answers on the recorded endpoint and accepts the
 // recorded token is a live instance — including one still mid-boot, whose
-// sys routes may not be registered yet. A stale file from a dead instance
-// is ignored.
+// sys routes may not be registered yet. A bound endpoint that cannot
+// complete the handshake is occupied, not stale: it is how a sick live
+// instance (a dead accept loop, a wedged handler) presents. Only a file
+// whose endpoint does not answer — or a responsive listener that rejects
+// the recorded token outright — is ignored as stale.
 func checkNotRunning(root string) error {
 	data, err := os.ReadFile(filepath.Join(root, "runtime.json"))
 	if err != nil {
@@ -496,10 +525,17 @@ func checkNotRunning(root string) error {
 	if err != nil {
 		return nil // nothing is listening: stale file from a dead instance
 	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(checkProbeTimeout))
 	client, err := ipc.NewClient(conn, info.Token)
 	if err != nil {
-		return nil // the listener rejected the recorded token: not our instance
+		if strings.Contains(err.Error(), "unauthorized") {
+			// A responsive listener that rejected the recorded token is a
+			// foreign occupant, not the instance this root describes.
+			return nil
+		}
+		return fmt.Errorf("runtime: endpoint %s answers but cannot authenticate the recorded instance; treating root as occupied: %w", info.Endpoint, err)
 	}
-	client.Close()
+	_ = client.Close()
 	return fmt.Errorf("runtime: environment is already running (pid %d, endpoint %s)", info.PID, info.Endpoint)
 }

@@ -3,12 +3,14 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
+	"gostalgia/internal/filex"
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/service"
 	"gostalgia/platform"
@@ -104,7 +106,7 @@ func (s *IPCService) Stop(ctx context.Context) error {
 		s.listener.Close()
 	}
 	s.ctx.Router.UnhandlePrefix("events/v1/")
-	_ = os.Remove(s.runtimeFilePath())
+	s.removeRuntimeFile()
 	s.log.Info("ipc stopped", "endpoint", s.endpoint)
 	return nil
 }
@@ -114,6 +116,28 @@ func (s *IPCService) Endpoint() string { return s.endpoint }
 
 func (s *IPCService) runtimeFilePath() string {
 	return filepath.Join(s.ctx.Root, "runtime.json")
+}
+
+// removeRuntimeFile deletes the reachability record, but only while it
+// still describes this instance: pid and token must both match. A record
+// written by a different instance — a survivor of a double-boot, or a
+// newer boot on the same root — is left alone, so an exiting instance can
+// never make a live environment unreachable by gctl and unprotected by
+// the duplicate-boot guard.
+func (s *IPCService) removeRuntimeFile() {
+	path := s.runtimeFilePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var info runtimeFile
+	if err := json.Unmarshal(data, &info); err != nil {
+		return
+	}
+	if info.PID != os.Getpid() || info.Token != s.ctx.Token {
+		return
+	}
+	_ = os.Remove(path)
 }
 
 func (s *IPCService) writeRuntimeFile() error {
@@ -127,9 +151,32 @@ func (s *IPCService) writeRuntimeFile() error {
 	if err != nil {
 		return err
 	}
-	// 0600 (unix): the file embeds the IPC token; it is local trust, not
-	// a security boundary, but it should not be world-readable. On
-	// Windows the mode does not map to an ACL and the file inherits the
-	// environment directory's permissions.
-	return os.WriteFile(s.runtimeFilePath(), append(data, '\n'), 0o600)
+	// Atomic write (unique O_EXCL staging file + rename, the
+	// config.Store recipe): gctl and the next boot must never read a
+	// torn record. 0600 (unix): the file embeds the IPC token; it is
+	// local trust, not a security boundary, but it should not be
+	// world-readable. On Windows the mode does not map to an ACL and the
+	// file inherits the environment directory's permissions.
+	path := s.runtimeFilePath()
+	tmp := fmt.Sprintf("%s.tmp.%d", path, time.Now().UnixNano())
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := filex.RenameRetry(func() error {
+		return os.Rename(tmp, path)
+	}); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

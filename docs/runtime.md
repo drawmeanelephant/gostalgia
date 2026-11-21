@@ -25,23 +25,34 @@ Everything an environment owns lives under one root directory:
 
 `gostalgia init` creates the layout; `Boot` creates it idempotently.
 
+The duplicate-boot guard is an exclusive file lock at `<root>.lock` —
+beside the root, so a refused boot never creates or mutates the root. It
+is held for the process lifetime and released by close or process death,
+so a crashed instance never wedges its root.
+
 ## Boot sequence
 
 `runtime.Boot(ctx, Options)` performs, in order:
 
-1. Resolve the root (flag → `$GOSTALGIA_ROOT` → `~/.gostalgia`) and create the layout.
-2. Load `config/system.json` (missing file = empty store; defaults are in code).
-3. Open the log (stdout + `logs/gostalgia.log`; `--verbose` for debug level).
-4. Construct the event bus, IPC router, VFS (host-backed, `/tmp` mounted as memfs),
+1. Resolve the root (flag → `$GOSTALGIA_ROOT` → `~/.gostalgia`) and take the
+   exclusive `<root>.lock` — before any root mutation. A locked root fails
+   fast. Then refuse to boot if the recorded `runtime.json` still points at a
+   live instance: a stale file whose endpoint does not answer is ignored, a
+   bound endpoint that cannot complete the auth handshake counts as occupied
+   (it is how a live instance with a dead accept loop presents), and only a
+   responsive listener that rejects the recorded token is foreign.
+2. Create the layout, load `config/system.json` (missing file = empty store;
+   defaults are in code), and open the log (stdout + `logs/gostalgia.log`;
+   `--verbose` for debug level).
+3. Construct the event bus, IPC router, VFS (host-backed, `/tmp` mounted as memfs),
    process manager, session manager, app registry (+ builtin factories, + manifests
    loaded from `/apps/manifests`), and the app manager.
-5. Generate the IPC token; refuse to boot if another live environment already owns
-   the root (stale `runtime.json` whose endpoint does not answer is ignored).
-6. Register and start core services (`sys`, `process`, `fs`, `ipc`) in dependency
+4. Generate the IPC token.
+5. Register and start core services (`sys`, `process`, `fs`, `ipc`) in dependency
    order; a failed start rolls back everything already started.
-7. Create user `guest` and open `session-1`.
-8. Launch `com.gostalgia.echo` (the first application).
-9. Self-test: one in-process IPC round trip (`sys/ping`); only then is the
+6. Create user `guest` and open `session-1`.
+7. Launch `com.gostalgia.echo` (the first application).
+8. Self-test: one in-process IPC round trip (`sys/ping`); only then is the
    runtime "ready" and serving.
 
 ## Shutdown
@@ -54,7 +65,9 @@ Everything an environment owns lives under one root directory:
 4. Stop services in reverse start order (10 s stop timeout each; the ipc service
    closes the listener and drops idle connections — shutdown never hangs on a
    connected client).
-5. Remove `runtime.json`, flush and close the log file.
+5. Remove `runtime.json` — only if its pid and token still match this instance,
+   so an exiting instance never unlinks a live survivor's record — then flush
+   and close the log file, and release the `<root>.lock` claim last.
 
 Shutdown is triggered by SIGINT/SIGTERM (handled by `cmd/gostalgia`) or by the
 `sys/shutdown` IPC method.
@@ -74,7 +87,8 @@ to that profile's session. The host key is generated once at
 
 ## runtime.json
 
-Written when the IPC service starts, removed at shutdown:
+Written atomically (unique staging file + rename) when the IPC service
+starts, removed at shutdown only while it still records this instance:
 
 ```json
 {"pid": 123, "version": "0.1.0", "endpoint": "unix:///var/folders/.../gostalgia-ipc-XXXX/gostalgia-1a2b3c.sock",

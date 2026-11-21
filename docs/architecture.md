@@ -92,19 +92,23 @@ procs, apps, sessions) down to concrete services so they never import
 
 Owns boot and shutdown. Boot sequence:
 
-1. Resolve environment root (`--root` > `$GOSTALGIA_ROOT` > `~/.gostalgia`), create layout.
-2. Open configuration store (`config/system.json`).
+1. Resolve environment root (`--root` > `$GOSTALGIA_ROOT` > `~/.gostalgia`)
+   and take the exclusive `<root>.lock` claim before any root mutation —
+   the duplicate-boot guard. A stale `runtime.json` left by a dead instance
+   is ignored, but a bound endpoint that cannot complete the auth handshake
+   counts as occupied.
+2. Create layout; open configuration store (`config/system.json`).
 3. Set up logging (stdout + `<root>/logs/gostalgia.log`).
 4. Construct leaf managers: event bus, IPC router, VFS (host-backed, `/tmp` memfs mount), process manager, session manager, app registry.
 5. Register core services; start them in dependency order.
 6. IPC service listens (platform adapter) and writes `<root>/runtime.json`
-   (endpoint + auth token); guard against a second live instance.
+   (endpoint + auth token) atomically.
 7. Create default user + session; launch the builtin `com.gostalgia.echo` app.
 8. Runtime is "ready"; serves until shutdown request (signal or IPC).
 
 Shutdown is the reverse: stop apps → stop services (reverse order) → close
-IPC → remove `runtime.json` → flush logs. Idempotent, driven by
-`Runtime.Shutdown(reason)`.
+IPC → remove `runtime.json` if it still records this instance → flush logs
+→ release the root lock. Idempotent, driven by `Runtime.Shutdown(reason)`.
 
 ### 3.2 Service framework (`internal/service`) + core services (`internal/services`)
 
