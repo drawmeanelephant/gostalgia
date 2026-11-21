@@ -55,8 +55,14 @@ func newTestEnv(t *testing.T) *testEnv {
 		must(t, env.MkdirAll(dir))
 	}
 
-	cfg, err := config.Load(filepath.Join(root, "config", "system.json"))
+	// Mirror the runtime: system and user config layers are host-backed
+	// files outside the VFS tree.
+	layered, err := config.NewLayeredStore(
+		filepath.Join(root, "config", "system.json"),
+		filepath.Join(root, "vfs", "users", "guest", "config", "settings.json"),
+	)
 	must(t, err)
+	cfg := layered.SystemStore()
 
 	procs := process.NewManager(bus, log)
 	sessions := session.NewManager(bus, log)
@@ -73,6 +79,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		Root:     root,
 		Version:  "test",
 		Config:   cfg,
+		Layered:  layered,
 		Events:   bus,
 		Log:      log,
 		Router:   router,
@@ -95,6 +102,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	must(t, sm.Register(NewDocument()))
 	must(t, sm.Register(NewClipboard()))
 	must(t, sm.Register(NewNet()))
+	must(t, sm.Register(NewConfig()))
 	must(t, sm.Register(NewSession()))
 	must(t, sm.Register(NewProfile()))
 	must(t, sm.Register(NewRecovery()))
@@ -162,8 +170,8 @@ func TestSysStatus(t *testing.T) {
 	if status.Version != "test" {
 		t.Errorf("version = %q, want test", status.Version)
 	}
-	if len(status.Services) != 11 {
-		t.Errorf("services = %d, want 11", len(status.Services))
+	if len(status.Services) != 12 {
+		t.Errorf("services = %d, want 12", len(status.Services))
 	}
 	if len(status.Apps) != len(apps.Manifests()) {
 		t.Errorf("apps count = %d, want %d", len(status.Apps), len(apps.Manifests()))

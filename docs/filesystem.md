@@ -64,7 +64,7 @@ To prevent data loss and corrupted documents during crashes or write failures:
 3. The staging file is atomically renamed over the destination.
 4. **Recovery fallback:** If the atomic rename fails, the staged data is preserved as a recoverable artifact (`<file>.recover`) rather than discarded, and a structured `*vfs.Error` with `RecoverPath` is returned.
 
-Size bounds: documents are capped at `MaxDocumentSize` (16 MiB). IPC writes and saves are bounded to `MaxIPCWriteLimit` (4 MiB).
+Size bounds: documents are capped at `MaxDocumentSize` (16 MiB). IPC writes and saves are bounded to `MaxIPCWriteLimit` (4 MiB). Bulk data paths with their own documented ceilings — backup archives and restore payloads under `internal/recovery` — save through `SaveAtomicBounded`, which enforces a caller-supplied limit rather than the interactive cap.
 
 ### Copy & Move
 
