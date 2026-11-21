@@ -75,12 +75,14 @@ Size bounds: documents are capped at `MaxDocumentSize` (16 MiB). IPC writes and 
 ### Trash & Restore Lifecycle
 
 Rather than immediate unrecoverable deletion, user document flows can use the trash lifecycle:
-- **Trash Directory:** Standardized at `/users/guest/.trash` (customizable via `SetTrashDir`).
+- **Trash Directory:** Per profile at `/users/<profile_id>/.trash`. The filesystem service points the trash tree at the active profile via `SetTrashDir` and re-points it on every profile switch, so one profile's trashed items never appear in another's bin and a deleted profile's trash dies with its `/users/<id>` tree.
 - **Structure:**
-  - `/users/guest/.trash/files/<id>/<basename>`: the preserved file or directory hierarchy.
-  - `/users/guest/.trash/info/<id>.json`: metadata containing original path, trashed timestamp, file size, and directory flag.
+  - `/users/<profile_id>/.trash/files/<id>/<basename>`: the preserved file or directory hierarchy.
+  - `/users/<profile_id>/.trash/info/<id>.json`: metadata containing original path, trashed timestamp, file size, and directory flag.
+- **Trash metadata is advisory:** `info/<id>.json` is an ordinary document. Restore derives the payload location from the trash ID and the `files/<id>/` tree — never from the recorded `trash_path` — and refuses payloads that resolve outside `files/`. Profile trash trees are also ungrantable: no path grant may cover them, so applications cannot author or tamper with metadata through the ordinary filesystem.
 - **Restore:** Restores the item to its original path (or an explicit alternative destination). Parent directories are created as needed. Re-identifies collisions if `overwrite=false`.
 - **Empty & Purge:** `EmptyTrash()` empties all trashed entries and files; `PurgeTrash(id)` permanently removes an individual entry.
+- **Shared-mount items:** Items trashed from shared host mounts keep their origin policy: listing them requires `hostfs.read`, restoring or purging them requires `hostfs.write`, and the operator hostfs policy applies throughout.
 - **Safety checks:** Deleting or trashing the root, active mount points, or the trash directory itself is prohibited.
 
 ## Structured Errors
@@ -178,7 +180,10 @@ Rather than open-ended access to the entire root, applications receive scoped vi
   - Session-bound grants (`session_bound`, issued by `doc/handoff`) are bound to the receiving application's run: they are revoked when that app exits, crashes, or is stopped, and on any handoff failure after issuance.
 
 ### 3. Trash Isolation
-- Applications listing the trash (`fs/trash/list`) only see items that originated from paths they are authorized to access.
+- Trash is per profile: payloads and metadata live under the active profile's `/users/<profile_id>/.trash` and are repointed on profile switch.
+- Profile trash trees are ungrantable — no `fs/grant` may cover `/users/<id>/.trash`, so applications cannot write trash metadata or payloads directly.
+- Restore derives the payload location from the trash ID and `files/<id>/`, treating the recorded metadata as advisory.
+- Applications listing the trash (`fs/trash/list`) only see items that originated from paths they are authorized to access; items trashed from shared host mounts additionally require `hostfs.read` to list and `hostfs.write` to restore or purge.
 - Restoring or purging trash items belonging to another application or unauthorized paths is denied.
 - `EmptyTrash()` only purges the calling application's trashed entries.
 

@@ -166,7 +166,7 @@ Personal workspace profiles (`internal/profile`) provide multi-user isolation wi
 - **Profile Capabilities:** Access to profile management endpoints is guarded by capability checks:
   - `profile.read`: Required for `profile/list`, `profile/get`, and `profile/active`.
   - `profile.write`: Required for `profile/create`, `profile/update`, `profile/switch`, and `profile/delete`.
-- **Workspace Directory Isolation:** Each profile receives a segregated directory hierarchy rooted at `/users/<profile_id>/` with subdirectories for `documents`, `downloads`, `desktop`, `config`, and `.trash`. Document search indexing and recent/favorite lists are partitioned per profile.
+- **Workspace Directory Isolation:** Each profile receives a segregated directory hierarchy rooted at `/users/<profile_id>/` with subdirectories for `documents`, `downloads`, `desktop`, `config`, and `.trash`. Document search indexing, recent/favorite lists, and the trash bin are partitioned per profile: trash operations store payloads under the active profile's `.trash` tree, and profile deletion removes that tree with the rest of `/users/<profile_id>/`.
 
 ---
 
@@ -303,7 +303,9 @@ strictly disabled/internal-only and require two distinct levels of authorization
      must be explicitly mounted by an operator via `hostfs/mount`. Backed by `SharedHostFS`,
      shared mounts use Go 1.24 `os.Root` confinement to guarantee that path traversals and
      symlinks cannot escape the designated host folder root. If mounted read-only, all write
-     operations fail closed with `ErrReadOnly`.
+     operations fail closed with `ErrReadOnly`. Trash operations preserve this policy for
+     items trashed from shared mounts: `fs/trash/list` hides them without `hostfs.read`, and
+     `fs/restore`/`fs/trash/empty` refuse them without `hostfs.write`.
    - **Network egress (`net.egress`):** Outbound network access is disabled by default. When
      enabled by policy, requests via `net/fetch` are checked against operator-configured host
      whitelists (`allowed_hosts`), blacklists (`blocked_hosts`), port filters (`allowed_ports`),
