@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -194,5 +195,51 @@ func TestProfileManagerCorruptRecovery(t *testing.T) {
 	}
 	if len(mgr.List()) != 1 {
 		t.Fatalf("expected 1 profile in recovered store, got %d", len(mgr.List()))
+	}
+}
+
+// #273: after an external change to profiles.json — for example a backup
+// restore — Reload must run the same transition as Switch: hooks fire and
+// a profile.switched event is published.
+func TestProfileReloadRunsSwitchPath(t *testing.T) {
+	memFS := vfs.NewMem()
+	bus := events.NewBus()
+	mgr, err := NewManager(memFS, DefaultProfilesPath, bus, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Create("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	var prev, next string
+	mgr.OnSwitch(func(p, n Profile) { prev, next = p.ID, n.ID })
+
+	// Simulate an external writer (backup restore) flipping the active id.
+	raw, err := memFS.ReadFile("config/profiles.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	state["active_id"] = "alice"
+	b, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memFS.WriteFile("config/profiles.json", b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := mgr.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if mgr.ActiveID() != "alice" {
+		t.Fatalf("active = %q, want alice", mgr.ActiveID())
+	}
+	if prev != "guest" || next != "alice" {
+		t.Fatalf("switch hooks did not run: prev=%q next=%q", prev, next)
 	}
 }

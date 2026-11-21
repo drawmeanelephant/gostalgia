@@ -35,6 +35,11 @@ const (
 
 	// DataDirPrefix is the root folder inside the archive holding payload files.
 	DataDirPrefix = "data/"
+
+	// SystemConfigVFSPath is the logical path the backup format uses for
+	// the system preferences document. The live store is a host file
+	// outside the VFS; restores route it explicitly.
+	SystemConfigVFSPath = "/config/system.json"
 )
 
 // Manifest is the backup.json header inside every valid .gbar archive.
@@ -107,6 +112,9 @@ type RestoreReport struct {
 	SkippedCount  int      `json:"skipped_count"`
 	RestoredBytes int64    `json:"restored_bytes"`
 	Profiles      []string `json:"profiles"`
+	// Reloaded names the live stores refreshed after the restore; the
+	// service layer populates it.
+	Reloaded []string `json:"reloaded,omitempty"`
 }
 
 // PortablePath checks whether a relative archive entry name is safe and non-traversing.
