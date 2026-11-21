@@ -95,6 +95,19 @@ func (s *Store) Handoff() *HandoffManager {
 	return s.handoff
 }
 
+// Reload re-reads recents, favorites, and the search index from the VFS
+// so in-memory state reflects external changes (for example a backup
+// restore).
+func (s *Store) Reload(ctx context.Context) error {
+	s.mu.RLock()
+	recents, favorites, searcher := s.recents, s.favorites, s.searcher
+	s.mu.RUnlock()
+	_ = recents.Load()
+	_ = favorites.Load()
+	_ = searcher.RebuildIndex(ctx)
+	return nil
+}
+
 // SwitchProfile updates the persistent recents, favorites, and search paths for the new profile.
 func (s *Store) SwitchProfile(profileID string) error {
 	s.mu.Lock()
