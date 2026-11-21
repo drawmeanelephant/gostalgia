@@ -251,6 +251,59 @@ func TestNetFetchRedirectPolicyEnforcement(t *testing.T) {
 	})
 }
 
+// Alternate spellings of a blocked host must be denied on the initial request
+// and on every redirect hop: a trailing-dot DNS name resolves identically, and
+// the decimal, hexadecimal, octal, and abbreviated dotted IPv4 literal forms
+// the system resolver accepts all map to the same address.
+func TestNetFetchBlockedHostSpellings(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	capsNet := security.NewCapabilities(security.CapIPC, security.CapNetEgress)
+	op := security.OperatorPrincipal(security.User{Name: "op"})
+
+	env.ctx.Policy.Update(func(p *security.OperatorPolicy) {
+		p.Network.Enabled = true
+		p.Network.AllowInsecure = true
+		p.Network.AllowedHosts = []string{"*"}
+		p.Network.BlockedHosts = []string{"127.0.0.1", "localhost"}
+	})
+
+	spellings := []string{
+		"127.0.0.1.",         // trailing dot on an IP literal
+		"2130706433",         // bare decimal IPv4
+		"0x7f000001",         // hexadecimal IPv4
+		"0177.0.0.1",         // octal components
+		"127.1",              // abbreviated dotted quad
+		"[::ffff:127.0.0.1]", // IPv4-mapped IPv6
+		"localhost.",         // trailing-dot DNS name
+		"LOCALHOST",          // case variant
+	}
+	for _, spelling := range spellings {
+		t.Run(spelling, func(t *testing.T) {
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, "PWNED-BY-SPELLING")
+			}))
+			defer target.Close()
+			blockedURL := strings.Replace(target.URL, "127.0.0.1", spelling, 1)
+
+			hop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, blockedURL, http.StatusFound)
+			}))
+			defer hop.Close()
+
+			for _, startURL := range []string{blockedURL, hop.URL} {
+				res := env.callAs(ctx, op, capsNet, "net/fetch", map[string]any{"url": startURL})
+				if res.OK {
+					t.Fatalf("fetch to %q reached a policy-blocked host", startURL)
+				}
+				if !strings.Contains(res.Error, "blocked by policy") {
+					t.Fatalf("error = %q, want blocked-host policy denial", res.Error)
+				}
+			}
+		})
+	}
+}
+
 func TestSysService_PolicyGetAndUpdate(t *testing.T) {
 	env := newTestEnv(t)
 	ctx := context.Background()
