@@ -223,7 +223,7 @@ func notePage[T any](doc map[string]any, name string, items []T, offset int, bud
 }
 
 // maxTextResponseBytes bounds the note text one response carries once
-// JSON-encoded. The IPC frame is 4 MiB and encoding/json escapes <, >, &
+// JSON-encoded. The IPC frame is 6 MiB and encoding/json escapes <, >, &
 // and control bytes as six bytes each, so a 1 MiB note can encode to 6 MiB.
 const maxTextResponseBytes = 3 << 20
 

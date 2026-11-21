@@ -51,16 +51,16 @@ type rpcMessage struct {
 }
 
 // maxWireFrame bounds one newline-delimited wire frame, matching the
-// runtime's 4 MiB line cap; an oversized frame kills the connection instead
+// runtime's 6 MiB line cap; an oversized frame kills the connection instead
 // of buffering without bound. maxInFlight bounds concurrent
 // environment-initiated handler calls, matching the runtime's per-connection
 // in-flight limit.
 const (
-	maxWireFrame = 4 << 20
+	maxWireFrame = 6 << 20
 	maxInFlight  = 32
 )
 
-var errWireFrameTooLarge = errors.New("sdk: wire frame exceeds 4 MiB limit")
+var errWireFrameTooLarge = errors.New("sdk: wire frame exceeds 6 MiB limit")
 
 // readWireLine reads one newline-delimited frame, aborting once it exceeds
 // maxWireFrame. Unlike ReadBytes it cannot buffer an unterminated line
@@ -201,6 +201,13 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 		}()
 
 		req := rpcMessage{ID: reqID, Method: method, Params: raw}
+		// An oversized request fails only this call, before any byte is
+		// written: the runtime would drop the connection otherwise.
+		if b, err := json.Marshal(req); err != nil {
+			return err
+		} else if len(b)+1 >= maxWireFrame {
+			return errWireFrameTooLarge
+		}
 		if err := writeMsg(req); err != nil {
 			return err
 		}

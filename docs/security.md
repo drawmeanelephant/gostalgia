@@ -113,7 +113,7 @@ The runtime defends against local threats operating on the host machine:
   app launch, and on Linux the directory is additionally hidden under the
   child's fresh `/tmp` tmpfs while on macOS it is a masked path.
 - **Malformed frames and oversized payloads:** The NDJSON framing scanner
-  enforces a 4 MiB frame size limit (`maxLine`). Malformed JSON, non-object
+  enforces a 6 MiB frame size limit (`maxLine`). Malformed JSON, non-object
   payloads, unterminated lines, duplicate request IDs, and negative IDs fail
   cleanly without crashing the server or exhausting memory.
 - **Stale credential replay:** When an application process exits or is stopped,
@@ -377,7 +377,7 @@ following posture:
 - **Bounded resources.** The SSH handshake is budgeted (5 s, matching the
   IPC handshake convention), concurrent connections are capped (16), and
   each session consumes one IPC connection subject to the existing IPC
-  budgets (256-conn ceiling, 32 in-flight requests, 4 MiB frames). Shutdown
+  budgets (256-conn ceiling, 32 in-flight requests, 6 MiB frames). Shutdown
   drops the listener and all remote sessions.
 - **New-dependency exception.** The inbound transport (`charm.land/ssh`, the
   server library Wish v2 is built on, plus `x/crypto/ssh` and
@@ -467,7 +467,7 @@ explicitly outside Gostalgia's protection guarantees:
 The security guarantees described here are verified by an extensive test suite:
 
 - **IPC Fuzzing & Framing Tests (`internal/ipc`):** Fuzzing and adversarial
-  testing covering malformed NDJSON frames, oversized payloads (> 4 MiB),
+  testing covering malformed NDJSON frames, oversized payloads (> 6 MiB),
   handshake budgets, flooding clients, duplicate request IDs, and slow writers.
 - **Protocol & Path Parsing Tests (`internal/ipc`, `internal/vfs`, `sdk`):**
   Adversarial testing of dot-segment escapes (`..`), NUL-byte injection,
