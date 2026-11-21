@@ -183,6 +183,110 @@ func (s *FavoritesStore) Clear() error {
 	return s.saveLocked()
 }
 
+// appCanSee reports whether the favorite at envPath would appear to an app
+// caller in a filtered List: the caller must hold a read grant covering it.
+func (s *FavoritesStore) appCanSee(callerAppID string, envPath string) bool {
+	return s.grants == nil || s.grants.CheckAccess(callerAppID, envPath, vfs.AccessRead) == nil
+}
+
+// RemoveFor deletes a favorite on behalf of an app caller. Entries the app
+// could not see in a filtered List are left untouched, so an unmatched
+// removal is indistinguishable from removing an absent entry.
+func (s *FavoritesStore) RemoveFor(envPath string, callerAppID string) error {
+	norm, err := vfs.Normalize(envPath)
+	if err != nil {
+		return err
+	}
+	clean := "/" + norm
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]sdk.FavoriteDocument, 0, len(s.entries))
+	removed := false
+	for _, e := range s.entries {
+		if e.Path == clean && s.appCanSee(callerAppID, e.Path) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	if !removed {
+		return nil
+	}
+	for i := range filtered {
+		filtered[i].Rank = i
+	}
+	s.entries = filtered
+	return s.saveLocked()
+}
+
+// ReorderFor rearranges favorites on behalf of an app caller. Only entries
+// the caller can see may move: entries outside its grants keep their
+// positions and the visible entries are rearranged among the remaining
+// slots, named paths first. Naming an entry the caller cannot see is
+// ignored rather than honored or rejected.
+func (s *FavoritesStore) ReorderFor(orderedPaths []string, callerAppID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	byPath := make(map[string]sdk.FavoriteDocument, len(s.entries))
+	for _, e := range s.entries {
+		byPath[e.Path] = e
+	}
+
+	named := make(map[string]bool, len(orderedPaths))
+	visible := make([]string, 0, len(s.entries))
+	for _, p := range orderedPaths {
+		norm, err := vfs.Normalize(p)
+		if err != nil {
+			continue
+		}
+		clean := "/" + norm
+		if _, ok := byPath[clean]; ok && !named[clean] && s.appCanSee(callerAppID, clean) {
+			visible = append(visible, clean)
+			named[clean] = true
+		}
+	}
+	for _, e := range s.entries {
+		if !named[e.Path] && s.appCanSee(callerAppID, e.Path) {
+			visible = append(visible, e.Path)
+		}
+	}
+
+	reordered := make([]sdk.FavoriteDocument, 0, len(s.entries))
+	next := 0
+	for _, e := range s.entries {
+		if s.appCanSee(callerAppID, e.Path) {
+			e = byPath[visible[next]]
+			next++
+		}
+		e.Rank = len(reordered)
+		reordered = append(reordered, e)
+	}
+	s.entries = reordered
+	return s.saveLocked()
+}
+
+// ClearFor removes only the favorites an app caller can see, leaving
+// entries outside its grants intact.
+func (s *FavoritesStore) ClearFor(callerAppID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]sdk.FavoriteDocument, 0, len(s.entries))
+	for _, e := range s.entries {
+		if !s.appCanSee(callerAppID, e.Path) {
+			filtered = append(filtered, e)
+		}
+	}
+	if len(filtered) == len(s.entries) {
+		return nil
+	}
+	s.entries = filtered
+	return s.saveLocked()
+}
+
 // List returns favorite documents sorted by rank, filtered by caller permissions.
 func (s *FavoritesStore) List(callerAppID string, verifyExists bool) []sdk.FavoriteDocument {
 	s.mu.RLock()
