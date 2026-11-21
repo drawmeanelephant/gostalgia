@@ -126,29 +126,18 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		return nil, err
 	}
 
-	layeredCfg, err := config.NewLayeredStore(
-		filepath.Join(root, "config", "system.json"),
-		filepath.Join(root, "vfs", "users", "guest", "config", "settings.json"),
-	)
-	if err != nil {
-		return nil, err
-	}
-	cfg := layeredCfg.SystemStore()
-
 	logFile, log := newLogger(root, opts.Verbose, opts.LogOutput)
 
 	rt := &Runtime{
-		Root:       root,
-		Version:    Version,
-		Cfg:        cfg,
-		LayeredCfg: layeredCfg,
-		Bus:        events.NewBusWithLogger(log),
-		Router:     ipc.NewRouter(),
-		logFile:    logFile,
-		rootLock:   rootLock,
-		done:       make(chan struct{}),
-		completed:  make(chan struct{}),
-		user:       security.User{ID: "u-guest", Name: "guest"},
+		Root:      root,
+		Version:   Version,
+		Bus:       events.NewBusWithLogger(log),
+		Router:    ipc.NewRouter(),
+		logFile:   logFile,
+		rootLock:  rootLock,
+		done:      make(chan struct{}),
+		completed: make(chan struct{}),
+		user:      security.User{ID: "u-guest", Name: "guest"},
 	}
 	rt.Log = log
 
@@ -186,16 +175,41 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 	activeProfile := rt.Profiles.Active()
 	rt.setUser(activeProfile.User())
 
+	// The user configuration layer binds to the persisted active profile,
+	// not a hardcoded guest path — the same binding the profile-switch
+	// callback applies on every later transition.
+	layeredCfg, err := config.NewLayeredStore(
+		filepath.Join(root, "config", "system.json"),
+		rt.userSettingsHostPath(activeProfile.ID),
+	)
+	if err != nil {
+		logFile.Close()
+		return nil, err
+	}
+	cfg := layeredCfg.SystemStore()
+	rt.Cfg = cfg
+	rt.LayeredCfg = layeredCfg
+
+	// The single owner of "active profile changed": Switch, Reload (e.g.
+	// backup restore), and any future transition path all run this
+	// callback list through the profile manager.
 	rt.Profiles.OnSwitch(func(prev, next profile.Profile) {
 		rt.setUser(next.User())
 		if rt.Apps != nil {
 			rt.Apps.SetUser(next.User())
 		}
 		if rt.LayeredCfg != nil {
-			_ = rt.LayeredCfg.SetUserStore(filepath.Join(root, "vfs", "users", next.ID, "config", "settings.json"))
+			if err := rt.LayeredCfg.SetUserStore(rt.userSettingsHostPath(next.ID)); err != nil {
+				rt.Log.Error("profile switch: rebind user config store", "profile", next.ID, "err", err)
+			}
 		}
 		if rt.Tokens != nil {
 			rt.Tokens.SetOperatorUser(next.User())
+		}
+		if rt.Sessions != nil && len(rt.Sessions.ForUser(next.ID)) == 0 {
+			if _, err := rt.Sessions.Create(next.User()); err != nil {
+				rt.Log.Warn("profile switch: create session", "profile", next.ID, "err", err)
+			}
 		}
 	})
 
@@ -365,6 +379,15 @@ func InitRoot(root string) error {
 		}
 	}
 	return nil
+}
+
+// userSettingsHostPath resolves a profile's settings file to a host path
+// under the VFS host root — the single place the user config layer's
+// backing path is derived. A profile's VFS path is joined onto the host
+// root, never used as a host path itself.
+func (rt *Runtime) userSettingsHostPath(profileID string) string {
+	rel := strings.TrimPrefix(profile.SettingsPath(profileID), "/")
+	return filepath.Join(rt.hostFS.RootPath(), filepath.FromSlash(rel))
 }
 
 // CurrentUser returns the active profile's user identity. It is safe for
