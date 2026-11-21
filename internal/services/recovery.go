@@ -382,7 +382,9 @@ func (s *RecoveryService) restoreBackup(ctx context.Context, req ipc.Request) (a
 
 	// If profiles registry was restored, reload profiles manager if present
 	if s.ctx.Profiles != nil {
-		_ = s.ctx.Profiles.Reload()
+		if err := s.ctx.Profiles.Reload(); err != nil {
+			return nil, fmt.Errorf("recovery: reload profiles after restore: %w", err)
+		}
 	}
 
 	return rep, nil
