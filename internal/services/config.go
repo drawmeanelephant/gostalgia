@@ -10,6 +10,7 @@ import (
 	"gostalgia/internal/ipc"
 	"gostalgia/internal/security"
 	"gostalgia/internal/service"
+	"gostalgia/sdk"
 )
 
 // ConfigService exposes configuration operations and live change notifications.
@@ -115,6 +116,9 @@ func (s *ConfigService) get(ctx context.Context, req ipc.Request) (any, error) {
 			return nil, errors.New("config/get: cannot read preferences for another application")
 		}
 	}
+	if err := validateAppID(p.AppID); err != nil {
+		return nil, err
+	}
 
 	opts := config.QueryOpts{
 		AppID: p.AppID,
@@ -174,11 +178,20 @@ func (s *ConfigService) set(ctx context.Context, req ipc.Request) (any, error) {
 			return nil, err
 		}
 	} else if targetLayer == config.LayerApp {
-		if principal.IsApp() && p.AppID != "" && p.AppID != principal.AppID {
-			return nil, errors.New("config/set: cannot modify preferences for another application")
+		// The app layer persists to host disk outside the VFS grant
+		// scope, so it requires config.write like the other persistent
+		// layers — baseline ipc must not reach disk.
+		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
+			return nil, fmt.Errorf("config/set: app layer requires config.write capability: %w", err)
 		}
 		if p.AppID == "" && principal.IsApp() {
 			p.AppID = principal.AppID
+		}
+		if principal.IsApp() && p.AppID != principal.AppID {
+			return nil, errors.New("config/set: cannot modify preferences for another application")
+		}
+		if err := validateAppID(p.AppID); err != nil {
+			return nil, err
 		}
 	}
 
@@ -247,6 +260,9 @@ func (s *ConfigService) unset(ctx context.Context, req ipc.Request) (any, error)
 			return nil, errors.New("config/unset: cannot modify preferences for another application")
 		}
 	}
+	if err := validateAppID(p.AppID); err != nil {
+		return nil, err
+	}
 
 	opts := config.QueryOpts{
 		AppID: p.AppID,
@@ -299,6 +315,9 @@ func (s *ConfigService) reset(ctx context.Context, req ipc.Request) (any, error)
 			return nil, errors.New("config/reset: cannot modify preferences for another application")
 		}
 	}
+	if err := validateAppID(p.AppID); err != nil {
+		return nil, err
+	}
 
 	opts := config.QueryOpts{
 		AppID: p.AppID,
@@ -335,6 +354,9 @@ func (s *ConfigService) list(ctx context.Context, req ipc.Request) (any, error) 
 		}
 		p.AppID = principal.AppID
 		callerAppID = principal.AppID
+	}
+	if err := validateAppID(p.AppID); err != nil {
+		return nil, err
 	}
 
 	opts := config.QueryOpts{AppID: p.AppID}
@@ -541,9 +563,25 @@ func (s *ConfigService) explain(ctx context.Context, req ipc.Request) (any, erro
 			return nil, errors.New("config/explain: cannot read preferences for another application")
 		}
 	}
+	if err := validateAppID(p.AppID); err != nil {
+		return nil, err
+	}
 
 	exp := s.store.Explain(p.Path, config.QueryOpts{AppID: p.AppID})
 	return exp, nil
+}
+
+// validateAppID rejects non-canonical app identifiers on every route that
+// accepts app_id. App-layer values persist at <user config>/apps/<id>.json
+// on host disk, so an identifier with separators or dot segments could
+// escape the apps directory. The check applies to all principals: app
+// callers are already pinned to their own id; operator-supplied ids must
+// meet the same bar.
+func validateAppID(appID string) error {
+	if appID != "" && !sdk.ValidAppID(appID) {
+		return fmt.Errorf("config: invalid app_id %q", appID)
+	}
+	return nil
 }
 
 // foreignAppPath reports whether path reaches outside appID's own
