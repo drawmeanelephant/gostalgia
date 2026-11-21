@@ -8,8 +8,6 @@ import (
 	"sync"
 	"syscall"
 	"unsafe"
-
-	"golang.org/x/sys/windows"
 )
 
 // Windows process-tree teardown uses a Job Object per child: the child and
@@ -26,10 +24,83 @@ import (
 // and every stop/shutdown path still terminates the job itself.
 var childJobs sync.Map // pid -> job handle
 
+// kernel32 calls not exposed by the stdlib syscall package. Core packages
+// stay inside the stdlib boundary (test/e2e TestCoreDependencyBoundary),
+// so job objects are driven through LazyDLL rather than x/sys/windows.
+var (
+	kernel32                     = syscall.NewLazyDLL("kernel32.dll")
+	procCreateJobObject          = kernel32.NewProc("CreateJobObjectW")
+	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
+	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
+	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
+)
+
+const (
+	jobObjectInfoClassExtendedLimit = 9
+	jobObjectLimitKillOnJobClose    = 0x00002000
+	processSetQuota                 = 0x0100
+	processTerminate                = 0x0001
+)
+
+// JOBOBJECT_BASIC_LIMIT_INFORMATION, IO_COUNTERS and
+// JOBOBJECT_EXTENDED_LIMIT_INFORMATION laid out to match the Win32
+// structs: Go's natural field alignment on 64-bit builds produces the
+// same layout (64 + 48 + 32 = 144 bytes). Only LimitFlags is ever set.
+type jobObjectBasicLimitInformation struct {
+	PerProcessUserTimeLimit int64
+	PerJobUserTimeLimit     int64
+	LimitFlags              uint32
+	MinimumWorkingSetSize   uintptr
+	MaximumWorkingSetSize   uintptr
+	ActiveProcessLimit      uint32
+	Affinity                uintptr
+	PriorityClass           uint32
+	SchedulingClass         uint32
+}
+
+type ioCounters struct {
+	ReadOperationCount  uint64
+	WriteOperationCount uint64
+	OtherOperationCount uint64
+	ReadTransferCount   uint64
+	WriteTransferCount  uint64
+	OtherTransferCount  uint64
+}
+
+type jobObjectExtendedLimitInformation struct {
+	BasicLimitInformation jobObjectBasicLimitInformation
+	IoInfo                ioCounters
+	ProcessMemoryLimit    uintptr
+	JobMemoryLimit        uintptr
+	PeakProcessMemoryUsed uintptr
+	PeakJobMemoryUsed     uintptr
+}
+
 // SetupProcessTree configures cmd attributes on Windows.
 func SetupProcessTree(cmd *exec.Cmd) {
 	// Job-object enrollment happens in EnrollProcessTree after Start;
 	// there is no pre-start attribute equivalent to Unix setpgid here.
+}
+
+func createJobObject() (syscall.Handle, error) {
+	h, _, err := procCreateJobObject.Call(0, 0)
+	if h == 0 {
+		return 0, err
+	}
+	return syscall.Handle(h), nil
+}
+
+func setJobLimits(job syscall.Handle, limits *jobObjectExtendedLimitInformation) error {
+	r, _, err := procSetInformationJobObject.Call(
+		uintptr(job),
+		jobObjectInfoClassExtendedLimit,
+		uintptr(unsafe.Pointer(limits)),
+		unsafe.Sizeof(*limits),
+	)
+	if r == 0 {
+		return err
+	}
+	return nil
 }
 
 // EnrollProcessTree places the started child into a dedicated Job Object
@@ -41,34 +112,26 @@ func EnrollProcessTree(cmd *exec.Cmd) error {
 	}
 	pid := cmd.Process.Pid
 
-	job, err := windows.CreateJobObject(nil, nil)
+	job, err := createJobObject()
 	if err != nil {
 		return err
 	}
-	var limits windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	limits.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-	if _, err := windows.SetInformationJobObject(
-		job,
-		windows.JobObjectExtendedLimitInformation,
-		uintptr(unsafe.Pointer(&limits)),
-		uint32(unsafe.Sizeof(limits)),
-	); err != nil {
-		_ = windows.CloseHandle(job)
+	var limits jobObjectExtendedLimitInformation
+	limits.BasicLimitInformation.LimitFlags = jobObjectLimitKillOnJobClose
+	if err := setJobLimits(job, &limits); err != nil {
+		_ = syscall.CloseHandle(job)
 		return err
 	}
-	h, err := windows.OpenProcess(
-		windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE,
-		false,
-		uint32(pid),
-	)
+	h, err := syscall.OpenProcess(processSetQuota|processTerminate, false, uint32(pid))
 	if err != nil {
-		_ = windows.CloseHandle(job)
+		_ = syscall.CloseHandle(job)
 		return err
 	}
-	defer windows.CloseHandle(h)
-	if err := windows.AssignProcessToJobObject(job, h); err != nil {
-		_ = windows.CloseHandle(job)
-		return err
+	defer syscall.CloseHandle(h)
+	r, _, aerr := procAssignProcessToJobObject.Call(uintptr(job), uintptr(h))
+	if r == 0 {
+		_ = syscall.CloseHandle(job)
+		return aerr
 	}
 	childJobs.Store(pid, job)
 	return nil
@@ -92,9 +155,9 @@ func KillProcessTree(cmd *exec.Cmd) error {
 	}
 	pid := cmd.Process.Pid
 	if v, ok := childJobs.LoadAndDelete(pid); ok {
-		job := v.(windows.Handle)
-		_ = windows.TerminateJobObject(job, 1)
-		_ = windows.CloseHandle(job)
+		job := v.(syscall.Handle)
+		_, _, _ = procTerminateJobObject.Call(uintptr(job), 1)
+		_ = syscall.CloseHandle(job)
 	}
 	return cmd.Process.Kill()
 }
