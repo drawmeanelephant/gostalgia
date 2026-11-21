@@ -19,6 +19,19 @@ type Request struct {
 	ID     int64           `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
+	kind   string          // control-frame kind parsed off the wire; "" for calls
+}
+
+// kindCancel identifies the fire-and-forget cancel frame: a client sends
+// {"kind":"cancel","id":N} when it abandons call N; the server releases the
+// call's in-flight slot and cancels its handler context. Peers that never
+// send it are unaffected.
+const kindCancel = "cancel"
+
+// cancelFrame is the wire form of a call cancellation.
+type cancelFrame struct {
+	Kind string `json:"kind"`
+	ID   int64  `json:"id"`
 }
 
 // Response is the result of one method call.
