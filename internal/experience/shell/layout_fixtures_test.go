@@ -33,7 +33,7 @@ func fixtureApp(id, name string, running bool, pid int32) appStatus {
 }
 
 func fixtureReceipt() receipts.CrashReceipt {
-	r := receipts.New(31, "clock", "failed", 2, "exit status 2", 3, "tick\ntock\npanic: wound too tight")
+	r := receipts.New(31, "clock", "failed", 2, "exit status 2", "tick\ntock\npanic: wound too tight")
 	r.ID, r.Timestamp = "CR-31-fixture", fixtureTime
 	return r
 }
@@ -56,9 +56,9 @@ func fixtureModel(th theme.Theme, mode ui.ColorMode) *Model {
 	usage := platform.ResourceUsage{Supported: true, MemoryBytes: 12 << 20, CPUUserMs: 840, CPUSysMs: 410}
 	m.tasks.SetProcesses([]taskmanager.ProcessRow{
 		{ID: 1, Name: "environment", Kind: "inproc", State: "running", Resources: usage},
-		{ID: 7, Name: "com.gostalgia.echo", Kind: "child", State: "running", RestartCount: 1, Resources: usage},
-		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "inproc", State: "restarting", RestartCount: 4},
-		{ID: 31, Name: "com.gostalgia.clock", Kind: "child", State: "failed", ExitCode: 2, RestartCount: 3, CrashLoop: true},
+		{ID: 7, Name: "com.gostalgia.echo", Kind: "child", State: "running", Resources: usage},
+		{ID: 12, Name: "indexer-with-a-very-long-name", Kind: "inproc", State: "stopping"},
+		{ID: 31, Name: "com.gostalgia.clock", Kind: "child", State: "failed", ExitCode: 2},
 	})
 	receipt := fixtureReceipt()
 	notifs.Record(notifications.Notification{ID: "n1", Timestamp: fixtureTime, Title: "clock Crashed",

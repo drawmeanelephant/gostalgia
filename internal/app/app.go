@@ -1366,6 +1366,10 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			Error: resp.Error,
 		}
 	}
+	// Graceful-stop contract: proc stop closes the child conn so the SDK's
+	// read loop sees EOF, cancels the app context, and runs Instance.Stop
+	// before any kill escalation.
+	proc.SetStopHook(func() { _ = conn.Close() })
 	go childWireLoop(conn, reader, &writeMu, &pendingMu, pendingCalls, dispatch, m.log)
 
 	failed = false // the proc-done watcher owns ra.done from here on

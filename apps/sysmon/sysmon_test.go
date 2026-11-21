@@ -329,7 +329,7 @@ func TestExitedAndHistoryRows(t *testing.T) {
 		{ID: 5, Name: "oldapp", Kind: "inproc", State: "stopped", ExitCode: 0,
 			StartedAt: h.now.Add(-time.Hour), ExitedAt: h.now.Add(-30 * time.Minute)},
 		{ID: 8, Name: "flaky", Kind: "child", State: "failed", ExitCode: 2, Err: "segfault",
-			StartedAt: h.now.Add(-10 * time.Minute), ExitedAt: h.now.Add(-9 * time.Minute), CrashLoop: false},
+			StartedAt: h.now.Add(-10 * time.Minute), ExitedAt: h.now.Add(-9 * time.Minute)},
 	}
 	h.hist = []procInfo{
 		{ID: 3, Name: "reaped", Kind: "child", State: "stopped", ExitCode: 0, Duration: "2m", ExitedAt: h.now.Add(-time.Hour)},

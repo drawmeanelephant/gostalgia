@@ -55,6 +55,28 @@ func KillProcessTree(cmd *exec.Cmd) error {
 	return cmd.Process.Kill()
 }
 
+// TerminateProcessTree asks the child's process group to terminate by
+// sending SIGTERM to it, under the same recycled-pgid guard as
+// KillProcessTree. Callers escalate to KillProcessTree when the grace
+// deadline passes.
+func TerminateProcessTree(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	pid := cmd.Process.Pid
+	if pid > 0 && processGroupOwned(cmd, pid) {
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+	}
+	return cmd.Process.Signal(syscall.SIGTERM)
+}
+
+// EnrollProcessTree performs post-start tree registration. On Unix the
+// process group is already established by SetupProcessTree at spawn, so
+// there is nothing to enroll.
+func EnrollProcessTree(cmd *exec.Cmd) error {
+	return nil
+}
+
 // processGroupOwned reports whether the process group pid is still the one
 // created by cmd's child, so that kill(-pid) cannot hit a recycled group.
 func processGroupOwned(cmd *exec.Cmd, pid int) bool {
