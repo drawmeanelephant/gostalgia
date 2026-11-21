@@ -2,9 +2,13 @@ package recovery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"gostalgia/internal/vfs"
@@ -21,6 +25,13 @@ func Inspect(r io.Reader) (*Manifest, error) {
 
 // Preview compares an archive against the current VFS state without making any modifications.
 func Preview(r io.Reader, vfsInstance vfs.FS) (*PreviewReport, error) {
+	return PreviewOpt(r, vfsInstance, "")
+}
+
+// PreviewOpt is Preview with the host path of the live system preferences
+// store, so the /config/system.json entry is compared against the document
+// the environment actually reads.
+func PreviewOpt(r io.Reader, vfsInstance vfs.FS, systemConfigPath string) (*PreviewReport, error) {
 	va, err := ParseArchive(r)
 	if err != nil {
 		return nil, err
@@ -40,7 +51,15 @@ func Preview(r io.Reader, vfsInstance vfs.FS) (*PreviewReport, error) {
 	for _, entry := range va.Manifest.Files {
 		report.TotalBytes += entry.Size
 
-		liveData, err := vfsInstance.ReadFile(entry.VFSPath)
+		var liveData []byte
+		if hostPath := systemHostPath(entry.VFSPath, systemConfigPath); hostPath != "" {
+			liveData, err = os.ReadFile(hostPath)
+			if errors.Is(err, fs.ErrNotExist) {
+				err = fs.ErrNotExist
+			}
+		} else {
+			liveData, err = vfsInstance.ReadFile(entry.VFSPath)
+		}
 		if err != nil {
 			if vfs.IsNotExist(err) {
 				// File does not exist live -> new file to be created
@@ -81,6 +100,7 @@ const (
 
 type journalEntry struct {
 	vfsPath    string
+	hostPath   string // non-empty: entry applies to the host system store
 	action     journalAction
 	backupData []byte
 }
@@ -89,6 +109,57 @@ type journalEntry struct {
 type RestoreOptions struct {
 	Strategy      ConflictStrategy // Default is ConflictAbort
 	ProfileFilter string           // Optional: only restore files matching this profile ID
+	// SystemConfigPath is the host filesystem path of the live system
+	// preferences store (root/config/system.json). When set, the archive's
+	// /config/system.json entry is routed there instead of the VFS, where
+	// nothing reads it.
+	SystemConfigPath string
+}
+
+// systemHostPath maps the archive's system preferences entry onto the live
+// host store path. All other paths return "".
+func systemHostPath(vfsPath, systemConfigPath string) string {
+	if systemConfigPath != "" && vfsPath == SystemConfigVFSPath {
+		return systemConfigPath
+	}
+	return ""
+}
+
+// hostAtomicSave writes data to a host path via a staged rename so a crash
+// never leaves a torn document.
+func hostAtomicSave(hostPath string, data []byte, perm fs.FileMode) error {
+	dir := filepath.Dir(hostPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	stage, err := os.CreateTemp(dir, ".gbar-*.tmp")
+	if err != nil {
+		return err
+	}
+	stageName := stage.Name()
+	if _, err := stage.Write(data); err != nil {
+		_ = stage.Close()
+		_ = os.Remove(stageName)
+		return err
+	}
+	if err := stage.Sync(); err != nil {
+		_ = stage.Close()
+		_ = os.Remove(stageName)
+		return err
+	}
+	if err := stage.Close(); err != nil {
+		_ = os.Remove(stageName)
+		return err
+	}
+	if err := os.Chmod(stageName, perm); err != nil {
+		_ = os.Remove(stageName)
+		return err
+	}
+	if err := os.Rename(stageName, hostPath); err != nil {
+		_ = os.Remove(stageName)
+		return err
+	}
+	return nil
 }
 
 // Restore applies an archive to the live VFS transactionally with verified rollback on failure.
@@ -109,11 +180,12 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 
 	// 1. Analyze conflicts and plan operations
 	type plannedFile struct {
-		vfsPath string
-		arcName string
-		content []byte
-		size    int64
-		exists  bool
+		vfsPath  string
+		hostPath string // non-empty: write to the host system store, not the VFS
+		arcName  string
+		content  []byte
+		size     int64
+		exists   bool
 	}
 
 	var planned []plannedFile
@@ -142,7 +214,16 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 		}
 
 		content := va.Files[entry.ArcName]
-		liveData, err := vfsInstance.ReadFile(entry.VFSPath)
+		hostPath := systemHostPath(entry.VFSPath, opts.SystemConfigPath)
+		var liveData []byte
+		if hostPath != "" {
+			liveData, err = os.ReadFile(hostPath)
+			if errors.Is(err, fs.ErrNotExist) {
+				err = fs.ErrNotExist
+			}
+		} else {
+			liveData, err = vfsInstance.ReadFile(entry.VFSPath)
+		}
 		if err != nil {
 			if !vfs.IsNotExist(err) {
 				// The file exists but cannot be read: we cannot tell whether
@@ -153,11 +234,12 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 			}
 			// Does not exist -> planned for creation
 			planned = append(planned, plannedFile{
-				vfsPath: entry.VFSPath,
-				arcName: entry.ArcName,
-				content: content,
-				size:    entry.Size,
-				exists:  false,
+				vfsPath:  entry.VFSPath,
+				hostPath: hostPath,
+				arcName:  entry.ArcName,
+				content:  content,
+				size:     entry.Size,
+				exists:   false,
 			})
 			continue
 		}
@@ -186,11 +268,12 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 			// File is skipped, not planned
 		case ConflictOverwrite:
 			planned = append(planned, plannedFile{
-				vfsPath: entry.VFSPath,
-				arcName: entry.ArcName,
-				content: content,
-				size:    entry.Size,
-				exists:  true,
+				vfsPath:  entry.VFSPath,
+				hostPath: hostPath,
+				arcName:  entry.ArcName,
+				content:  content,
+				size:     entry.Size,
+				exists:   true,
 			})
 		default:
 			return nil, fmt.Errorf("recovery: unknown conflict strategy %q", opts.Strategy)
@@ -220,14 +303,22 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 			switch j.action {
 			case actionCreated:
 				// Remove newly created file if it exists
-				if _, err := vfsInstance.Stat(j.vfsPath); err == nil {
+				if j.hostPath != "" {
+					if err := os.Remove(j.hostPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						rollbackErrors = append(rollbackErrors, fmt.Sprintf("failed to remove created file %q: %v", j.hostPath, err))
+					}
+				} else if _, err := vfsInstance.Stat(j.vfsPath); err == nil {
 					if err := vfsInstance.Remove(j.vfsPath); err != nil {
 						rollbackErrors = append(rollbackErrors, fmt.Sprintf("failed to remove created file %q: %v", j.vfsPath, err))
 					}
 				}
 			case actionOverwritten:
 				// Restore original backup copy
-				if err := vfsInstance.WriteFile(j.vfsPath, j.backupData, 0o644); err != nil {
+				if j.hostPath != "" {
+					if err := hostAtomicSave(j.hostPath, j.backupData, 0o644); err != nil {
+						rollbackErrors = append(rollbackErrors, fmt.Sprintf("failed to restore overwritten file %q: %v", j.hostPath, err))
+					}
+				} else if err := vfsInstance.WriteFile(j.vfsPath, j.backupData, 0o644); err != nil {
 					rollbackErrors = append(rollbackErrors, fmt.Sprintf("failed to restore overwritten file %q: %v", j.vfsPath, err))
 				}
 			}
@@ -244,6 +335,33 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 		case <-ctx.Done():
 			return nil, rollback(ctx.Err())
 		default:
+		}
+
+		if p.hostPath != "" {
+			if p.exists {
+				orig, err := os.ReadFile(p.hostPath)
+				if err != nil {
+					return nil, rollback(fmt.Errorf("recovery: read original file for backup %q: %v", p.hostPath, err))
+				}
+				journal = append(journal, journalEntry{
+					vfsPath:    p.vfsPath,
+					hostPath:   p.hostPath,
+					action:     actionOverwritten,
+					backupData: orig,
+				})
+			}
+			if err := hostAtomicSave(p.hostPath, p.content, 0o644); err != nil {
+				return nil, rollback(fmt.Errorf("recovery: atomic save %q: %w", p.hostPath, err))
+			}
+			if !p.exists {
+				journal = append(journal, journalEntry{
+					vfsPath:  p.vfsPath,
+					hostPath: p.hostPath,
+					action:   actionCreated,
+				})
+			}
+			restoredBytes += p.size
+			continue
 		}
 
 		// Prepare destination directory
@@ -265,8 +383,9 @@ func Restore(ctx context.Context, r io.Reader, vfsInstance vfs.FS, opts RestoreO
 			})
 		}
 
-		// Write new content atomically
-		if err := vfsInstance.SaveAtomic(p.vfsPath, p.content, 0o644); err != nil {
+		// Write new content atomically. Restored payloads are bounded by
+		// MaxSingleFileBytes, not the interactive document cap.
+		if err := vfs.SaveAtomicBounded(vfsInstance, p.vfsPath, p.content, 0o644, MaxSingleFileBytes); err != nil {
 			return nil, rollback(fmt.Errorf("recovery: atomic save %q: %w", p.vfsPath, err))
 		}
 
