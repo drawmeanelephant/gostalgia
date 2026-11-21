@@ -71,3 +71,12 @@ func (s *SharedHostFS) SaveAtomic(path string, data []byte, perm fs.FileMode) er
 	}
 	return s.HostFS.SaveAtomic(path, data, perm)
 }
+
+// SaveAtomicBounded enforces the read-only contract, then delegates the
+// bounded large save to the host backend.
+func (s *SharedHostFS) SaveAtomicBounded(path string, data []byte, perm fs.FileMode, limit int64) error {
+	if s.readOnly {
+		return &Error{Op: "save", Path: path, Code: ErrReadOnly, Message: "shared host mount is read-only"}
+	}
+	return s.HostFS.SaveAtomicBounded(path, data, perm, limit)
+}

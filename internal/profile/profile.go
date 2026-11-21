@@ -280,11 +280,43 @@ func (m *Manager) ensureDirsLocked(id string) error {
 	return nil
 }
 
-// Reload re-reads profile definitions and active profile from VFS.
+// Reload re-reads profile definitions and active profile from VFS. When
+// the stored active profile differs from the in-memory one — as it does
+// after a backup restore — Reload runs the same transition as Switch:
+// switch hooks fire and a profile.switched event is published, so
+// identity-dependent services rebind instead of keeping stale state.
 func (m *Manager) Reload() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.load()
+	prevID := m.activeID
+	prevProfile := m.profiles[prevID]
+	err := m.load()
+	nextID := m.activeID
+	nextProfile := m.profiles[nextID]
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if prevID == nextID {
+		m.mu.Unlock()
+		return nil
+	}
+	_ = m.ensureDirsLocked(nextID)
+	callbacks := make([]func(prev, next Profile), len(m.onSwitch))
+	copy(callbacks, m.onSwitch)
+	m.mu.Unlock()
+
+	for _, cb := range callbacks {
+		cb(prevProfile, nextProfile)
+	}
+	if m.bus != nil {
+		m.bus.Publish("profile", SwitchedEvent{
+			PreviousID: prevID,
+			ActiveID:   nextID,
+			Profile:    nextProfile,
+		})
+	}
+	m.log.Info("profile switched (reload)", "previous", prevID, "active", nextID)
+	return nil
 }
 
 // EnsureDirectories ensures that the user directory structure for profile id exists.

@@ -349,6 +349,21 @@ func (m *Manager) Workspace(sessionID string) *WorkspaceStore {
 	return ws
 }
 
+// ReloadWorkspaces re-reads every live workspace store from the VFS so
+// in-memory state reflects external changes (for example a backup
+// restore). Stores whose file was not yet created keep their state.
+func (m *Manager) ReloadWorkspaces() {
+	m.mu.Lock()
+	stores := make([]*WorkspaceStore, 0, len(m.workspaces))
+	for _, ws := range m.workspaces {
+		stores = append(stores, ws)
+	}
+	m.mu.Unlock()
+	for _, ws := range stores {
+		_, _ = ws.Load()
+	}
+}
+
 // Get returns a session by ID.
 func (m *Manager) Get(id string) (*Session, bool) {
 	m.mu.Lock()
