@@ -216,13 +216,13 @@ The document subsystem provides permission-aware search, indexed lookup, persist
 | `doc/lookup` | `fs.read` (or granted) | Exact name and extension document lookup with stale path pruning. |
 | `doc/recents` | Caller app or `admin` | Lists recent documents filtered by caller permissions, with optional existence checks. |
 | `doc/recents/add` | Caller app or `admin` | Records a document access into persistent recents (`/users/guest/config/recents.json`). |
-| `doc/recents/remove` | Caller app or `admin` | Removes an entry from recents. |
-| `doc/recents/clear` | Caller app or `admin` | Clears caller or all recents. |
+| `doc/recents/remove` | Caller app or `admin` | Removes an entry from recents. Apps may only remove entries they can read or recorded themselves; other entries are silently left in place. |
+| `doc/recents/clear` | Caller app or `admin` | Clears all recents for an operator; apps clear only entries they can read or recorded themselves. |
 | `doc/favorites` | Caller app or `admin` | Lists pinned favorite documents (`/users/guest/config/favorites.json`). |
 | `doc/favorites/add` | Caller app or `admin` | Adds or updates a pinned favorite with rank and optional custom label. |
-| `doc/favorites/remove` | Caller app or `admin` | Removes a pinned favorite. |
-| `doc/favorites/reorder`| Caller app or `admin` | Reorders favorite documents by ordered paths. |
-| `doc/favorites/clear` | Caller app or `admin` | Clears pinned favorites. |
+| `doc/favorites/remove` | Caller app or `admin` | Removes a pinned favorite. Apps may only remove entries they can read; other entries are silently left in place. |
+| `doc/favorites/reorder`| Caller app or `admin` | Reorders favorite documents by ordered paths. Apps reorder only the entries they can read; other entries keep their ranks. |
+| `doc/favorites/clear` | Caller app or `admin` | Clears all pinned favorites for an operator; apps clear only entries they can read. |
 | `doc/associations` | `ipc` | Lists all registered document type associations. |
 | `doc/associations/resolve` | `ipc` | Resolves target application for a document path or extension. |
 | `doc/associations/register`| `admin` | Registers a custom document type association. |
