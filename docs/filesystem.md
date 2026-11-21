@@ -175,7 +175,8 @@ Rather than open-ended access to the entire root, applications receive scoped vi
   - Operators revoke grants via `fs/grant/revoke`.
   - Revoked grants fail immediately on subsequent operations with `permission_denied: grant revoked`.
   - Grants are scoped to `app_id`; standing grants persist across application process restarts until explicitly revoked. Revoked grants remain revoked across restarts.
-  - Session-bound grants (`session_bound`, issued by `doc/handoff`) are bound to the receiving application's run: they are revoked when that app exits, crashes, or is stopped, and on any handoff failure after issuance.
+  - Session-bound grants (`session_bound`, issued by `doc/handoff`) are bound to the receiving application's run: they are revoked when that app exits, crashes, or is stopped, and on any handoff failure after issuance. Re-opening the same document reuses the live session grant for the same (app, path, mode) rather than minting a duplicate.
+  - Revoked grants are reaped out of the live grant set; a bounded tombstone set retains recent revocations so `fs/grant/list` can still report them without letting revoked records accumulate.
 
 ### 3. Trash Isolation
 - Applications listing the trash (`fs/trash/list`) only see items that originated from paths they are authorized to access.

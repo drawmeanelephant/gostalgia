@@ -2,6 +2,7 @@ package vfs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -458,5 +459,92 @@ func TestScopedVFS_TrashIsolation(t *testing.T) {
 	listBAfter, err := appB.ListTrash()
 	if err != nil || len(listBAfter) != 1 || listBAfter[0].ID != entryB.ID {
 		t.Fatalf("appB item should still exist after appA emptied trash, got %v", listBAfter)
+	}
+}
+
+// #268: re-issuing a session grant for the same (app, path, mode, scope)
+// reuses the live grant instead of accumulating a duplicate per handoff.
+// Revocation reaps grants out of the live set into a bounded tombstone
+// set, so neither map grows with usage.
+func TestScopedGrants_SessionGrantDedupAndReaping(t *testing.T) {
+	gs := NewGrantStore()
+
+	g1, err := gs.IssueSession("appA", "/shared/notes.txt", AccessRead, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, err := gs.IssueSession("appA", "/shared/notes.txt", AccessRead, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g2.ID != g1.ID {
+		t.Fatalf("re-issue minted duplicate grant %q, want reuse of %q", g2.ID, g1.ID)
+	}
+	if got := len(gs.List("appA")); got != 1 {
+		t.Fatalf("expected 1 live grant after re-issue, got %d", got)
+	}
+
+	// A different mode or scope is a different grant.
+	g3, err := gs.IssueSession("appA", "/shared/notes.txt", AccessReadWrite, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g3.ID == g1.ID {
+		t.Fatal("read-write re-issue reused the read grant")
+	}
+	g4, err := gs.IssueSession("appA", "/shared/notes.txt", AccessRead, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g4.ID == g1.ID {
+		t.Fatal("recursive re-issue reused the non-recursive grant")
+	}
+
+	// IssueSessionOnce reports whether the grant was newly minted.
+	g5, created, err := gs.IssueSessionOnce("appA", "/shared/notes.txt", AccessRead, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || g5.ID != g1.ID {
+		t.Fatalf("IssueSessionOnce = (%v, %v), want reuse of %q", g5.ID, created, g1.ID)
+	}
+
+	// Session teardown reaps every session grant out of the live set.
+	gs.RevokeAppSession("appA")
+	if n := len(gs.grants); n != 0 {
+		t.Fatalf("live grant set holds %d reaped session grants", n)
+	}
+	if _, ok := gs.Get(g1.ID); !ok {
+		t.Fatal("reaped session grant has no tombstone")
+	}
+	if err := gs.CheckAccess("appA", "/shared/notes.txt", AccessRead); err == nil {
+		t.Fatal("reaped session grant still authorizes access")
+	}
+
+	// A post-session handoff mints a fresh grant; tombstones never dedup.
+	g6, err := gs.IssueSession("appA", "/shared/notes.txt", AccessRead, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g6.ID == g1.ID {
+		t.Fatal("post-session issue reused a reaped grant")
+	}
+
+	// The tombstone set is bounded: revoking more than the limit keeps the
+	// store small no matter how many grants churned through it.
+	for i := 0; i < revokedGrantLimit+50; i++ {
+		g, err := gs.Issue("appB", fmt.Sprintf("/shared/doc-%d.txt", i), AccessRead, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := gs.Revoke(g.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(gs.revoked); n > revokedGrantLimit {
+		t.Fatalf("tombstone set holds %d grants, want <= %d", n, revokedGrantLimit)
+	}
+	if n := len(gs.List("appB")); n > revokedGrantLimit {
+		t.Fatalf("grant list holds %d entries, want <= %d", n, revokedGrantLimit)
 	}
 }
