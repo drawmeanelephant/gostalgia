@@ -91,6 +91,9 @@ The runtime distinguishes three classes of actors:
     `backup/*` operations run entirely inside the caller's scoped view, and
     `doc/recents/add`/`doc/favorites/add` ignore paths the caller cannot read
     so the shared stores and search index never absorb ungranted entries.
+    Recents and favorites removals, reorders, and clears by an app are scoped
+    to entries the caller can read (or recents it recorded itself), so an app
+    cannot erase or reshuffle operator-owned entries it cannot even see.
 
 ### 3. Local-Attacker Threat Model (Adversarial)
 
