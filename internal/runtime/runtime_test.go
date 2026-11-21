@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gostalgia/internal/ipc"
 	"gostalgia/platform"
@@ -107,5 +108,28 @@ func TestCheckNotRunningIgnoresForeignInstance(t *testing.T) {
 	writeRuntimeFile(t, root, endpoint, "tok")
 	if err := checkNotRunning(root); err != nil {
 		t.Fatalf("checkNotRunning must ignore an instance that rejects the token, got: %v", err)
+	}
+}
+
+// Regression for #262: a listener whose accept loop died stays bound, so
+// Dial still succeeds but the auth handshake never completes. The guard
+// used to read that as "stale file" and boot over a live environment.
+// Connected-but-unresponsive must be occupied, and it must fail fast —
+// not after the client's 30 s default call timeout.
+func TestCheckNotRunningOccupiedWhenUnresponsive(t *testing.T) {
+	root := t.TempDir()
+	ln, endpoint, err := platform.ListenIPC(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() }) // bound, never Accept()ed
+	writeRuntimeFile(t, root, endpoint, "tok")
+
+	start := time.Now()
+	if err := checkNotRunning(root); err == nil {
+		t.Fatal("guard reported the root free while its endpoint is bound but unresponsive")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("guard waited %v on a dead endpoint; it must fail fast", d)
 	}
 }

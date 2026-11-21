@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"syscall"
 	"time"
 
 	"gostalgia/internal/events"
@@ -135,8 +136,12 @@ func NewServer(ln net.Listener, router *Router, auth any, log *slog.Logger, opts
 }
 
 // Serve accepts connections until Close is called. It returns nil after
-// an intentional close.
+// an intentional close. Transient accept errors — momentary resource
+// exhaustion such as EMFILE/ENFILE/ECONNABORTED — are retried with capped
+// exponential backoff (the net/http.Server pattern): one bad Accept must
+// never kill the environment's only control channel.
 func (s *Server) Serve() error {
+	var backoff time.Duration
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
@@ -144,9 +149,27 @@ func (s *Server) Serve() error {
 			case <-s.done:
 				return nil
 			default:
+			}
+			if !isTransientAcceptErr(err) {
 				return fmt.Errorf("ipc: accept: %w", err)
 			}
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else {
+				backoff *= 2
+				if backoff > time.Second {
+					backoff = time.Second
+				}
+			}
+			s.log.Warn("ipc: transient accept error, retrying", "err", err, "backoff", backoff)
+			select {
+			case <-s.done:
+				return nil
+			case <-time.After(backoff):
+			}
+			continue
 		}
+		backoff = 0
 		// Track and arm the connection while holding the same mutex
 		// Close sweeps s.conns under, and re-check done inside it. A
 		// connection accepted concurrently with Close can then never
@@ -189,6 +212,21 @@ func (s *Server) Close() error {
 		s.wg.Wait()
 	})
 	return s.closeErr
+}
+
+// isTransientAcceptErr reports whether an Accept error is a transient
+// host condition worth retrying rather than a permanently broken
+// listener: net.Error.Temporary() covers the OS-reported cases, and the
+// explicit errnos catch descriptors exhaustion and aborted handshakes on
+// platforms that do not flag them temporary.
+func isTransientAcceptErr(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Temporary() {
+		return true
+	}
+	return errors.Is(err, syscall.EMFILE) ||
+		errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ECONNABORTED)
 }
 
 func (s *Server) untrack(conn net.Conn) {

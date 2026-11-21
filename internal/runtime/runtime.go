@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -470,11 +471,20 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// checkProbeTimeout bounds the auth handshake with a recorded instance.
+// A bound endpoint whose accept loop died still completes Dial but never
+// answers; that must report "occupied" quickly, not after the client's
+// 30 s default call timeout.
+const checkProbeTimeout = 2 * time.Second
+
 // checkNotRunning refuses to boot if a live environment already owns this
 // root. Anything that answers on the recorded endpoint and accepts the
 // recorded token is a live instance — including one still mid-boot, whose
-// sys routes may not be registered yet. A stale file from a dead instance
-// is ignored.
+// sys routes may not be registered yet. A bound endpoint that cannot
+// complete the handshake is occupied, not stale: it is how a sick live
+// instance (a dead accept loop, a wedged handler) presents. Only a file
+// whose endpoint does not answer — or a responsive listener that rejects
+// the recorded token outright — is ignored as stale.
 func checkNotRunning(root string) error {
 	data, err := os.ReadFile(filepath.Join(root, "runtime.json"))
 	if err != nil {
@@ -492,9 +502,16 @@ func checkNotRunning(root string) error {
 	if err != nil {
 		return nil // nothing is listening: stale file from a dead instance
 	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(checkProbeTimeout))
 	client, err := ipc.NewClient(conn, info.Token)
 	if err != nil {
-		return nil // the listener rejected the recorded token: not our instance
+		if strings.Contains(err.Error(), "unauthorized") {
+			// A responsive listener that rejected the recorded token is a
+			// foreign occupant, not the instance this root describes.
+			return nil
+		}
+		return fmt.Errorf("runtime: endpoint %s answers but cannot authenticate the recorded instance; treating root as occupied: %w", info.Endpoint, err)
 	}
 	client.Close()
 	return fmt.Errorf("runtime: environment is already running (pid %d, endpoint %s)", info.PID, info.Endpoint)

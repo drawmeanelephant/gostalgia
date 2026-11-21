@@ -241,6 +241,16 @@ identifiers. The trail records event occurrence, not complete actions,
 authentication attempts, or per-user security audit evidence. The UI must
 fetch authorized current state rather than rely on payloads in this trail.
 
+## Accept loop
+
+`Server.Serve` treats transient accept errors — a momentary
+file-descriptor shortage (`EMFILE`/`ENFILE`) or an aborted handshake
+(`ECONNABORTED`) — as retryable: it backs off exponentially from 5 ms,
+capped at 1 s, logs each retry, and keeps accepting. Only fatal accept
+errors end `Serve`; a listener that stays bound but never accepts would
+silently kill the environment's only control channel and read as a stale
+instance to the next boot's duplicate-boot guard.
+
 ## Shutdown
 
 `Server.Close` stops the listener and closes every live connection,
