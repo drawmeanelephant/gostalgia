@@ -25,6 +25,7 @@ When querying a setting via `Get` or `Snapshot`:
 - User settings override system settings.
 - System settings override built-in defaults.
 - Corrupt or invalid JSON files on disk are automatically quarantined, falling back safely to default configuration without crashing the environment.
+- The app layer persists per profile in `apps/<app-id>.json` beside the active profile's user settings file. App stores bind whenever the user layer binds — boot, profile switch, and backup restore — so app-scoped values survive restarts, are readable without a preceding `Set`, and never leak across profiles. `Unset`/`Reset` load the persisted store before deleting, so removals always reach disk.
 
 ## 2. Built-in defaults
 
@@ -91,6 +92,8 @@ The runtime exposes configuration management over IPC via `ConfigService`. Acces
 Preview overrides are staged per caller: application callers own the paths they stage under their own application ID, while operator and in-process callers share the global scope. `config/cancel_preview` and `config/commit_preview` only affect the caller's own staged values, so one principal can never commit or discard another's preview. Staged values remain visible in effective reads while active, preserving live theme previews; `config/unset` and `config/reset` on the `preview` layer are likewise scoped to the caller's own staged paths. For `config/unset`, `config/reset`, `config/get`, `config/list`, `config/snapshot`, and `config/explain`, an application caller's `app_id` is pinned to the calling application — applications may only address their own app layer, while operators may address any.
 
 The user layer's `apps.<id>.*` subtree is each application's app-layer backing store, so raw paths under it carry the same boundary: an application caller may only address `apps.<its-own-id>` and its descendants — `config/get`, `config/set`, `config/unset`, `config/reset`, `config/preview`, and `config/explain` reject foreign `apps.*` paths (including the bare `apps` root and partial app-ID prefixes), and `config/list`/`config/snapshot` confine the `apps` subtree of the effective, user-layer, and preview-layer views to the caller's own namespace. Operators are unconstrained.
+
+The `app` layer is persistent host-disk storage outside the VFS grant scope, so `config/set` with `layer: "app"` requires `config.write` (or `admin`) for every caller — baseline `ipc` is not enough — matching the write requirements `config/unset` and `config/reset` already apply to application callers. Every route that accepts `app_id` requires a canonical reverse-DNS application id (for example `com.gostalgia.notes`); malformed identifiers — including ones with path separators or dot segments — are rejected for all principals, because the id names the app-layer file on disk.
 
 ## 5. Live updates and event subscriptions
 
