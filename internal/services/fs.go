@@ -39,33 +39,39 @@ func (s *FSService) Init(ctx *service.Context) error {
 }
 
 func (s *FSService) Start(ctx context.Context) error {
-	for method, h := range map[string]ipc.Handler{
-		"fs/list":         s.list,
-		"fs/stat":         s.stat,
-		"fs/read":         s.read,
-		"fs/write":        s.write,
-		"fs/save":         s.save,
-		"fs/mkdir":        s.mkdir,
-		"fs/remove":       s.remove,
-		"fs/rename":       s.rename,
-		"fs/copy":         s.copy,
-		"fs/move":         s.move,
-		"fs/trash":        s.trash,
-		"fs/restore":      s.restore,
-		"fs/trash/list":   s.trashList,
-		"fs/trash/empty":  s.trashEmpty,
-		"fs/grant":        s.grant,
-		"fs/grant/revoke": s.grantRevoke,
-		"fs/grant/list":   s.grantList,
-		"hostfs/mount":    s.hostfsMount,
-		"hostfs/unmount":  s.hostfsUnmount,
-		"hostfs/list":     s.hostfsList,
-	} {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		// The data routes are app-scoped: capability holders get the
+		// whole VFS, application principals reach the handler which
+		// applies the per-path grant, private-path, and shared-host
+		// policy rules a static capability cannot express.
+		"fs/list":   {Handler: s.list, Policy: ipc.AppScoped(security.CapFileRead)},
+		"fs/stat":   {Handler: s.stat, Policy: ipc.AppScoped(security.CapFileRead)},
+		"fs/read":   {Handler: s.read, Policy: ipc.AppScoped(security.CapFileRead)},
+		"fs/write":  {Handler: s.write, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/save":   {Handler: s.save, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/mkdir":  {Handler: s.mkdir, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/remove": {Handler: s.remove, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/rename": {Handler: s.rename, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/copy":   {Handler: s.copy, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/move":   {Handler: s.move, Policy: ipc.AppScoped(security.CapFileWrite)},
+		"fs/trash":  {Handler: s.trash, Policy: ipc.AppScoped(security.CapFileWrite)},
+		// Trash restore/empty still require the capability outright —
+		// the per-item origin checks below additionally re-scope apps.
+		"fs/restore":      {Handler: s.restore, Policy: ipc.Cap(security.CapFileWrite)},
+		"fs/trash/list":   {Handler: s.trashList, Policy: ipc.Cap(security.CapFileRead)},
+		"fs/trash/empty":  {Handler: s.trashEmpty, Policy: ipc.Cap(security.CapFileWrite)},
+		"fs/grant":        {Handler: s.grant, Policy: ipc.Cap(security.CapAdmin)},
+		"fs/grant/revoke": {Handler: s.grantRevoke, Policy: ipc.Cap(security.CapAdmin)},
+		// Apps inspect their own grants; operators and admins see all.
+		"fs/grant/list": {Handler: s.grantList, Policy: ipc.Policy{
+			Caps:     []string{security.CapAdmin},
+			Operator: true,
+			App:      true,
+		}},
+		"hostfs/mount":   {Handler: s.hostfsMount, Policy: ipc.OperatorOr(security.CapAdmin)},
+		"hostfs/unmount": {Handler: s.hostfsUnmount, Policy: ipc.OperatorOr(security.CapAdmin)},
+		"hostfs/list":    {Handler: s.hostfsList, Policy: ipc.Baseline},
+	})
 }
 
 func (s *FSService) Stop(ctx context.Context) error {
@@ -635,9 +641,6 @@ func (s *FSService) trash(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *FSService) restore(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID        string `json:"id"`
 		Dst       string `json:"dst"`
@@ -681,9 +684,6 @@ func (s *FSService) restore(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *FSService) trashList(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileRead); err != nil {
-		return nil, err
-	}
 	target, err := s.targetFS(ctx)
 	if err != nil {
 		return nil, err
@@ -704,9 +704,6 @@ func (s *FSService) trashList(ctx context.Context, req ipc.Request) (any, error)
 }
 
 func (s *FSService) trashEmpty(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	target, err := s.targetFS(ctx)
 	if err != nil {
 		return nil, err
@@ -731,9 +728,6 @@ func (s *FSService) trashEmpty(ctx context.Context, req ipc.Request) (any, error
 }
 
 func (s *FSService) grant(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
-		return nil, err
-	}
 	gs, err := s.grantStore()
 	if err != nil {
 		return nil, err
@@ -765,9 +759,6 @@ func (s *FSService) grant(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *FSService) grantRevoke(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
-		return nil, err
-	}
 	gs, err := s.grantStore()
 	if err != nil {
 		return nil, err
@@ -815,12 +806,6 @@ func (s *FSService) grantList(ctx context.Context, req ipc.Request) (any, error)
 }
 
 func (s *FSService) hostfsMount(ctx context.Context, req ipc.Request) (any, error) {
-	principal := ipc.CallerPrincipal(ctx)
-	caps := ipc.Capabilities(ctx)
-	if !principal.IsOperator() && (caps == nil || !caps.Has(security.CapAdmin)) {
-		return nil, &vfs.Error{Op: "mount", Code: vfs.ErrPermission, Message: "permission denied: operator required"}
-	}
-
 	var p struct {
 		HostPath  string `json:"host_path"`
 		MountPath string `json:"mount_path"`
@@ -865,12 +850,6 @@ func (s *FSService) hostfsMount(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *FSService) hostfsUnmount(ctx context.Context, req ipc.Request) (any, error) {
-	principal := ipc.CallerPrincipal(ctx)
-	caps := ipc.Capabilities(ctx)
-	if !principal.IsOperator() && (caps == nil || !caps.Has(security.CapAdmin)) {
-		return nil, &vfs.Error{Op: "unmount", Code: vfs.ErrPermission, Message: "permission denied: operator required"}
-	}
-
 	var p struct {
 		MountPath string `json:"mount_path"`
 	}
@@ -897,10 +876,6 @@ func (s *FSService) hostfsUnmount(ctx context.Context, req ipc.Request) (any, er
 }
 
 func (s *FSService) hostfsList(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
-
 	v, ok := s.ctx.VFS.(*vfs.VFS)
 	if !ok {
 		return map[string]any{"mounts": []any{}}, nil

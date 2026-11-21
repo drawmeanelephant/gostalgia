@@ -124,7 +124,7 @@ func TestDocumentRecentsAndFavoritesIPC(t *testing.T) {
 	// 5. Caller app permission filtering:
 	// App without grant calling doc/recents should see 0 entries
 	unauthApp := security.AppPrincipal("com.example.unauth", 99, "", security.User{Name: "guest"})
-	resp = env.callAs(ctx, unauthApp, nil, "doc/recents", nil)
+	resp = env.callAs(ctx, unauthApp, security.NewCapabilities(security.CapIPC), "doc/recents", nil)
 	if !resp.OK {
 		t.Fatalf("doc/recents as app failed: %s", resp.Error)
 	}
@@ -234,7 +234,7 @@ func TestDocumentHandoffIPC(t *testing.T) {
 	filesPrincipal := security.AppPrincipal("com.gostalgia.files", 77, "", security.User{Name: "guest"})
 
 	// 1. Files hands off targetDoc to Notes
-	resp := env.callAs(ctx, filesPrincipal, nil, "doc/handoff", sdk.HandoffRequest{
+	resp := env.callAs(ctx, filesPrincipal, security.NewCapabilities(security.CapIPC), "doc/handoff", sdk.HandoffRequest{
 		Version: sdk.DocumentHandoffVersion,
 		Path:    targetDoc,
 		AppID:   "com.gostalgia.notes",

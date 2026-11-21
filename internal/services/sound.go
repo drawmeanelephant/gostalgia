@@ -96,16 +96,10 @@ func (s *SoundService) Init(ctx *service.Context) error {
 }
 
 func (s *SoundService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"sound/play":   s.play,
-		"sound/status": s.status,
-	}
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"sound/play":   {Handler: s.play, Policy: ipc.Cap(security.CapSound)},
+		"sound/status": {Handler: s.status, Policy: ipc.Baseline},
+	})
 }
 
 func (s *SoundService) Stop(ctx context.Context) error {
@@ -119,10 +113,6 @@ type playSoundParams struct {
 }
 
 func (s *SoundService) play(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapSound); err != nil {
-		return nil, err
-	}
-
 	var p playSoundParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, fmt.Errorf("sound/play: invalid parameters: %w", err)
@@ -154,9 +144,6 @@ func (s *SoundService) play(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *SoundService) status(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
 	player := platform.GetAudioPlayer()
 	presets := make([]string, 0, len(soundPresets))
 	for name := range soundPresets {

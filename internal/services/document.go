@@ -82,30 +82,27 @@ func (s *DocumentService) Start(ctx context.Context) error {
 		s.store.SetLifetimeContext(ctx)
 	}
 
-	routes := map[string]ipc.Handler{
-		"doc/search":                s.search,
-		"doc/lookup":                s.lookup,
-		"doc/recents":               s.recentsList,
-		"doc/recents/add":           s.recentsAdd,
-		"doc/recents/remove":        s.recentsRemove,
-		"doc/recents/clear":         s.recentsClear,
-		"doc/favorites":             s.favoritesList,
-		"doc/favorites/add":         s.favoritesAdd,
-		"doc/favorites/remove":      s.favoritesRemove,
-		"doc/favorites/reorder":     s.favoritesReorder,
-		"doc/favorites/clear":       s.favoritesClear,
-		"doc/associations":          s.associationsList,
-		"doc/associations/resolve":  s.associationsResolve,
-		"doc/associations/register": s.associationsRegister,
-		"doc/handoff":               s.handoff,
-	}
-
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		// Search and lookup are permission-aware inside: applications
+		// are scoped by their grants; everyone else needs fs.read.
+		"doc/search":                {Handler: s.search, Policy: ipc.AppScoped(security.CapFileRead)},
+		"doc/lookup":                {Handler: s.lookup, Policy: ipc.AppScoped(security.CapFileRead)},
+		"doc/recents":               {Handler: s.recentsList, Policy: ipc.Baseline},
+		"doc/recents/add":           {Handler: s.recentsAdd, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/recents/remove":        {Handler: s.recentsRemove, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/recents/clear":         {Handler: s.recentsClear, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/favorites":             {Handler: s.favoritesList, Policy: ipc.Baseline},
+		"doc/favorites/add":         {Handler: s.favoritesAdd, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/favorites/remove":      {Handler: s.favoritesRemove, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/favorites/reorder":     {Handler: s.favoritesReorder, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/favorites/clear":       {Handler: s.favoritesClear, Policy: ipc.Cap(security.CapFileWrite)},
+		"doc/associations":          {Handler: s.associationsList, Policy: ipc.Baseline},
+		"doc/associations/resolve":  {Handler: s.associationsResolve, Policy: ipc.Baseline},
+		"doc/associations/register": {Handler: s.associationsRegister, Policy: ipc.Cap(security.CapAdmin)},
+		// Handoff's caller checks live in the store: app callers need a
+		// grant covering the document, operators hand off anything.
+		"doc/handoff": {Handler: s.handoff, Policy: ipc.Baseline},
+	})
 }
 
 func (s *DocumentService) Stop(ctx context.Context) error {
@@ -121,12 +118,6 @@ func (s *DocumentService) search(ctx context.Context, req ipc.Request) (any, err
 	}
 
 	principal := ipc.CallerPrincipal(ctx)
-	if !principal.IsApp() {
-		if err := ipc.RequireCap(ctx, security.CapFileRead); err != nil {
-			return nil, err
-		}
-	}
-
 	return s.store.Searcher().Search(ctx, principal, q)
 }
 
@@ -142,12 +133,6 @@ func (s *DocumentService) lookup(ctx context.Context, req ipc.Request) (any, err
 	}
 
 	principal := ipc.CallerPrincipal(ctx)
-	if !principal.IsApp() {
-		if err := ipc.RequireCap(ctx, security.CapFileRead); err != nil {
-			return nil, err
-		}
-	}
-
 	return s.store.Searcher().Lookup(ctx, principal, p.Query, p.Extension, p.Limit)
 }
 
@@ -178,9 +163,6 @@ func (s *DocumentService) appCanRead(appID, envPath string) bool {
 
 // recentsAdd appends or updates an entry in recents.
 func (s *DocumentService) recentsAdd(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Path  string `json:"path"`
 		AppID string `json:"app_id"`
@@ -225,9 +207,6 @@ func (s *DocumentService) recentsAdd(ctx context.Context, req ipc.Request) (any,
 
 // recentsRemove deletes an entry from recents.
 func (s *DocumentService) recentsRemove(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Path string `json:"path"`
 	}
@@ -253,9 +232,6 @@ func (s *DocumentService) recentsRemove(ctx context.Context, req ipc.Request) (a
 // recentsClear removes all recents entries for an operator, or only the
 // caller-visible entries for an app.
 func (s *DocumentService) recentsClear(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
 		if err := s.store.Recents().ClearFor(principal.AppID); err != nil {
 			return nil, err
@@ -290,9 +266,6 @@ func (s *DocumentService) favoritesList(ctx context.Context, req ipc.Request) (a
 
 // favoritesAdd adds a document to favorites.
 func (s *DocumentService) favoritesAdd(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Path  string `json:"path"`
 		Label string `json:"label"`
@@ -334,9 +307,6 @@ func (s *DocumentService) favoritesAdd(ctx context.Context, req ipc.Request) (an
 
 // favoritesRemove deletes a favorite.
 func (s *DocumentService) favoritesRemove(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Path string `json:"path"`
 	}
@@ -360,9 +330,6 @@ func (s *DocumentService) favoritesRemove(ctx context.Context, req ipc.Request) 
 // favoritesReorder updates the order of favorites. App callers reorder only
 // the caller-visible subset; entries outside their grants keep their ranks.
 func (s *DocumentService) favoritesReorder(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Paths []string `json:"paths"`
 	}
@@ -384,9 +351,6 @@ func (s *DocumentService) favoritesReorder(ctx context.Context, req ipc.Request)
 // favoritesClear removes all favorites for an operator, or only the
 // caller-visible entries for an app.
 func (s *DocumentService) favoritesClear(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
-		return nil, err
-	}
 	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
 		if err := s.store.Favorites().ClearFor(principal.AppID); err != nil {
 			return nil, err
@@ -437,9 +401,6 @@ func (s *DocumentService) associationsRegister(ctx context.Context, req ipc.Requ
 		return nil, err
 	}
 
-	if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
-		return nil, err
-	}
 	principal := ipc.CallerPrincipal(ctx)
 	if principal.IsApp() && assoc.Default {
 		return nil, fmt.Errorf("doc: only an operator may claim a default association")

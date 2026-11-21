@@ -48,17 +48,14 @@ type Notification struct {
 
 type streamKey struct{}
 
-// RegisterEvents installs operator-only routes. History also works in-process;
+// RegisterEvents installs admin-only routes. History also works in-process;
 // subscribe/unsubscribe need the connection state supplied by Server.
 func RegisterEvents(r *Router, bus *events.Bus) error {
 	if bus == nil {
 		return fmt.Errorf("ipc: event bus is required")
 	}
-	return r.HandleBatch(map[string]Handler{
+	return r.HandleBatchPolicy(map[string]Handler{
 		HistoryMethod: func(ctx context.Context, req Request) (any, error) {
-			if err := RequireCap(ctx, security.CapAdmin); err != nil {
-				return nil, err
-			}
 			var p HistoryParams
 			if err := DecodeParams(req.Params, &p); err != nil {
 				return nil, err
@@ -75,9 +72,6 @@ func RegisterEvents(r *Router, bus *events.Bus) error {
 			return history, err
 		},
 		SubscribeMethod: func(ctx context.Context, req Request) (any, error) {
-			if err := RequireCap(ctx, security.CapAdmin); err != nil {
-				return nil, err
-			}
 			stream, _ := ctx.Value(streamKey{}).(*eventStream)
 			if stream == nil {
 				return nil, fmt.Errorf("ipc: subscriptions require a socket connection")
@@ -113,9 +107,6 @@ func RegisterEvents(r *Router, bus *events.Bus) error {
 			}, nil
 		},
 		UnsubscribeMethod: func(ctx context.Context, req Request) (any, error) {
-			if err := RequireCap(ctx, security.CapAdmin); err != nil {
-				return nil, err
-			}
 			var p struct {
 				Subscription uint64 `json:"subscription"`
 			}
@@ -135,7 +126,7 @@ func RegisterEvents(r *Router, bus *events.Bus) error {
 			stream.sub = nil
 			return nil, nil
 		},
-	})
+	}, Cap(security.CapAdmin))
 }
 
 // eventStream is connection-scoped. Its queue remains in the bus so publishers

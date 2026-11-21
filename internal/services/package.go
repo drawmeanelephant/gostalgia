@@ -74,11 +74,15 @@ func loadPackageTrust(name string) (pkg.TrustStore, error) {
 }
 
 func (s *PackageService) Start(ctx context.Context) error {
-	handlers := make(map[string]ipc.Handler)
-	for _, action := range []string{"install", "update", "uninstall", "list", "inspect", "rollback"} {
-		handlers["pkg/"+action] = s.handle
+	routes := map[string]ipc.Route{
+		"pkg/install":   {Handler: s.handle, Policy: ipc.Cap(security.CapPackageWrite)},
+		"pkg/update":    {Handler: s.handle, Policy: ipc.Cap(security.CapPackageWrite)},
+		"pkg/uninstall": {Handler: s.handle, Policy: ipc.Cap(security.CapPackageWrite)},
+		"pkg/rollback":  {Handler: s.handle, Policy: ipc.Cap(security.CapPackageWrite)},
+		"pkg/list":      {Handler: s.handle, Policy: ipc.Cap(security.CapPackageRead)},
+		"pkg/inspect":   {Handler: s.handle, Policy: ipc.Cap(security.CapPackageRead)},
 	}
-	if err := s.ctx.Router.HandleBatch(handlers); err != nil {
+	if err := s.ctx.Router.HandleRoutes(routes); err != nil {
 		_ = s.manager.Close()
 		return err
 	}
@@ -112,14 +116,6 @@ func (s *PackageService) archive(ctx context.Context, name string) (fs.File, err
 }
 
 func (s *PackageService) handle(ctx context.Context, req ipc.Request) (any, error) {
-	read := req.Method == "pkg/list" || req.Method == "pkg/inspect"
-	capability := security.CapPackageWrite
-	if read {
-		capability = security.CapPackageRead
-	}
-	if err := ipc.RequireCap(ctx, capability); err != nil {
-		return nil, err
-	}
 	var p pkg.Params
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err

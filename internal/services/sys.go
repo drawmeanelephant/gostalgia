@@ -11,7 +11,6 @@ import (
 	"gostalgia/internal/security"
 	"gostalgia/internal/service"
 	"gostalgia/internal/session"
-	"gostalgia/internal/vfs"
 	"gostalgia/platform"
 )
 
@@ -34,24 +33,19 @@ func (s *SysService) Init(ctx *service.Context) error {
 
 func (s *SysService) Start(ctx context.Context) error {
 	s.lifetime = ctx
-	routes := map[string]ipc.Handler{
-		"sys/ping":          s.ping,
-		"sys/status":        s.status,
-		"sys/shutdown":      s.shutdown,
-		"sys/policy":        s.policyGet,
-		"sys/policy/update": s.policyUpdate,
-		"app/list":          s.appList,
-		"app/launch":        s.appLaunch,
-		"app/stop":          s.appStop,
-		"app/invalidate":    s.appInvalidate,
-		"session/whoami":    s.whoami,
+	routes := map[string]ipc.Route{
+		"sys/ping":          {Handler: s.ping, Policy: ipc.Baseline},
+		"sys/status":        {Handler: s.status, Policy: ipc.Baseline},
+		"sys/shutdown":      {Handler: s.shutdown, Policy: ipc.Cap(security.CapShutdown)},
+		"sys/policy":        {Handler: s.policyGet, Policy: ipc.Baseline},
+		"sys/policy/update": {Handler: s.policyUpdate, Policy: ipc.OperatorOr(security.CapAdmin)},
+		"app/list":          {Handler: s.appList, Policy: ipc.Cap(security.CapAppList)},
+		"app/launch":        {Handler: s.appLaunch, Policy: ipc.Cap(security.CapAppLaunch)},
+		"app/stop":          {Handler: s.appStop, Policy: ipc.Cap(security.CapProcStop)},
+		"app/invalidate":    {Handler: s.appInvalidate, Policy: ipc.AppOnly(security.CapIPC)},
+		"session/whoami":    {Handler: s.whoami, Policy: ipc.Baseline},
 	}
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(routes)
 }
 
 func (s *SysService) Stop(ctx context.Context) error {
@@ -94,9 +88,6 @@ type sessionInfo struct {
 }
 
 func (s *SysService) status(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
 	procs := make([]processInfo, 0)
 	for _, p := range s.ctx.Procs.List() {
 		procs = append(procs, processInfo{
@@ -167,9 +158,6 @@ func (s *SysService) defaultSession() *session.Session {
 }
 
 func (s *SysService) shutdown(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapShutdown); err != nil {
-		return nil, err
-	}
 	var p struct {
 		Reason string `json:"reason"`
 	}
@@ -189,16 +177,10 @@ func (s *SysService) shutdown(ctx context.Context, req ipc.Request) (any, error)
 }
 
 func (s *SysService) appList(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapAppList); err != nil {
-		return nil, err
-	}
 	return s.ctx.Apps.List(), nil
 }
 
 func (s *SysService) appLaunch(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapAppLaunch); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID string `json:"id"`
 	}
@@ -216,9 +198,6 @@ func (s *SysService) appLaunch(ctx context.Context, req ipc.Request) (any, error
 }
 
 func (s *SysService) appStop(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcStop); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID string `json:"id"`
 	}
@@ -239,13 +218,7 @@ func (s *SysService) appStop(ctx context.Context, req ipc.Request) (any, error) 
 // The app id comes from the caller principal — an app cannot invalidate a
 // view it does not own, and no view data rides the event.
 func (s *SysService) appInvalidate(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
 	principal := ipc.CallerPrincipal(ctx)
-	if !principal.IsApp() || principal.AppID == "" {
-		return nil, fmt.Errorf("app/invalidate: only applications can invalidate their view")
-	}
 	if s.ctx.Events == nil {
 		return nil, fmt.Errorf("app/invalidate: event bus unavailable")
 	}
@@ -291,9 +264,6 @@ func (s *SysService) whoami(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *SysService) policyGet(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
 	policy := security.DefaultOperatorPolicy()
 	if s.ctx != nil && s.ctx.Policy != nil {
 		policy = s.ctx.Policy.Get()
@@ -302,11 +272,6 @@ func (s *SysService) policyGet(ctx context.Context, req ipc.Request) (any, error
 }
 
 func (s *SysService) policyUpdate(ctx context.Context, req ipc.Request) (any, error) {
-	principal := ipc.CallerPrincipal(ctx)
-	caps := ipc.Capabilities(ctx)
-	if !principal.IsOperator() && (caps == nil || !caps.Has(security.CapAdmin)) {
-		return nil, &vfs.Error{Op: "policy/update", Code: vfs.ErrPermission, Message: "permission denied: operator required"}
-	}
 	var newPolicy security.OperatorPolicy
 	if err := ipc.DecodeParams(req.Params, &newPolicy); err != nil {
 		return nil, err

@@ -225,7 +225,7 @@ func TestAppInvalidatePublishesOwnViewEvent(t *testing.T) {
 	// An operator (or any non-app principal) cannot fake an app push.
 	op := security.OperatorPrincipal(security.User{Name: "operator"})
 	resp = env.callAs(context.Background(), op, security.AdminCapabilities(), "app/invalidate", nil)
-	if resp.OK || !strings.Contains(resp.Error, "only applications") {
+	if resp.OK || !strings.Contains(resp.Error, "app principal required") {
 		t.Fatalf("operator invalidate = %+v, want app-only denial", resp)
 	}
 	// The route still requires the ipc capability.

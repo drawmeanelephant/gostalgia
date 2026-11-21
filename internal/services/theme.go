@@ -42,15 +42,10 @@ func (s *ThemeService) Init(ctx *service.Context) error {
 }
 
 func (s *ThemeService) Start(ctx context.Context) error {
-	for method, h := range map[string]ipc.Handler{
-		"theme/list": s.list,
-		"theme/get":  s.get,
-	} {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"theme/list": {Handler: s.list, Policy: ipc.Cap(security.CapFileRead)},
+		"theme/get":  {Handler: s.get, Policy: ipc.Cap(security.CapFileRead)},
+	})
 }
 
 func (s *ThemeService) Stop(ctx context.Context) error {
@@ -135,9 +130,6 @@ type themeListResp struct {
 }
 
 func (s *ThemeService) list(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileRead); err != nil {
-		return nil, err
-	}
 	defs, skips := s.loadUserThemes()
 	names := config.BuiltinThemeNames()
 	themes := make([]themeInfo, 0, len(names)+len(defs))
@@ -167,9 +159,6 @@ type themeGetResp struct {
 }
 
 func (s *ThemeService) get(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapFileRead); err != nil {
-		return nil, err
-	}
 	var p themeGetReq
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err

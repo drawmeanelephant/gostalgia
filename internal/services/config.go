@@ -54,25 +54,19 @@ func (s *ConfigService) Init(ctx *service.Context) error {
 }
 
 func (s *ConfigService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"config/get":            s.get,
-		"config/set":            s.set,
-		"config/unset":          s.unset,
-		"config/reset":          s.reset,
-		"config/list":           s.list,
-		"config/snapshot":       s.list,
-		"config/preview":        s.preview,
-		"config/cancel_preview": s.cancelPreview,
-		"config/commit_preview": s.commitPreview,
-		"config/validate":       s.validate,
-		"config/explain":        s.explain,
-	}
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"config/get":            {Handler: s.get, Policy: ipc.Cap(security.CapConfigRead)},
+		"config/set":            {Handler: s.set, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/unset":          {Handler: s.unset, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/reset":          {Handler: s.reset, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/list":           {Handler: s.list, Policy: ipc.Cap(security.CapConfigRead)},
+		"config/snapshot":       {Handler: s.list, Policy: ipc.Cap(security.CapConfigRead)},
+		"config/preview":        {Handler: s.preview, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/cancel_preview": {Handler: s.cancelPreview, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/commit_preview": {Handler: s.commitPreview, Policy: ipc.Cap(security.CapConfigWrite)},
+		"config/validate":       {Handler: s.validate, Policy: ipc.Cap(security.CapConfigRead)},
+		"config/explain":        {Handler: s.explain, Policy: ipc.Cap(security.CapConfigRead)},
+	})
 }
 
 func (s *ConfigService) Stop(ctx context.Context) error {
@@ -95,9 +89,6 @@ type getResp struct {
 }
 
 func (s *ConfigService) get(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
-		return nil, err
-	}
 	var p getReq
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -164,26 +155,14 @@ func (s *ConfigService) set(ctx context.Context, req ipc.Request) (any, error) {
 
 	principal := ipc.CallerPrincipal(ctx)
 
-	// Permission checks
+	// The route policy already requires config.write; the system layer
+	// additionally requires admin, and the app layer pins app callers to
+	// their own app id.
 	if targetLayer == config.LayerSystem {
 		if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
 			return nil, fmt.Errorf("config/set: system layer requires admin capability: %w", err)
 		}
-	} else if targetLayer == config.LayerUser {
-		if principal.IsApp() {
-			if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-				return nil, fmt.Errorf("config/set: user layer requires config.write capability: %w", err)
-			}
-		} else if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-			return nil, err
-		}
 	} else if targetLayer == config.LayerApp {
-		// The app layer persists to host disk outside the VFS grant
-		// scope, so it requires config.write like the other persistent
-		// layers — baseline ipc must not reach disk.
-		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-			return nil, fmt.Errorf("config/set: app layer requires config.write capability: %w", err)
-		}
 		if p.AppID == "" && principal.IsApp() {
 			p.AppID = principal.AppID
 		}
@@ -243,10 +222,6 @@ func (s *ConfigService) unset(ctx context.Context, req ipc.Request) (any, error)
 		if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
 			return nil, err
 		}
-	} else if principal.IsApp() {
-		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-			return nil, err
-		}
 	}
 
 	// App principals may only address their own app layer, matching
@@ -298,10 +273,6 @@ func (s *ConfigService) reset(ctx context.Context, req ipc.Request) (any, error)
 		if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
 			return nil, err
 		}
-	} else if principal.IsApp() {
-		if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-			return nil, err
-		}
 	}
 
 	// App principals may only address their own app layer, matching
@@ -341,9 +312,6 @@ type listResp struct {
 }
 
 func (s *ConfigService) list(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
-		return nil, err
-	}
 	var p listReq
 	_ = ipc.DecodeParams(req.Params, &p)
 
@@ -392,9 +360,6 @@ type previewReq struct {
 }
 
 func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-		return nil, err
-	}
 	var p previewReq
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -438,9 +403,6 @@ func (s *ConfigService) preview(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *ConfigService) cancelPreview(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-		return nil, err
-	}
 	opts := config.QueryOpts{}
 	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
 		opts.AppID = principal.AppID
@@ -468,8 +430,6 @@ func (s *ConfigService) commitPreview(ctx context.Context, req ipc.Request) (any
 		if err := ipc.RequireCap(ctx, security.CapAdmin); err != nil {
 			return nil, err
 		}
-	} else if err := ipc.RequireCap(ctx, security.CapConfigWrite); err != nil {
-		return nil, err
 	}
 
 	// Only the caller's own staged overrides are committed.
@@ -497,9 +457,6 @@ type validateResp struct {
 }
 
 func (s *ConfigService) validate(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
-		return nil, err
-	}
 	var p validateReq
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -542,9 +499,6 @@ type explainReq struct {
 }
 
 func (s *ConfigService) explain(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapConfigRead); err != nil {
-		return nil, err
-	}
 	var p explainReq
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
