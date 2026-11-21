@@ -17,8 +17,11 @@ import (
 	"gostalgia/internal/security"
 )
 
-// maxLine bounds one protocol line (request or response).
-const maxLine = 4 << 20 // 4 MiB
+// maxLine bounds one protocol line (request or response). It is sized so a
+// maximum service payload — 4 MiB of raw data base64-encoded plus the JSON
+// envelope — fits end-to-end; a 4 MiB frame cap would make the documented
+// payload limit unreachable.
+const maxLine = 6 << 20 // 6 MiB
 
 var errFrameTooLarge = errors.New("ipc: frame exceeds limit")
 

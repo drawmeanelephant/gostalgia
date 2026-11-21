@@ -635,12 +635,12 @@ func writeWireMessage(conn io.Writer, mu *sync.Mutex, msg rpcWireMessage) error 
 	return err
 }
 
-// maxWireLine bounds one child wire frame, matching the 4 MiB line cap the
+// maxWireLine bounds one child wire frame, matching the 6 MiB line cap the
 // ipc server enforces (internal/ipc/server.go). maxChildInFlight bounds
 // concurrent child-initiated dispatches, matching the ipc server's
 // per-connection in-flight limit.
 const (
-	maxWireLine      = 4 << 20
+	maxWireLine      = 6 << 20
 	maxChildInFlight = 32
 )
 
@@ -662,7 +662,7 @@ const (
 // in-flight slot forever. It is a var so tests can shrink it.
 var routeReplyTimeout = 60 * time.Second
 
-var errWireFrameTooLarge = errors.New("app: wire frame exceeds 4 MiB limit")
+var errWireFrameTooLarge = errors.New("app: wire frame exceeds 6 MiB limit")
 
 // validRouteName reports whether name is a valid local route identifier:
 // [a-z] followed by [a-z0-9_-], at most maxRouteNameLen bytes.

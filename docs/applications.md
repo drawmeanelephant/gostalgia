@@ -1140,13 +1140,13 @@ kill between any two of them leaves a consistent, recoverable state:
 - **Index**: on open, each entry is checked against the SHA-256 of its
   source file. Missing, corrupt, or stale entries are reparsed and the index
   is rewritten. Deleting `index.json` causes a full rebuild with no content
-  loss. The index is only a cache: one over ~2.9 MiB (the IPC frame after
-  base64) or unreadable is discarded and rebuilt; if a new one cannot be
-  written it is simply not persisted (`status` shows `index_problem`) and
-  the notes are reparsed on the next open. Writing the index never fails
-  the operation that triggered it. Note files over 1 MiB, unreadable ones,
-  and anything past the note-count or byte limits are skipped with a
-  warning and left untouched on disk.
+  loss. The index is only a cache: one over ~2.9 MiB (a conservative bound
+  under the IPC frame after base64) or unreadable is discarded and rebuilt;
+  if a new one cannot be written it is simply not persisted (`status` shows
+  `index_problem`) and the notes are reparsed on the next open. Writing the
+  index never fails the operation that triggered it. Note files over 1 MiB,
+  unreadable ones, and anything past the note-count or byte limits are
+  skipped with a warning and left untouched on disk.
 - **Interrupted saves**: an orphaned `*.tmp.*` staging file is deleted.
   A `.recover` artifact from a save whose final rename failed becomes a
   recovery draft, or a draft under a `(recovered)` title if the user already
@@ -1213,8 +1213,8 @@ appear as unresolved in the graph.
   collide with the bookkeeping for `X`. Each imported
   note is created atomically, so re-running an interrupted import finishes
   it.
-- Exports are limited to about 2.9 MiB, under the 4 MiB IPC frame after
-  base64, and a vault export is refused when the vault is larger than one
+- Exports are limited to about 2.9 MiB, comfortably inside the IPC frame
+  after base64, and a vault export is refused when the vault is larger than one
   import accepts (32 MiB or 10,000 notes), so every archive Compendium
   writes imports again. Export larger vaults note by note.
 
@@ -1240,7 +1240,7 @@ Programmatic routes under `app/com.gostalgia.compendium/`: `create`, `open`,
 `search`, `graph`, `tags`, `tag`, `today`, `list`, `export`, `import`,
 `drafts`, `recover`, `rebuild`, `status`.
 
-Responses stay inside the 4 MiB IPC frame for any note. `encoding/json`
+Responses stay inside the IPC frame for any note. `encoding/json`
 writes `<`, `>`, `&`, and control bytes as six bytes each, so a 1 MiB note
 can encode to 6 MiB: `open` sends text that would not fit as
 `content_base64` (and omits `rendered`, flagged `rendered_omitted`), and
@@ -1273,7 +1273,7 @@ content or byte-identical export.
   are refused as collisions rather than unified, and links resolve by case
   fold only; see Storage layout.
 - `graph` and `list` return the whole vault in one response; a very large
-  vault with long titles can exceed the 4 MiB IPC frame there (not
+  vault with long titles can exceed the 6 MiB IPC frame there (not
   paginated yet).
 - A vault whose index exceeds ~2.9 MiB (roughly tens of thousands of links)
   runs without a persisted index and reparses every note on open.

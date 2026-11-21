@@ -27,12 +27,15 @@ are correlated by `id` and may arrive out of order. Event notifications have
 ```
 
 Errors: `{"id":1,"ok":false,"error":"..."}`. Handlers may not panic through
-(`Dispatch` recovers). Frames must be smaller than 4 MiB including the
-newline. Invalid JSON, missing IDs/methods, truncated or oversized frames,
-duplicate outstanding IDs, and more than 32 outstanding requests disconnect
-the peer. Oversized responses become a small correlated error response.
-Application-level errors (unknown methods, invalid params, permission errors)
-do not disconnect it.
+(`Dispatch` recovers). Frames must be smaller than 6 MiB including the
+newline — sized so the largest service payload (4 MiB of raw data, ~5.4 MiB
+base64-encoded) plus its JSON envelope fits. Invalid JSON, missing
+IDs/methods, truncated or oversized frames, duplicate outstanding IDs, and
+more than 32 outstanding requests disconnect the peer. A client-side frame
+check rejects an oversized request before any byte is written, so it fails
+only that call. Oversized responses become a small correlated error
+response. Application-level errors (unknown methods, invalid params,
+permission errors) do not disconnect it.
 
 The server dispatches handlers concurrently, with a bounded response queue
 and one socket writer. Queued replies take priority over notifications.

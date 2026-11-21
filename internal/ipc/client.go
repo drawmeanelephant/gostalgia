@@ -110,9 +110,14 @@ func (c *Client) call(ctx context.Context, method string, params, out any, buffe
 		delete(c.pending, id)
 		c.mu.Unlock()
 	}()
+	// Marshal once so an oversized request fails here, before any byte is
+	// written: the frame check fails only this call, not the connection.
 	frame, err := json.Marshal(Request{ID: id, Method: method, Params: raw})
 	if err != nil {
 		return nil, fmt.Errorf("ipc: encode request: %w", err)
+	}
+	if len(frame)+1 >= maxLine {
+		return nil, errFrameTooLarge
 	}
 	select {
 	case c.writes <- clientWrite{frame, ctx}:
