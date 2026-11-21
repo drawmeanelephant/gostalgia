@@ -310,9 +310,14 @@ strictly disabled/internal-only and require two distinct levels of authorization
    - **Network egress (`net.egress`):** Outbound network access is disabled by default. When
      enabled by policy, requests via `net/fetch` are checked against operator-configured host
      whitelists (`allowed_hosts`), blacklists (`blocked_hosts`), port filters (`allowed_ports`),
-     and HTTPS-only transport requirements (`allow_insecure: false`). In addition, for external
-     sandboxed apps, host network access at the kernel/sandbox level is denied unless both the app
-     manifest grants `net.egress` and the operator policy permits network egress.
+     and HTTPS-only transport requirements (`allow_insecure: false`). Both the request host and
+     every list entry are canonicalized before comparison — lowercased, a single trailing dot
+     stripped, and IP literals normalized (including the decimal, hexadecimal, octal, and
+     abbreviated dotted IPv4 forms the system resolver accepts, and IPv4-mapped IPv6 addresses) —
+     so an alternate spelling of the same destination cannot bypass a blocked entry, and every
+     redirect hop is re-checked. In addition, for external sandboxed apps, host network access at
+     the kernel/sandbox level is denied unless both the app manifest grants `net.egress` and the
+     operator policy permits network egress.
 
 Audio output (`sound` capability, `sound/play`) is intentionally not part of
 the opt-in policy set: it carries output-only, bounded, synthesized PCM that
