@@ -3,10 +3,12 @@ package recovery
 import (
 	"archive/zip"
 	"bytes"
+	"compress/flate"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"path"
 	"sort"
@@ -23,6 +25,12 @@ type ExportOptions struct {
 	ExcludeSecrets []string // Secret strings (e.g. operator tokens) that must not appear in any exported file
 	SourceVersion  string   // Environment version string
 	Description    string   // Optional user-supplied backup note
+	// SystemConfig carries the live system preferences document
+	// (host config/system.json) supplied by the caller. The system store
+	// lives outside the VFS, so it cannot be gathered through vfs.FS.
+	// When empty, export falls back to the VFS /config/system.json path
+	// for compatibility with filesystems that materialize it there.
+	SystemConfig []byte
 }
 
 // SkippedFile records a path that export observed but did not include in the
@@ -95,6 +103,10 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 	var totalBytes int64
 	var skipped []SkippedFile
 
+	// ParseArchive rejects entries whose names collide under case-folding,
+	// so names that differ only by case must never reach the archive.
+	seenFolded := map[string]string{strings.ToLower(ManifestFilename): ManifestFilename}
+
 	recordSkip := func(vfsPath, reason string) {
 		skipped = append(skipped, SkippedFile{Path: vfsPath, Reason: reason})
 	}
@@ -117,6 +129,11 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 		if !PortablePath(arcName) {
 			return fmt.Errorf("recovery: nonportable archive path generated for %q", vfsPath)
 		}
+		if prev, dup := seenFolded[strings.ToLower(arcName)]; dup {
+			recordSkip(cleanVFS, fmt.Sprintf("archive name collides with %q under case-insensitive comparison", prev))
+			return nil
+		}
+		seenFolded[strings.ToLower(arcName)] = arcName
 
 		size := int64(len(content))
 		if size > MaxSingleFileBytes {
@@ -159,13 +176,22 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 		}
 	}
 
-	// 2. Export system configuration if requested
+	// 2. Export system configuration if requested. The live system store is
+	// supplied by the caller (it lives outside the VFS); the VFS path is a
+	// legacy fallback only.
 	if opts.IncludeSystem {
-		systemCfg, err := vfsInstance.ReadFile("/config/system.json")
-		if err == nil {
-			if err := addFile("/config/system.json", systemCfg, time.Now()); err != nil {
+		systemCfg := opts.SystemConfig
+		if len(systemCfg) == 0 {
+			if raw, err := vfsInstance.ReadFile(SystemConfigVFSPath); err == nil {
+				systemCfg = raw
+			}
+		}
+		if len(systemCfg) > 0 {
+			if err := addFile(SystemConfigVFSPath, systemCfg, time.Now()); err != nil {
 				return nil, err
 			}
+		} else {
+			recordSkip(SystemConfigVFSPath, "no system preferences store present")
 		}
 	}
 
@@ -269,6 +295,14 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 		}
 	}
 
+	// 3b. User-installed themes live under /config/themes; losing them on
+	// every backup/restore cycle silently resets the theme catalog.
+	if opts.IncludeSystem {
+		if err := walkDir("/config/themes"); err != nil {
+			return nil, err
+		}
+	}
+
 	// /apps/data is app-private storage behind the app isolation boundary;
 	// IsAllowedVFSPath excludes it and ParseArchive refuses /apps paths on
 	// restore, so portable backups deliberately do not carry it. Record the
@@ -281,8 +315,10 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 		recordSkip("/apps/data", "unreadable directory: "+err.Error())
 	}
 
-	if len(payloads) > MaxFiles {
-		return nil, fmt.Errorf("recovery: total file count %d exceeds ceiling of %d", len(payloads), MaxFiles)
+	// The archive also contains backup.json, so the payload count must
+	// leave room for the manifest entry within MaxFiles.
+	if len(payloads)+1 > MaxFiles {
+		return nil, fmt.Errorf("recovery: total file count %d exceeds ceiling of %d", len(payloads), MaxFiles-1)
 	}
 
 	// Sort payloads deterministically by ArcName
@@ -301,38 +337,64 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 	if err != nil {
 		return nil, fmt.Errorf("recovery: marshal manifest: %w", err)
 	}
+	if len(manifestBytes) > MaxManifestBytes {
+		return nil, fmt.Errorf("recovery: manifest size %d exceeds limit of %d bytes (%d files)", len(manifestBytes), MaxManifestBytes, len(payloads))
+	}
 
 	// Write ZIP archive
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 
-	// Add backup.json
-	mh := &zip.FileHeader{
-		Name:     ManifestFilename,
-		Method:   zip.Deflate,
-		Modified: createdAt,
-	}
-	mw, err := zw.CreateHeader(mh)
-	if err != nil {
-		return nil, fmt.Errorf("recovery: write manifest header: %w", err)
-	}
-	if _, err := mw.Write(manifestBytes); err != nil {
-		return nil, fmt.Errorf("recovery: write manifest content: %w", err)
+	writeEntry := func(name string, content []byte) error {
+		fh := &zip.FileHeader{
+			Name:               name,
+			Method:             zip.Deflate,
+			Modified:           createdAt,
+			CRC32:              crc32.ChecksumIEEE(content),
+			UncompressedSize64: uint64(len(content)),
+		}
+		var body []byte
+		if len(content) == 0 {
+			fh.Method = zip.Store
+		} else {
+			cb := new(bytes.Buffer)
+			fw, err := flate.NewWriter(cb, flate.DefaultCompression)
+			if err != nil {
+				return fmt.Errorf("recovery: compress entry %q: %w", name, err)
+			}
+			if _, err := fw.Write(content); err != nil {
+				_ = fw.Close()
+				return fmt.Errorf("recovery: compress entry %q: %w", name, err)
+			}
+			if err := fw.Close(); err != nil {
+				return fmt.Errorf("recovery: compress entry %q: %w", name, err)
+			}
+			body = cb.Bytes()
+			// ParseArchive refuses entries whose deflate ratio exceeds
+			// MaxCompressionRatio. Every payload is already content-addressed
+			// by the manifest, so storing it raw is the faithful choice.
+			if uint64(len(body))*MaxCompressionRatio < uint64(len(content)) {
+				fh.Method = zip.Store
+				body = content
+			}
+		}
+		fh.CompressedSize64 = uint64(len(body))
+		w, err := zw.CreateRaw(fh)
+		if err != nil {
+			return fmt.Errorf("recovery: write entry header %q: %w", name, err)
+		}
+		if _, err := w.Write(body); err != nil {
+			return fmt.Errorf("recovery: write entry content %q: %w", name, err)
+		}
+		return nil
 	}
 
-	// Add data files
+	if err := writeEntry(ManifestFilename, manifestBytes); err != nil {
+		return nil, err
+	}
 	for _, p := range payloads {
-		fh := &zip.FileHeader{
-			Name:     p.entry.ArcName,
-			Method:   zip.Deflate,
-			Modified: createdAt,
-		}
-		fw, err := zw.CreateHeader(fh)
-		if err != nil {
-			return nil, fmt.Errorf("recovery: write entry header %q: %w", p.entry.ArcName, err)
-		}
-		if _, err := fw.Write(p.content); err != nil {
-			return nil, fmt.Errorf("recovery: write entry content %q: %w", p.entry.ArcName, err)
+		if err := writeEntry(p.entry.ArcName, p.content); err != nil {
+			return nil, err
 		}
 	}
 
@@ -343,6 +405,12 @@ func Export(ctx context.Context, vfsInstance vfs.FS, out io.Writer, opts ExportO
 	archiveBytes := buf.Bytes()
 	if len(archiveBytes) > MaxArchiveBytes {
 		return nil, fmt.Errorf("recovery: compressed archive size %d exceeds limit of %d", len(archiveBytes), MaxArchiveBytes)
+	}
+
+	// Report success only for an archive the environment's own parser
+	// accepts: export and restore must enforce the same rule set.
+	if _, err := ParseArchive(bytes.NewReader(archiveBytes)); err != nil {
+		return nil, fmt.Errorf("recovery: export produced an archive its own parser rejects: %w", err)
 	}
 
 	if _, err := out.Write(archiveBytes); err != nil {
@@ -386,7 +454,9 @@ func ExportToVFS(ctx context.Context, vfsInstance vfs.FS, destPath string, opts 
 		return nil, err
 	}
 
-	if err := vfsInstance.SaveAtomic(destClean, buf.Bytes(), 0o644); err != nil {
+	// Archives are bulk data bounded by MaxArchiveBytes, not by the
+	// interactive document cap.
+	if err := vfs.SaveAtomicBounded(vfsInstance, destClean, buf.Bytes(), 0o644, MaxArchiveBytes); err != nil {
 		return nil, fmt.Errorf("recovery: save archive: %w", err)
 	}
 
