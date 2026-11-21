@@ -767,16 +767,14 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 			return fail(fmt.Errorf("usage: ps"))
 		}
 		var procs []struct {
-			ID           int32     `json:"id"`
-			Name         string    `json:"name"`
-			Kind         string    `json:"kind"`
-			State        string    `json:"state"`
-			Caps         []string  `json:"caps"`
-			StartedAt    time.Time `json:"started_at"`
-			ExitedAt     time.Time `json:"exited_at"`
-			ExitCode     int       `json:"exit_code"`
-			RestartCount int       `json:"restart_count"`
-			CrashLoop    bool      `json:"crash_loop"`
+			ID        int32     `json:"id"`
+			Name      string    `json:"name"`
+			Kind      string    `json:"kind"`
+			State     string    `json:"state"`
+			Caps      []string  `json:"caps"`
+			StartedAt time.Time `json:"started_at"`
+			ExitedAt  time.Time `json:"exited_at"`
+			ExitCode  int       `json:"exit_code"`
 		}
 		if err := c.Call(ctx, "proc/list", nil, &procs); err != nil {
 			return fail(err)
@@ -784,11 +782,7 @@ func command(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		rows := []string{"PID   PROCESS                          STATE / STATUS     TIME     GRANT"}
 		for _, p := range procs {
 			stateDesc := p.State
-			if p.CrashLoop {
-				stateDesc = fmt.Sprintf("crashloop (%d)", p.RestartCount)
-			} else if p.RestartCount > 0 && (p.State == "running" || p.State == "restarting") {
-				stateDesc = fmt.Sprintf("%s (%d)", p.State, p.RestartCount)
-			} else if p.State == "stopped" || p.State == "failed" {
+			if p.State == "stopped" || p.State == "failed" {
 				stateDesc = fmt.Sprintf("%s (exit %d)", p.State, p.ExitCode)
 			}
 			timeStr := "-"

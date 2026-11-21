@@ -6,7 +6,7 @@
 | +----| > COMMAND PALETTE (Ctrl-P / Esc)                               |----+ |
 | | > L| >                                                              |    | |
 | | PID|                                                                |    | |
-| | ---| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |-   | |
+| | ---| > [APP] Switch to Echo   com.gostalgia.echo | PID 7 (...       |    | |
 | |   1|   [APP] Stop Echo  Graceful stop com.gostalgia....             |    | |
 | | > 7|   [APP] Launch Echo (relaunch)  com.gostalgia.echo (already .. |    | |
 | |   1|   [APP] Launch Notes  com.gostalgia.notes                      |    | |
