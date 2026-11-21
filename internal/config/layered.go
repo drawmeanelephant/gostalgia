@@ -199,6 +199,40 @@ func (ls *LayeredStore) appStoreLocked(appID string) *Store {
 	return appStore
 }
 
+// Reload re-reads every on-disk layer from its current path so the
+// in-memory snapshots reflect external changes (for example a backup
+// restore). Staged preview overrides are dropped: they were authored
+// against the pre-reload document and would silently resurrect stale
+// values on the next commit.
+func (ls *LayeredStore) Reload() error {
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+
+	reloadStore := func(layer Layer, s *Store) *Store {
+		p := s.Path()
+		if p == "" {
+			return s
+		}
+		ns, err := Load(p)
+		if err != nil {
+			ls.corruptLayers[layer] = err
+			return &Store{path: p, data: map[string]any{}}
+		}
+		delete(ls.corruptLayers, layer)
+		return ns
+	}
+
+	ls.systemStore = reloadStore(LayerSystem, ls.systemStore)
+	ls.userStore = reloadStore(LayerUser, ls.userStore)
+	for id, s := range ls.appStores {
+		ls.appStores[id] = reloadStore(LayerApp, s)
+	}
+
+	ls.previewData = make(map[string]any)
+	ls.previewOwners = make(map[string]string)
+	return nil
+}
+
 // OnChange registers a listener for configuration change events.
 func (ls *LayeredStore) OnChange(fn func(ChangeEvent)) {
 	ls.mu.Lock()

@@ -276,6 +276,25 @@ func (s *ScopedVFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error
 	return s.vfs.SaveAtomic(name, data, perm)
 }
 
+// SaveAtomicBounded applies the same access checks as SaveAtomic, then
+// delegates a bounded large save to the underlying filesystem.
+func (s *ScopedVFS) SaveAtomicBounded(name string, data []byte, perm fs.FileMode, limit int64) error {
+	norm, err := Normalize(name)
+	if err != nil {
+		return &Error{Op: "save", Path: name, Code: ErrInvalid, Message: err.Error()}
+	}
+	if norm == "apps/data" || norm == "apps/data/"+s.appID {
+		return &Error{Op: "save", Path: name, Code: ErrIsDir, Message: "cannot save to directory"}
+	}
+	if err := s.check("save", name, AccessReadWrite); err != nil {
+		return err
+	}
+	if IsAppPrivatePath(s.appID, name) {
+		_ = s.ensurePrivateStorage()
+	}
+	return SaveAtomicBounded(s.vfs, name, data, perm, limit)
+}
+
 func (s *ScopedVFS) SaveAtomicOpt(name string, data []byte, perm fs.FileMode, overwrite bool) error {
 	norm, err := Normalize(name)
 	if err != nil {

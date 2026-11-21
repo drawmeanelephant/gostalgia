@@ -152,6 +152,14 @@ func (m *Manager) Register(s Service) error {
 	return nil
 }
 
+// Get returns the registered service with the given name.
+func (m *Manager) Get(name string) (Service, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.services[name]
+	return s, ok
+}
+
 // StartAll initializes and starts every service in dependency order. On
 // failure it stops the services already started (in reverse) and returns
 // the error.

@@ -254,11 +254,11 @@ func (m *Manager) ensureDirsLocked(id string) error {
 	return nil
 }
 
-// Reload re-reads profile definitions and the active profile from VFS.
-// When the stored active profile differs — as after a backup restore —
-// the registered switch callbacks and profile.switched event run exactly
-// as they do for Switch, so every consumer of "the active profile
-// changed" sees the transition through the same mechanism.
+// Reload re-reads profile definitions and the active profile from VFS. When
+// the stored active profile differs from the in-memory one — as it does
+// after a backup restore — Reload runs the same transition as Switch:
+// switch hooks fire and a profile.switched event is published, so
+// identity-dependent services rebind instead of keeping stale state.
 func (m *Manager) Reload() error {
 	m.mu.Lock()
 	prevID := m.activeID
@@ -271,7 +271,9 @@ func (m *Manager) Reload() error {
 		m.mu.Unlock()
 		return nil
 	}
-	nextProfile := m.profiles[m.activeID]
+	nextID := m.activeID
+	nextProfile := m.profiles[nextID]
+	_ = m.ensureDirsLocked(nextID)
 	callbacks := make([]func(prev, next Profile), len(m.onSwitch))
 	copy(callbacks, m.onSwitch)
 	m.mu.Unlock()
@@ -282,11 +284,11 @@ func (m *Manager) Reload() error {
 	if m.bus != nil {
 		m.bus.Publish("profile", SwitchedEvent{
 			PreviousID: prevID,
-			ActiveID:   nextProfile.ID,
+			ActiveID:   nextID,
 			Profile:    nextProfile,
 		})
 	}
-	m.log.Info("profile switched", "previous", prevID, "active", nextProfile.ID)
+	m.log.Info("profile switched (reload)", "previous", prevID, "active", nextID)
 	return nil
 }
 
