@@ -287,18 +287,25 @@ func (h *HostFS) syncDir(dir string) {
 }
 
 func (h *HostFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
+	return h.SaveAtomicBounded(name, data, perm, MaxDocumentSize)
+}
+
+// SaveAtomicBounded is SaveAtomic with an explicit size limit instead of the
+// interactive document cap. Bulk data paths (backup/restore) bound their
+// payloads by their own documented ceilings.
+func (h *HostFS) SaveAtomicBounded(name string, data []byte, perm fs.FileMode, limit int64) error {
 	if err := validFSName("save", name); err != nil {
 		return err
 	}
 	if name == "." {
 		return &fs.PathError{Op: "save", Path: name, Err: errors.New("cannot save to root")}
 	}
-	if int64(len(data)) > MaxDocumentSize {
+	if int64(len(data)) > limit {
 		return &Error{
 			Op:      "save",
 			Path:    "/" + name,
 			Code:    ErrTooLarge,
-			Message: fmt.Sprintf("document size %d exceeds limit of %d bytes", len(data), MaxDocumentSize),
+			Message: fmt.Sprintf("document size %d exceeds limit of %d bytes", len(data), limit),
 		}
 	}
 	// If destination exists and is a directory, refuse to overwrite with a file.
