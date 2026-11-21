@@ -330,6 +330,23 @@ func (v *VFS) SaveAtomicOpt(path string, data []byte, perm fs.FileMode, overwrit
 	return fsys.SaveAtomic(sub, data, perm)
 }
 
+// SaveAtomicBounded routes a bounded large save to the mounted backend.
+// Overwrite semantics match SaveAtomicOpt with overwrite=true.
+func (v *VFS) SaveAtomicBounded(path string, data []byte, perm fs.FileMode, limit int64) error {
+	norm, err := Normalize(path)
+	if err != nil {
+		return err
+	}
+	if norm == "." {
+		return &Error{Op: "save", Path: path, Code: ErrInvalid, Message: "cannot save to root"}
+	}
+	if v.isMountPoint(norm) {
+		return &Error{Op: "save", Path: path, Code: ErrInvalid, Message: "cannot save over an active mount point"}
+	}
+	fsys, sub := v.resolve(norm)
+	return SaveAtomicBounded(fsys, sub, data, perm, limit)
+}
+
 func (v *VFS) Rename(oldPath, newPath string) error {
 	return v.RenameOpt(oldPath, newPath, false)
 }

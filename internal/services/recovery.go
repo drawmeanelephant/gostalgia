@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"path"
@@ -185,6 +186,16 @@ func (f *scopedBackupFS) SaveAtomic(name string, data []byte, perm fs.FileMode) 
 	return f.FS.SaveAtomic(name, data, perm)
 }
 
+// SaveAtomicBounded applies the same write checks as SaveAtomic, then
+// performs the bounded large save recovery uses for archives and restored
+// payloads above the interactive document cap.
+func (f *scopedBackupFS) SaveAtomicBounded(name string, data []byte, perm fs.FileMode, limit int64) error {
+	if err := f.checkWrite(name); err != nil {
+		return err
+	}
+	return vfs.SaveAtomicBounded(f.FS, name, data, perm, limit)
+}
+
 func (f *scopedBackupFS) Remove(name string) error {
 	if err := f.checkWrite(name); err != nil {
 		return err
@@ -261,6 +272,18 @@ func (s *RecoveryService) exportBackup(ctx context.Context, req ipc.Request) (an
 		Description:    p.Description,
 	}
 
+	// The system preferences store is a host file outside the VFS; supply
+	// its live contents so backups capture what the environment reads.
+	// App principals are excluded: injecting the host document would
+	// bypass the grant-scoped read checks their backup path enforces.
+	if includeSystem && s.ctx.Config != nil && !ipc.CallerPrincipal(ctx).IsApp() {
+		if snap := s.ctx.Config.Snapshot(); len(snap) > 0 {
+			if raw, err := json.Marshal(snap); err == nil {
+				opts.SystemConfig = raw
+			}
+		}
+	}
+
 	target, err := s.callerVFS(ctx)
 	if err != nil {
 		return nil, err
@@ -329,11 +352,22 @@ func (s *RecoveryService) previewBackup(ctx context.Context, req ipc.Request) (a
 		return nil, fmt.Errorf("recovery: read archive %q: %w", cleanPath, err)
 	}
 
-	report, err := recovery.Preview(bytes.NewReader(data), target)
+	report, err := recovery.PreviewOpt(bytes.NewReader(data), target, s.systemConfigPath(ctx))
 	if err != nil {
 		return nil, err
 	}
 	return report, nil
+}
+
+// systemConfigPath returns the host path of the live system preferences
+// store, or "" when none is configured. It returns "" for application
+// principals so a grant-scoped restore cannot write a host file outside
+// its scoped filesystem checks.
+func (s *RecoveryService) systemConfigPath(ctx context.Context) string {
+	if ipc.CallerPrincipal(ctx).IsApp() || s.ctx.Config == nil {
+		return ""
+	}
+	return s.ctx.Config.Path()
 }
 
 func (s *RecoveryService) restoreBackup(ctx context.Context, req ipc.Request) (any, error) {
@@ -371,8 +405,9 @@ func (s *RecoveryService) restoreBackup(ctx context.Context, req ipc.Request) (a
 	}
 
 	opts := recovery.RestoreOptions{
-		Strategy:      strategy,
-		ProfileFilter: p.ProfileFilter,
+		Strategy:         strategy,
+		ProfileFilter:    p.ProfileFilter,
+		SystemConfigPath: s.systemConfigPath(ctx),
 	}
 
 	rep, err := recovery.Restore(ctx, bytes.NewReader(data), target, opts)
@@ -380,10 +415,41 @@ func (s *RecoveryService) restoreBackup(ctx context.Context, req ipc.Request) (a
 		return nil, err
 	}
 
-	// If profiles registry was restored, reload profiles manager if present
-	if s.ctx.Profiles != nil {
-		_ = s.ctx.Profiles.Reload()
-	}
+	// Restored files replace live documents on disk; every service that
+	// caches whole-document state must re-read it, or the restore only
+	// half-landed and the next write would clobber the restored data.
+	rep.Reloaded = s.reloadLiveStores(ctx)
 
 	return rep, nil
+}
+
+// reloadLiveStores refreshes every cached store the restore may have
+// rewritten. Profiles reload first: a changed active profile fires the
+// switch hooks that rebind the user config path and runtime identity, and
+// the later reloads then read the newly bound documents.
+func (s *RecoveryService) reloadLiveStores(ctx context.Context) []string {
+	var reloaded []string
+	if s.ctx.Profiles != nil {
+		if err := s.ctx.Profiles.Reload(); err == nil {
+			reloaded = append(reloaded, "profiles")
+		}
+	}
+	if s.ctx.Layered != nil {
+		if err := s.ctx.Layered.Reload(); err == nil {
+			reloaded = append(reloaded, "config")
+		}
+	}
+	if s.ctx.Sessions != nil {
+		s.ctx.Sessions.ReloadWorkspaces()
+		reloaded = append(reloaded, "workspaces")
+	}
+	if s.ctx.Services != nil {
+		if svc, ok := s.ctx.Services.Get("doc"); ok {
+			if ds, ok := svc.(*DocumentService); ok && ds.Store() != nil {
+				_ = ds.Store().Reload(ctx)
+				reloaded = append(reloaded, "documents")
+			}
+		}
+	}
+	return reloaded
 }

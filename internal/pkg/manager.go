@@ -43,6 +43,11 @@ type Info struct {
 	PreviousVersion string         `json:"previous_version,omitempty"`
 	Permissions     PermissionDiff `json:"permission_diff"`
 	PathGrants      []vfs.Grant    `json:"active_path_grants,omitempty"`
+	// Quarantined marks a package whose on-disk state failed boot-time
+	// verification. Quarantined packages are never registered for launch
+	// and refuse rollback; uninstall removes them.
+	Quarantined      bool   `json:"quarantined,omitempty"`
+	QuarantineReason string `json:"quarantine_reason,omitempty"`
 }
 
 type ConfirmationError struct{ Diff PermissionDiff }
@@ -59,6 +64,10 @@ type Manager struct {
 	apps       *app.Manager
 	trust      TrustStore
 	installed  map[string]*installed
+	// quarantined records packages whose boot-time load failed; they are
+	// marked unavailable and refused for launch/rollback, but a single
+	// corrupt package can no longer brick the environment boot.
+	quarantined map[string]error
 	// commitHook injects failures after staging, before the atomic commit.
 	commitHook func() error
 }
@@ -73,7 +82,7 @@ func NewManager(appsDir string, apps *app.Manager, trust TrustStore) (*Manager, 
 	if err != nil {
 		return nil, err
 	}
-	m := &Manager{root: root, apps: apps, trust: make(TrustStore), installed: make(map[string]*installed)}
+	m := &Manager{root: root, apps: apps, trust: make(TrustStore), installed: make(map[string]*installed), quarantined: make(map[string]error)}
 	for id, key := range trust {
 		m.trust[id] = append([]byte(nil), key...)
 	}
@@ -201,60 +210,84 @@ func (m *Manager) load() error {
 				}
 			}
 		}
-		stateFile := path.Join(id, "state.json")
-		info, err := m.root.Lstat(stateFile)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() || info.Size() > maxJSONBytes {
-			return fmt.Errorf("package: invalid state file")
-		}
-		data, err := m.root.ReadFile(stateFile)
-		if err != nil {
-			return err
-		}
-		var state diskState
-		if err := decodeJSON(data, &state); err != nil {
-			return err
-		}
-		if state.FormatVersion != FormatVersion {
-			return fmt.Errorf("package: unsupported installed state")
-		}
-		if state.Previous != "" && state.Previous == state.Active {
-			return fmt.Errorf("package: active and previous pointers must differ")
-		}
-		active, err := m.loadVersion(id, state.Active)
-		if err != nil {
-			return fmt.Errorf("package: load %s: %w", id, err)
-		}
-		rec := &installed{state: state, active: active}
-		if state.Previous != "" {
-			previous, err := m.loadVersion(id, state.Previous)
-			if err != nil {
-				// The previous pointer exists only for rollback; a corrupt or
-				// missing rollback artifact must not brick the environment
-				// boot while the active version is intact.
-				slog.Warn("package: dropping unusable previous version; rollback unavailable",
-					"id", id, "generation", state.Previous, "error", err)
-			} else {
-				previous.files = nil
-				rec.previous = previous
+		if err := m.loadPackage(id); err != nil {
+			if errors.Is(err, errNoState) {
+				continue
 			}
+			// One corrupt package must not brick the environment boot:
+			// quarantine it, keep booting, and mark it unavailable.
+			slog.Warn("package: quarantining unloadable package", "id", id, "error", err)
+			m.quarantined[id] = err
 		}
-		active.files = nil
-		if err := m.apps.Registry().RegisterExternal(m.versionManifest(id, state.Active, active)); err != nil {
-			return err
-		}
-		m.installed[id] = rec
-		finish, err := m.prepareGrants(id, active.Manifest)
-		if err != nil {
-			return err
-		}
-		finish(true)
 	}
+	return nil
+}
+
+// errNoState marks a package directory that holds no state.json commit
+// point. It is absent, not corrupt, and is not quarantined.
+var errNoState = errors.New("package: no installed state")
+
+// loadPackage loads one installed package's state and verifies its active
+// version. Any error quarantines the package at boot; the caller continues
+// with the next package.
+func (m *Manager) loadPackage(id string) error {
+	stateFile := path.Join(id, "state.json")
+	info, err := m.root.Lstat(stateFile)
+	if errors.Is(err, fs.ErrNotExist) {
+		return errNoState
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxJSONBytes {
+		return fmt.Errorf("package: invalid state file")
+	}
+	data, err := m.root.ReadFile(stateFile)
+	if err != nil {
+		return err
+	}
+	var state diskState
+	if err := decodeJSON(data, &state); err != nil {
+		return err
+	}
+	if state.FormatVersion != FormatVersion {
+		return fmt.Errorf("package: unsupported installed state")
+	}
+	if state.Previous != "" && state.Previous == state.Active {
+		return fmt.Errorf("package: active and previous pointers must differ")
+	}
+	active, err := m.loadVersion(id, state.Active)
+	if err != nil {
+		return fmt.Errorf("package: load %s: %w", id, err)
+	}
+	rec := &installed{state: state, active: active}
+	if state.Previous != "" {
+		previous, err := m.loadVersion(id, state.Previous)
+		if err != nil {
+			// The previous pointer exists only for rollback; a corrupt or
+			// missing rollback artifact must not brick the environment
+			// boot while the active version is intact.
+			slog.Warn("package: dropping unusable previous version; rollback unavailable",
+				"id", id, "generation", state.Previous, "error", err)
+		} else {
+			previous.files = nil
+			rec.previous = previous
+		}
+	}
+	active.files = nil
+	if err := m.apps.Registry().RegisterExternal(m.versionManifest(id, state.Active, active)); err != nil {
+		return err
+	}
+	m.installed[id] = rec
+	finish, err := m.prepareGrants(id, active.Manifest)
+	if err != nil {
+		// Undo the half-activation so the package is not registered with
+		// missing grants.
+		m.apps.Registry().RemoveExternal(id)
+		delete(m.installed, id)
+		return err
+	}
+	finish(true)
 	return nil
 }
 
@@ -317,12 +350,28 @@ func (m *Manager) info(rec *installed, candidate *verified) Info {
 	return detached
 }
 
+// Quarantined returns the boot-time load failure for a quarantined
+// package, or false when the package is not quarantined.
+func (m *Manager) Quarantined(id string) (error, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	err, ok := m.quarantined[id]
+	return err, ok
+}
+
 func (m *Manager) List() []Info {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]Info, 0, len(m.installed))
+	out := make([]Info, 0, len(m.installed)+len(m.quarantined))
 	for _, rec := range m.installed {
 		out = append(out, m.info(rec, nil))
+	}
+	for id, qerr := range m.quarantined {
+		out = append(out, Info{
+			Manifest:         sdk.Manifest{ID: id},
+			Quarantined:      true,
+			QuarantineReason: qerr.Error(),
+		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Manifest.ID < out[j].Manifest.ID })
 	return out
@@ -333,6 +382,13 @@ func (m *Manager) Inspect(id string) (Info, error) {
 	defer m.mu.Unlock()
 	rec, ok := m.installed[id]
 	if !ok {
+		if qerr, quarantined := m.quarantined[id]; quarantined {
+			return Info{
+				Manifest:         sdk.Manifest{ID: id},
+				Quarantined:      true,
+				QuarantineReason: qerr.Error(),
+			}, nil
+		}
 		return Info{}, fmt.Errorf("package: %q is not installed", id)
 	}
 	return m.info(rec, nil), nil
@@ -399,6 +455,9 @@ func (m *Manager) Install(ctx context.Context, r io.Reader, update, confirm bool
 	id := v.Manifest.ID
 	old := m.record(id)
 	if update && old == nil {
+		if qerr, quarantined := m.Quarantined(id); quarantined {
+			return Info{}, fmt.Errorf("package: %q is quarantined: %v", id, qerr)
+		}
 		return Info{}, fmt.Errorf("package: %s is not installed", id)
 	}
 	if !update {
@@ -542,6 +601,9 @@ func (m *Manager) Install(ctx context.Context, r io.Reader, update, confirm bool
 func (m *Manager) Rollback(ctx context.Context, id string, confirm bool) (Info, error) {
 	m.operations.Lock()
 	defer m.operations.Unlock()
+	if qerr, quarantined := m.Quarantined(id); quarantined {
+		return Info{}, fmt.Errorf("package: %q is quarantined: %v", id, qerr)
+	}
 	rec := m.record(id)
 	if rec == nil || rec.previous == nil {
 		return Info{}, fmt.Errorf("package: no previous version for %q", id)
@@ -595,7 +657,8 @@ func (m *Manager) Rollback(ctx context.Context, id string, confirm bool) (Info, 
 func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	m.operations.Lock()
 	defer m.operations.Unlock()
-	if m.record(id) == nil {
+	_, quarantined := m.Quarantined(id)
+	if m.record(id) == nil && !quarantined {
 		return fmt.Errorf("package: %q is not installed", id)
 	}
 	if err := ctx.Err(); err != nil {
@@ -617,6 +680,7 @@ func (m *Manager) Uninstall(ctx context.Context, id string) error {
 	m.apps.Registry().RemoveExternal(id)
 	m.mu.Lock()
 	delete(m.installed, id)
+	delete(m.quarantined, id)
 	m.mu.Unlock()
 	if gs := m.apps.GrantStore(); gs != nil {
 		gs.RevokeApp(id)
