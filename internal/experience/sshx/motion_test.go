@@ -143,8 +143,9 @@ func (c *motionSSHClient) command(t *testing.T, command, want string) {
 }
 
 // hasMoreOutput observes actual post-result terminal writes. A motion-enabled
-// failed launch has further frame writes; a reduced one does not. The window
-// is shorter than the shell's existing 500ms functional poll.
+// failed launch has further frame writes; a reduced one does not. It returns
+// early on the first byte, so a generous deadline only slows the failing
+// path.
 func (c *motionSSHClient) hasMoreOutput(d time.Duration) bool {
 	offset := c.out.Len()
 	deadline := time.Now().Add(d)
@@ -214,7 +215,17 @@ func TestConcurrentSSHMotionPolicies(t *testing.T) {
 		t.Helper()
 		offset := c.send(t, "launch com.test.missing\r")
 		c.waitSince(t, offset, "unknown application")
-		if got := c.hasMoreOutput(120 * time.Millisecond); got != wantFrames {
+		// The first animation frame lands milliseconds after the error
+		// render, but a loaded runner can delay it far past 120ms, so
+		// positive checks get a generous early-exit window. Negative
+		// checks keep the short window: it must stay under the shell's
+		// 500ms functional poll so unrelated writes cannot pass for
+		// animation output.
+		window := 120 * time.Millisecond
+		if wantFrames {
+			window = 5 * time.Second
+		}
+		if got := c.hasMoreOutput(window); got != wantFrames {
 			t.Errorf("%s post-failure animation output = %v, want %v", name, got, wantFrames)
 		}
 	}
