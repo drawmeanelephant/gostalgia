@@ -998,6 +998,10 @@ func (m *Model) Init() tea.Cmd {
 				}
 				msg.workspaceHistory = attResp.Workspace.History
 				msg.initialView = attResp.Workspace.ActiveView
+			} else {
+				// Never degrade silently: a refused attach means no session
+				// identity, no workspace history, and no cwd restore.
+				msg.attachErr = aErr
 			}
 		} else {
 			var ws struct {
@@ -1475,6 +1479,10 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.attached {
 				m.append(entry{fmt.Sprintf("Attached to session %s (clients: %d)", msg.sessionID, msg.activeCount), "accent"})
 			}
+		}
+		if msg.attachErr != nil {
+			m.append(entry{fmt.Sprintf("Session attach failed: %s", msg.attachErr), "error"})
+			m.append(entry{"Running without session attachment — workspace history and cwd are unavailable.", "muted"})
 		}
 		if len(msg.workspaceHistory) > 0 {
 			m.history = msg.workspaceHistory

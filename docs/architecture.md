@@ -206,7 +206,11 @@ Sessions support detachable interactive clients and persistent workspace state:
   running session via `gostalgia attach` or `gostalgia shell --attach`, and can cleanly
   detach via `detach`, leaving the runtime, background services, and hosted applications
   running undisturbed. Multiple interactive clients can attach to the same session
-  simultaneously, with attachment lifecycle events published on the `session` bus topic.
+  simultaneously (capped at 32 attachments per session), with attachment lifecycle events
+  published on the `session` bus topic. Each attachment is bound to the channel that
+  created it: a client that disconnects without `session/detach` has its slot reclaimed
+  automatically, and attachments an application makes over its child wire are released
+  when that application exits.
 - **Persistent workspace state**: Sessions persist working directory (CWD), active
   view, and command history in the user's VFS configuration (`/users/guest/config/workspace.json`)
   using atomic writes (`vfs.FS.SaveAtomic`). If workspace state is corrupted or missing,
@@ -240,6 +244,14 @@ and personal workspace separation under `/users/<profile_id>/`:
   favorites, and workspace states are partitioned per user directory.
 - **Profile registry**: Profiles are recorded in `/config/profiles.json` and managed
   via `profile.Manager`. A default `guest` profile is seeded at initial environment boot.
+  If the registry exists but fails to parse, the damaged file is quarantined to
+  `profiles.json.corrupt-<timestamp>` before the default guest registry is written, so a
+  mostly-readable original is never destroyed silently.
+- **Profile deletion lifecycle**: `profile/delete` removes the registry entry and the
+  `/users/<id>/` tree, and first closes every live session owned by the profile. Its
+  shared workspace store is retired before the tree comes down, so a still-live writer
+  cannot resurrect deleted state and a profile re-created under the same id inherits
+  no workspace history.
 - **Dynamic profile switching**: Calling `Switch(profileID)` publishes transition
   events (`profile.switched`), dynamically reconfigures the layered configuration store
   (`LayeredStore.SetUserStore`), points document search, recents, and favorites to the
