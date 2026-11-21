@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -87,16 +89,8 @@ func NewLayeredStore(systemPath, userPath string) (*LayeredStore, error) {
 		ls.systemStore = &Store{data: map[string]any{}}
 	}
 
-	if userPath != "" {
-		usr, err := Load(userPath)
-		if err != nil {
-			ls.corruptLayers[LayerUser] = err
-			ls.userStore = &Store{path: userPath, data: map[string]any{}}
-		} else {
-			ls.userStore = usr
-		}
-	} else {
-		ls.userStore = &Store{data: map[string]any{}}
+	if err := ls.bindUserStoreLocked(userPath); err != nil {
+		return nil, err
 	}
 
 	return ls, nil
@@ -119,11 +113,21 @@ func (ls *LayeredStore) UserStore() *Store {
 // SetUserStore switches the user-layer configuration file to newUserPath.
 // If the file is missing, an empty user store is initialized at that path.
 // If the file is corrupt, the error is recorded in corruptLayers rather than overwritten.
+// The app layer lives beside the user file at apps/<app-id>.json, so a new
+// user store also means a new set of app stores: the previous profile's
+// stores are dropped and everything persisted for the new profile is
+// loaded, making app values readable without a preceding Set.
 func (ls *LayeredStore) SetUserStore(newUserPath string) error {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
+	return ls.bindUserStoreLocked(newUserPath)
+}
 
+// bindUserStoreLocked points the user layer at newUserPath and rebinds
+// the app layer to that file's directory. Caller must hold ls.mu.
+func (ls *LayeredStore) bindUserStoreLocked(newUserPath string) error {
 	delete(ls.corruptLayers, LayerUser)
+	delete(ls.corruptLayers, LayerApp)
 	if newUserPath != "" {
 		usr, err := Load(newUserPath)
 		if err != nil {
@@ -135,7 +139,64 @@ func (ls *LayeredStore) SetUserStore(newUserPath string) error {
 	} else {
 		ls.userStore = &Store{data: map[string]any{}}
 	}
+	ls.appStores = make(map[string]*Store)
+	return ls.loadAppStoresLocked()
+}
+
+// loadAppStoresLocked loads every persisted app store beside the user
+// file so reads, unset, and reset see on-disk values, not just stores Set
+// has touched. Corrupt app files are quarantined like the user and system
+// layers: recorded in corruptLayers and bound empty, so a write recovers
+// by overwriting rather than failing forever. Caller must hold ls.mu.
+func (ls *LayeredStore) loadAppStoresLocked() error {
+	userPath := ls.userStore.Path()
+	if userPath == "" {
+		return nil
+	}
+	appsDir := filepath.Join(filepath.Dir(userPath), "apps")
+	entries, err := os.ReadDir(appsDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("config: read app stores %s: %w", appsDir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		appPath := filepath.Join(appsDir, name)
+		appStore, err := Load(appPath)
+		if err != nil {
+			ls.corruptLayers[LayerApp] = err
+			appStore = &Store{path: appPath, data: map[string]any{}}
+		}
+		ls.appStores[strings.TrimSuffix(name, ".json")] = appStore
+	}
 	return nil
+}
+
+// appStoreLocked resolves the app-layer store for appID, loading it from
+// <user config>/apps/<appID>.json on first use when the user layer is
+// file-backed. Caller must hold ls.mu.
+func (ls *LayeredStore) appStoreLocked(appID string) *Store {
+	if appStore, ok := ls.appStores[appID]; ok {
+		return appStore
+	}
+	var appStore *Store
+	if ls.userStore.Path() != "" {
+		appPath := filepath.Join(filepath.Dir(ls.userStore.Path()), "apps", appID+".json")
+		var err error
+		if appStore, err = Load(appPath); err != nil {
+			ls.corruptLayers[LayerApp] = err
+			appStore = &Store{path: appPath, data: map[string]any{}}
+		}
+	} else {
+		appStore = &Store{data: map[string]any{}}
+	}
+	ls.appStores[appID] = appStore
+	return appStore
 }
 
 // Reload re-reads every on-disk layer from its current path so the
@@ -369,24 +430,10 @@ func (ls *LayeredStore) Set(layer Layer, path string, val any, opts QueryOpts) e
 		if opts.AppID == "" {
 			return errors.New("config: app layer requires app_id")
 		}
-		appStore, ok := ls.appStores[opts.AppID]
-		if !ok {
-			if ls.userStore.Path() != "" {
-				appPath := filepath.Join(filepath.Dir(ls.userStore.Path()), "apps", opts.AppID+".json")
-				var err error
-				appStore, err = Load(appPath)
-				if err != nil {
-					return err
-				}
-				ls.appStores[opts.AppID] = appStore
-			} else {
-				appStore = &Store{data: map[string]any{}}
-				ls.appStores[opts.AppID] = appStore
-			}
-		}
-		if err := appStore.Set(path, val); err != nil {
+		if err := ls.appStoreLocked(opts.AppID).Set(path, val); err != nil {
 			return err
 		}
+		delete(ls.corruptLayers, LayerApp)
 	default:
 		return fmt.Errorf("config: cannot set in layer %s", targetLayer)
 	}
@@ -426,12 +473,14 @@ func (ls *LayeredStore) Unset(layer Layer, path string, opts QueryOpts) error {
 		if opts.AppID == "" {
 			return errors.New("config: app layer requires app_id")
 		}
-		if appStore, ok := ls.appStores[opts.AppID]; ok {
-			if _, err := appStore.Delete(path); err != nil {
-				return err
-			}
+		// Load the persisted store first so the delete reaches values on
+		// disk, not just stores this process has written.
+		if _, err := ls.appStoreLocked(opts.AppID).Delete(path); err != nil {
+			return err
 		}
-		_, _ = ls.userStore.Delete("apps." + opts.AppID + "." + path)
+		if _, err := ls.userStore.Delete("apps." + opts.AppID + "." + path); err != nil {
+			return err
+		}
 	case LayerPreview:
 		if ls.previewOwners[path] == previewScope(opts) {
 			ls.dropPreviewPathLocked(path)
@@ -478,15 +527,17 @@ func (ls *LayeredStore) Reset(layer Layer, path string, opts QueryOpts) error {
 		delete(ls.corruptLayers, LayerUser)
 	case LayerApp:
 		if opts.AppID != "" {
-			if appStore, ok := ls.appStores[opts.AppID]; ok {
+			if err := ls.appStoreLocked(opts.AppID).Reset(); err != nil {
+				return err
+			}
+			delete(ls.corruptLayers, LayerApp)
+		} else {
+			for _, appStore := range ls.appStores {
 				if err := appStore.Reset(); err != nil {
 					return err
 				}
 			}
-		} else {
-			for _, appStore := range ls.appStores {
-				_ = appStore.Reset()
-			}
+			delete(ls.corruptLayers, LayerApp)
 		}
 	case LayerPreview:
 		for p := range ls.ownedPreviewLocked(previewScope(opts)) {
