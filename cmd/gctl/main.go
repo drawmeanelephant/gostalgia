@@ -150,21 +150,19 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 
 	case "ps":
 		var procs []struct {
-			ID           int32     `json:"id"`
-			Name         string    `json:"name"`
-			Kind         string    `json:"kind"`
-			State        string    `json:"state"`
-			StartedAt    time.Time `json:"started_at"`
-			ExitedAt     time.Time `json:"exited_at"`
-			ExitCode     int       `json:"exit_code"`
-			RestartCount int       `json:"restart_count"`
-			CrashLoop    bool      `json:"crash_loop"`
+			ID        int32     `json:"id"`
+			Name      string    `json:"name"`
+			Kind      string    `json:"kind"`
+			State     string    `json:"state"`
+			StartedAt time.Time `json:"started_at"`
+			ExitedAt  time.Time `json:"exited_at"`
+			ExitCode  int       `json:"exit_code"`
 		}
 		if err := client.Call(ctx, "proc/list", nil, &procs); err != nil {
 			return err
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "PID\tNAME\tKIND\tSTATE\tRESTARTS\tEXIT\tTIME")
+		fmt.Fprintln(w, "PID\tNAME\tKIND\tSTATE\tEXIT\tTIME")
 		for _, p := range procs {
 			exitStr := "-"
 			if p.State == "stopped" || p.State == "failed" {
@@ -178,25 +176,19 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 					timeStr = formatDuration(time.Since(p.StartedAt))
 				}
 			}
-			restartsStr := fmt.Sprintf("%d", p.RestartCount)
-			if p.CrashLoop {
-				restartsStr += " (crashloop)"
-			}
-			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n", p.ID, sanitizeTerminal(p.Name), p.Kind, p.State, restartsStr, exitStr, timeStr)
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\n", p.ID, sanitizeTerminal(p.Name), p.Kind, p.State, exitStr, timeStr)
 		}
 		return w.Flush()
 
 	case "history":
 		var history []struct {
-			ID           int32  `json:"id"`
-			Name         string `json:"name"`
-			Kind         string `json:"kind"`
-			State        string `json:"state"`
-			ExitCode     int    `json:"exit_code"`
-			Duration     string `json:"duration"`
-			RestartCount int    `json:"restart_count"`
-			CrashLoop    bool   `json:"crash_loop"`
-			Err          string `json:"error"`
+			ID       int32  `json:"id"`
+			Name     string `json:"name"`
+			Kind     string `json:"kind"`
+			State    string `json:"state"`
+			ExitCode int    `json:"exit_code"`
+			Duration string `json:"duration"`
+			Err      string `json:"error"`
 		}
 		if err := client.Call(ctx, "proc/history", nil, &history); err != nil {
 			return err
@@ -206,18 +198,14 @@ func run(ctx context.Context, client *ipc.Client, cmd string, args []string) err
 			return nil
 		}
 		w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "PID\tNAME\tKIND\tSTATE\tEXIT\tRESTARTS\tDURATION\tERROR")
+		fmt.Fprintln(w, "PID\tNAME\tKIND\tSTATE\tEXIT\tDURATION\tERROR")
 		for _, h := range history {
-			restartsStr := fmt.Sprintf("%d", h.RestartCount)
-			if h.CrashLoop {
-				restartsStr += " (crashloop)"
-			}
 			errStr := sanitizeTerminal(h.Err)
 			if errStr == "" {
 				errStr = "-"
 			}
-			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-				h.ID, sanitizeTerminal(h.Name), h.Kind, h.State, h.ExitCode, restartsStr, h.Duration, errStr)
+			fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%d\t%s\t%s\n",
+				h.ID, sanitizeTerminal(h.Name), h.Kind, h.State, h.ExitCode, h.Duration, errStr)
 		}
 		return w.Flush()
 

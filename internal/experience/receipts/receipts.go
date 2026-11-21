@@ -19,38 +19,36 @@ const (
 
 var receiptSeq uint64
 
-// CrashReceipt contains diagnostic evidence when a process fails or enters a crash-loop.
+// CrashReceipt contains diagnostic evidence when a process fails.
 type CrashReceipt struct {
-	ID           string    `json:"id"`
-	PID          int32     `json:"pid"`
-	Name         string    `json:"name"`
-	State        string    `json:"state"`
-	ExitCode     int       `json:"exit_code"`
-	Timestamp    time.Time `json:"timestamp"`
-	Reason       string    `json:"reason"`
-	RestartCount int       `json:"restart_count"`
-	LogExcerpt   string    `json:"log_excerpt"`
-	Truncated    bool      `json:"truncated"`
+	ID         string    `json:"id"`
+	PID        int32     `json:"pid"`
+	Name       string    `json:"name"`
+	State      string    `json:"state"`
+	ExitCode   int       `json:"exit_code"`
+	Timestamp  time.Time `json:"timestamp"`
+	Reason     string    `json:"reason"`
+	LogExcerpt string    `json:"log_excerpt"`
+	Truncated  bool      `json:"truncated"`
 }
 
 // New creates a new CrashReceipt with bounded, sanitized diagnostic excerpt.
-func New(pid int32, name, state string, exitCode int, reason string, restarts int, rawLogs string) CrashReceipt {
+func New(pid int32, name, state string, exitCode int, reason string, rawLogs string) CrashReceipt {
 	now := time.Now()
 	seq := atomic.AddUint64(&receiptSeq, 1)
 	id := fmt.Sprintf("CR-%d-%d-%d", pid, now.UnixNano(), seq)
 
 	excerpt, truncated := boundExcerpt(rawLogs, MaxExcerptLines, MaxExcerptBytes)
 	return CrashReceipt{
-		ID:           id,
-		PID:          pid,
-		Name:         ui.Sanitize(name),
-		State:        ui.Sanitize(state),
-		ExitCode:     exitCode,
-		Timestamp:    now,
-		Reason:       ui.Sanitize(reason),
-		RestartCount: restarts,
-		LogExcerpt:   ui.Sanitize(excerpt),
-		Truncated:    truncated,
+		ID:         id,
+		PID:        pid,
+		Name:       ui.Sanitize(name),
+		State:      ui.Sanitize(state),
+		ExitCode:   exitCode,
+		Timestamp:  now,
+		Reason:     ui.Sanitize(reason),
+		LogExcerpt: ui.Sanitize(excerpt),
+		Truncated:  truncated,
 	}
 }
 
@@ -185,9 +183,6 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 	headerLines = append(headerLines, kit.Heading(heading))
 	separator := kit.Separator()
 	headerLines = append(headerLines, kit.Muted(fmt.Sprintf("Time: %s%sExit code: %d%sState: %s", timeStr, separator, r.ExitCode, separator, r.State)))
-	if r.RestartCount > 0 {
-		headerLines = append(headerLines, kit.Muted(fmt.Sprintf("Restarts within window: %d", r.RestartCount)))
-	}
 	if r.Reason != "" {
 		headerLines = append(headerLines, kit.StatusText("Reason: "+r.Reason, theme.Error))
 	}
@@ -221,13 +216,9 @@ func Render(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 }
 
 // identityRows is how many rows the bordered receipt needs to show who
-// crashed and why: its heading, time line, restart count when nonzero and
-// reason when present.
+// crashed and why: its heading, time line and reason when present.
 func identityRows(r CrashReceipt) int {
 	n := 2
-	if r.RestartCount > 0 {
-		n++
-	}
 	if r.Reason != "" {
 		n++
 	}
@@ -241,9 +232,6 @@ func renderCompact(kit ui.Kit, r CrashReceipt, bounds ui.Bounds) string {
 	w := bounds.Width
 	separator := kit.Separator()
 	status := fmt.Sprintf("Exit code: %d%sState: %s", r.ExitCode, separator, r.State)
-	if r.RestartCount > 0 {
-		status += fmt.Sprintf("%sRestarts: %d", separator, r.RestartCount)
-	}
 	lines := []string{kit.Heading(kit.Truncate(fmt.Sprintf("%s (PID %d)%sCRASH RECEIPT", r.Name, r.PID, separator), w))}
 	if r.Reason != "" {
 		lines = append(lines, kit.StatusText(kit.Truncate("Reason: "+r.Reason, w), theme.Error))
@@ -265,7 +253,7 @@ func FormatText(r CrashReceipt) string {
 	timeStr := r.Timestamp.Format("2006-01-02 15:04:05")
 	var lines []string
 	lines = append(lines, fmt.Sprintf("CRASH RECEIPT: %s (PID %d) · Exit code: %d · State: %s", r.Name, r.PID, r.ExitCode, r.State))
-	lines = append(lines, fmt.Sprintf("Time: %s · Restarts: %d", timeStr, r.RestartCount))
+	lines = append(lines, fmt.Sprintf("Time: %s", timeStr))
 	if r.Reason != "" {
 		lines = append(lines, "Reason: "+r.Reason)
 	}
