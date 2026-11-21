@@ -7,35 +7,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"golang.org/x/sys/windows"
+	"syscall"
 )
+
+// errSharingViolation is ERROR_SHARING_VIOLATION, returned by CreateFile
+// when another process holds the file open with sharing disabled.
+const errSharingViolation = syscall.Errno(32)
 
 // TryLockRoot attempts the exclusive, process-lifetime claim on an
 // environment root that the duplicate-boot guard relies on. The returned
-// file holds the LockFileEx lock: Close releases it, and so does process
-// death — a crashed instance can never wedge its root. A second caller
-// holding the lock gets ErrLocked.
+// file is opened with dwShareMode = 0: the open itself is the exclusive
+// lock, held for the file's lifetime. Close releases it, and so does
+// process death — a crashed instance can never wedge its root. A second
+// caller gets ErrLocked.
 func TryLockRoot(root string) (*os.File, error) {
 	path := rootLockPath(root)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("platform: create lock dir: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
-		return nil, fmt.Errorf("platform: open root lock: %w", err)
+		return nil, fmt.Errorf("platform: lock path: %w", err)
 	}
-	// Byte range [0,1); FAIL_IMMEDIATELY makes this a try-lock.
-	ol := new(windows.Overlapped)
-	err = windows.LockFileEx(windows.Handle(f.Fd()),
-		windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY,
-		0, 1, 0, ol)
+	h, err := syscall.CreateFile(name,
+		syscall.GENERIC_READ|syscall.GENERIC_WRITE,
+		0, nil, syscall.OPEN_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL, 0)
 	if err != nil {
-		_ = f.Close()
-		if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
+		if errors.Is(err, errSharingViolation) {
 			return nil, fmt.Errorf("%w: %s", ErrLocked, root)
 		}
 		return nil, fmt.Errorf("platform: lock %s: %w", path, err)
 	}
-	return f, nil
+	return os.NewFile(uintptr(h), path), nil
 }
