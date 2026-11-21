@@ -198,6 +198,70 @@ func TestProfileManagerCorruptRecovery(t *testing.T) {
 	}
 }
 
+// Issue #258: a backup/restore rewrites the registry on disk and calls
+// Reload. When the restored active profile differs, Reload must run the
+// same switch side effects as Switch — otherwise the environment keeps
+// the previous profile's identity, user config layer, and operator
+// attribution while reporting the new active profile.
+func TestReloadFiresSwitchCallbacksOnActiveChange(t *testing.T) {
+	fsys := vfs.NewMem()
+	m, err := NewManager(fsys, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Create("alice", "Alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Switch("alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	var switched []string
+	m.OnSwitch(func(prev, next Profile) {
+		switched = append(switched, prev.ID+"->"+next.ID)
+	})
+
+	// A second manager on the same store stands in for a restored registry
+	// file: it persists active_id=guest while m still believes alice is
+	// active.
+	other, err := NewManager(fsys, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Switch("guest"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if m.ActiveID() != "guest" {
+		t.Fatalf("active profile after reload = %q, want guest", m.ActiveID())
+	}
+	if len(switched) != 1 || switched[0] != "alice->guest" {
+		t.Fatalf("switch callbacks after reload = %v, want [alice->guest]", switched)
+	}
+}
+
+// Reload with an unchanged active profile must not fire callbacks.
+func TestReloadQuietWhenActiveUnchanged(t *testing.T) {
+	fsys := vfs.NewMem()
+	m, err := NewManager(fsys, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	calls := 0
+	m.OnSwitch(func(prev, next Profile) { calls++ })
+
+	if err := m.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("reload with unchanged active profile fired %d switch callbacks", calls)
+	}
+}
+
 // #273: after an external change to profiles.json — for example a backup
 // restore — Reload must run the same transition as Switch: hooks fire and
 // a profile.switched event is published.
