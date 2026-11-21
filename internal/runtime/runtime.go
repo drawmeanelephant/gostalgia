@@ -75,6 +75,7 @@ type Runtime struct {
 	user      security.User
 	logFile   *os.File
 	hostFS    *vfs.HostFS   // closed at shutdown; Windows cannot delete an open directory tree
+	rootLock  *os.File      // exclusive root claim, held for the process lifetime
 	done      chan struct{} // closed when shutdown begins
 	completed chan struct{} // closed when shutdown finishes
 	once      sync.Once
@@ -104,6 +105,22 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 	if err != nil {
 		return nil, err
 	}
+	// Claim the root before anything mutates it. The lock is held for the
+	// process lifetime, so a second boot can never slip through the window
+	// between a probe and a write — and process death releases the claim,
+	// so a crashed instance never wedges its root.
+	rootLock, err := platform.TryLockRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil {
+			rootLock.Close()
+		}
+	}()
+	if err := checkNotRunning(root); err != nil {
+		return nil, err
+	}
 	if err := InitRoot(root); err != nil {
 		return nil, err
 	}
@@ -127,6 +144,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		Bus:        events.NewBusWithLogger(log),
 		Router:     ipc.NewRouter(),
 		logFile:    logFile,
+		rootLock:   rootLock,
 		done:       make(chan struct{}),
 		completed:  make(chan struct{}),
 		user:       security.User{ID: "u-guest", Name: "guest"},
@@ -239,11 +257,6 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 		BootedAt:      time.Now(),
 	}
 	rt.svcCtx = svcCtx
-
-	if err := checkNotRunning(root); err != nil {
-		logFile.Close()
-		return nil, err
-	}
 
 	sm := service.NewManager(svcCtx, rt.Bus, log)
 	svcCtx.Services = sm
@@ -419,6 +432,13 @@ func (rt *Runtime) Shutdown(reason string) {
 		if rt.logFile != nil {
 			rt.Log.Info("shutdown complete")
 			rt.logFile.Close()
+		}
+		if rt.rootLock != nil {
+			// Released last: service stop (which removes this instance's
+			// runtime.json) must finish while the claim is still ours, so
+			// a next boot cannot write its record and then lose it to an
+			// exiting instance's cleanup.
+			rt.rootLock.Close()
 		}
 		close(rt.completed)
 	})
