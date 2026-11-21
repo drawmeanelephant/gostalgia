@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
   check:
     strategy:
@@ -14,14 +18,45 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version-file: go.mod
       - name: gofmt (unix only)
         if: runner.os != 'Windows'
         run: test -z "$(gofmt -l .)"
       - name: vet
         run: go vet ./...
+      - name: lint (linux only)
+        if: runner.os == 'Linux'
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          only-new-issues: true
+      - name: build (CGO disabled)
+        env:
+          CGO_ENABLED: '0'
+        run: go build ./...
       - name: test
-        run: go test ./...
+        run: go test -count=1 ./...
       - name: test -race (unix only)
         if: runner.os != 'Windows'
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
+      - name: enable unprivileged user namespaces (linux only)
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || echo "::warning::apparmor userns restriction not relaxed; sandbox tests may skip"
+      - name: platform sandbox tests (verbose, linux only)
+        if: runner.os == 'Linux'
+        run: |
+          log="$RUNNER_TEMP/platform-tests.log"
+          go test -count=1 -v ./platform/... 2>&1 | tee "$log"
+          grep -- '--- SKIP:' "$log" | while read -r line; do
+            echo "::warning::platform test skipped on this host: $line"
+          done
+      - name: fuzz smoke (linux only)
+        if: runner.os == 'Linux'
+        run: |
+          for f in $(git grep -l 'func Fuzz' -- '*_test.go'); do
+            pkg=./$(dirname "$f")
+            for fn in $(grep -o 'func Fuzz[A-Za-z0-9_]*' "$f" | awk '{print $2}'); do
+              echo "== $pkg $fn"
+              go test -count=1 -run="^$fn\$" -fuzz="^$fn\$" -fuzztime=15s "$pkg"
+            done
+          done
