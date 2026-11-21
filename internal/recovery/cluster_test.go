@@ -7,9 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"math/rand"
-	"strconv"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -218,7 +218,7 @@ func TestRestoreRoutesSystemConfigToHostStore(t *testing.T) {
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
 	for name, body := range map[string][]byte{
-		recovery.ManifestFilename:   mBytes,
+		recovery.ManifestFilename: mBytes,
 		"data/config/system.json": content,
 	} {
 		w, err := zw.Create(name)

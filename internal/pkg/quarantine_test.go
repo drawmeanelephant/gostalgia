@@ -1,9 +1,9 @@
 package pkg
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
