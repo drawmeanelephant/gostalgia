@@ -284,6 +284,14 @@ func (s *SessionService) attach(ctx context.Context, req ipc.Request) (any, erro
 		return nil, err
 	}
 
+	// The attachment belongs to the connection that made it: a client that
+	// crashes or drops without session/detach must not leak its slot for
+	// the life of the runtime. In-process callers have no connection, so
+	// this is a no-op for them.
+	ipc.OnConnClose(ctx, func() {
+		_ = s.ctx.Sessions.Detach(sess.ID, att.ID)
+	})
+
 	ws := s.ctx.Sessions.Workspace(sess.ID)
 	if ws == nil {
 		return nil, fmt.Errorf("session: session %q not found", sess.ID)

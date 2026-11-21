@@ -243,9 +243,26 @@ func (s *ProfileService) deleteProfile(ctx context.Context, req ipc.Request) (an
 		return nil, fmt.Errorf("profile: invalid parameters: %w", err)
 	}
 
-	targetID := strings.TrimSpace(params.ID)
+	targetID := strings.TrimSpace(strings.ToLower(params.ID))
 	if targetID == "" {
 		return nil, fmt.Errorf("profile: profile id is required")
+	}
+
+	// Pre-flight the guards Profiles.Delete applies: a delete that will be
+	// refused must not tear down the target's live sessions.
+	if _, ok := s.ctx.Profiles.Get(targetID); !ok {
+		return nil, fmt.Errorf("profile %q not found", targetID)
+	}
+	if targetID == s.ctx.Profiles.ActiveID() {
+		return nil, fmt.Errorf("cannot delete currently active profile %q; switch profiles first", targetID)
+	}
+
+	// Close the profile's sessions and retire its workspace store before
+	// the data tree comes down: a still-live session would keep writing to
+	// (and recreating) the deleted /users/<id> tree, and a profile
+	// re-created under the same id would inherit its workspace history.
+	if s.ctx.Sessions != nil {
+		s.ctx.Sessions.CloseForUser(targetID)
 	}
 
 	if err := s.ctx.Profiles.Delete(targetID); err != nil {
