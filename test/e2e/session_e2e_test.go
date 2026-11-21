@@ -179,12 +179,12 @@ func TestSessionAttachmentsReleasedOnDisconnectE2E(t *testing.T) {
 			sessionID = att.SessionID
 		}
 		// Disconnect without detaching — a crashed or killed shell.
-		client.Close()
+		_ = client.Close()
 	}
 
 	// The dropped connections release their slots; the next attach succeeds.
 	probe := dialRunning(t, root)
-	defer probe.Close()
+	defer func() { _ = probe.Close() }()
 
 	var attachments int
 	deadline := time.Now().Add(10 * time.Second)

@@ -125,8 +125,8 @@ func serverClient(t *testing.T) (*Server, *Client) {
 	}))
 	log := slog.New(slog.NewTextHandler(discard{}, nil))
 	srv := NewServer(ln, r, "sekrit", log)
-	t.Cleanup(func() { srv.Close() })
-	go srv.Serve()
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -178,8 +178,8 @@ func TestOnConnCloseRunsOnDisconnect(t *testing.T) {
 	}))
 	log := slog.New(slog.NewTextHandler(discard{}, nil))
 	srv := NewServer(ln, r, "sekrit", log)
-	t.Cleanup(func() { srv.Close() })
-	go srv.Serve()
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() { _ = srv.Serve() }()
 
 	dial := func() *Client {
 		conn, err := net.Dial("tcp", ln.Addr().String())
@@ -217,7 +217,7 @@ func TestOnConnCloseRunsOnDisconnect(t *testing.T) {
 		t.Fatal("background context carried a connection reaper")
 	}
 	c2 := dial()
-	defer c2.Close()
+	defer func() { _ = c2.Close() }()
 	if err := c2.Call(ctx, "test/bind", map[string]string{"key": "att-2"}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestClientBadTokenRejected(t *testing.T) {
 	}
 	srv := NewServer(ln, NewRouter(), "sekrit", slog.New(slog.NewTextHandler(discard{}, nil)))
 	defer srv.Close()
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -262,7 +262,7 @@ func TestClientNonAuthFirstRequestRejected(t *testing.T) {
 	}
 	srv := NewServer(ln, NewRouter(), "sekrit", slog.New(slog.NewTextHandler(discard{}, nil)))
 	defer srv.Close()
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -295,7 +295,7 @@ func TestClientDeadline(t *testing.T) {
 	}))
 	srv := NewServer(ln, r, "t", slog.New(slog.NewTextHandler(discard{}, nil)))
 	defer srv.Close()
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -336,7 +336,7 @@ func TestServerCloseUnderConnectionBurst(t *testing.T) {
 			t.Fatal(err)
 		}
 		srv := NewServer(ln, NewRouter(), "t", slog.New(slog.NewTextHandler(discard{}, nil)))
-		go srv.Serve()
+		go func() { _ = srv.Serve() }()
 
 		var mu sync.Mutex
 		var conns []net.Conn
@@ -503,7 +503,7 @@ func TestClientCancelWithoutDeadlineAbortsCall(t *testing.T) {
 	}))
 	srv := NewServer(ln, r, "t", slog.New(slog.NewTextHandler(discard{}, nil)))
 	defer srv.Close()
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -581,7 +581,7 @@ func TestServerWithTokenStoreOperatorAndApp(t *testing.T) {
 
 	srv := NewServer(ln, r, ts, slog.New(slog.NewTextHandler(discard{}, nil)))
 	defer srv.Close()
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
