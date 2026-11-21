@@ -280,7 +280,7 @@ func (m *Manager) ensureDirsLocked(id string) error {
 	return nil
 }
 
-// Reload re-reads profile definitions and active profile from VFS. When
+// Reload re-reads profile definitions and the active profile from VFS. When
 // the stored active profile differs from the in-memory one — as it does
 // after a backup restore — Reload runs the same transition as Switch:
 // switch hooks fire and a profile.switched event is published, so
@@ -289,17 +289,16 @@ func (m *Manager) Reload() error {
 	m.mu.Lock()
 	prevID := m.activeID
 	prevProfile := m.profiles[prevID]
-	err := m.load()
-	nextID := m.activeID
-	nextProfile := m.profiles[nextID]
-	if err != nil {
+	if err := m.load(); err != nil {
 		m.mu.Unlock()
 		return err
 	}
-	if prevID == nextID {
+	if m.activeID == prevID {
 		m.mu.Unlock()
 		return nil
 	}
+	nextID := m.activeID
+	nextProfile := m.profiles[nextID]
 	_ = m.ensureDirsLocked(nextID)
 	callbacks := make([]func(prev, next Profile), len(m.onSwitch))
 	copy(callbacks, m.onSwitch)

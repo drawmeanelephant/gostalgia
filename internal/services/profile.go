@@ -217,36 +217,13 @@ func (s *ProfileService) switchProfile(ctx context.Context, req ipc.Request) (an
 		return nil, fmt.Errorf("profile: target profile id is required")
 	}
 
-	next, err := s.ctx.Profiles.Switch(targetID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Update layered settings store overlay for new profile
-	if s.ctx.Layered != nil {
-		settingsPath := profile.SettingsPath(next.ID)
-		_ = s.ctx.Layered.SetUserStore(settingsPath)
-	}
-
-	// Update application manager user identity for future launches
-	if s.ctx.Apps != nil {
-		s.ctx.Apps.SetUser(next.User())
-	}
-
-	// Update operator token user identity
-	if s.ctx.Tokens != nil {
-		s.ctx.Tokens.SetOperatorUser(next.User())
-	}
-
-	// If session manager has no active session for this user, create one
-	if s.ctx.Sessions != nil {
-		userSessions := s.ctx.Sessions.ForUser(next.ID)
-		if len(userSessions) == 0 {
-			_, _ = s.ctx.Sessions.Create(next.User())
-		}
-	}
-
-	return next, nil
+	// Switch runs the profile manager's switch callback list — the single
+	// owner of the "active profile changed" side effects (runtime
+	// identity, user config layer rebind, app launches, operator token,
+	// session ensure). The service must not repeat them here: a second
+	// binding used to point the user layer at the VFS path instead of its
+	// host path.
+	return s.ctx.Profiles.Switch(targetID)
 }
 
 type DeleteProfileRequest struct {
