@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gostalgia/internal/ipc"
+	"gostalgia/internal/profile"
 	"gostalgia/internal/security"
 	"gostalgia/internal/service"
 	"gostalgia/internal/vfs"
@@ -26,6 +27,14 @@ func (s *FSService) Depends() []string { return nil }
 
 func (s *FSService) Init(ctx *service.Context) error {
 	s.ctx = ctx
+	// Trash is per-profile: point the trash tree at the active profile and
+	// re-point it on every switch, mirroring how document stores rebind.
+	if v, ok := ctx.VFS.(*vfs.VFS); ok && ctx.Profiles != nil {
+		v.SetTrashDir(profile.TrashDir(ctx.Profiles.ActiveID()))
+		ctx.Profiles.OnSwitch(func(prev, next profile.Profile) {
+			v.SetTrashDir(profile.TrashDir(next.ID))
+		})
+	}
 	return nil
 }
 
@@ -649,6 +658,21 @@ func (s *FSService) restore(ctx context.Context, req ipc.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The item's origin must pass the same policy and capability checks as a
+	// direct write: grant checks never run on shared host mounts, so without
+	// this the hostfs.* capabilities are bypassed for trashed items.
+	entries, err := target.ListTrash()
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.ID == p.ID {
+			if err := s.requireWriteAccess(ctx, e.OriginalPath); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
 	resPath, err := target.Restore(p.ID, p.Dst, p.Overwrite)
 	if err != nil {
 		return nil, err
@@ -668,10 +692,15 @@ func (s *FSService) trashList(ctx context.Context, req ipc.Request) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	if entries == nil {
-		entries = []vfs.TrashEntry{}
+	// Re-check each item's origin: entries trashed from shared host mounts
+	// are only visible to callers passing the hostfs read check.
+	filtered := make([]vfs.TrashEntry, 0, len(entries))
+	for _, e := range entries {
+		if err := s.requireReadAccess(ctx, e.OriginalPath); err == nil {
+			filtered = append(filtered, e)
+		}
 	}
-	return map[string]any{"entries": entries}, nil
+	return map[string]any{"entries": filtered}, nil
 }
 
 func (s *FSService) trashEmpty(ctx context.Context, req ipc.Request) (any, error) {
@@ -682,9 +711,21 @@ func (s *FSService) trashEmpty(ctx context.Context, req ipc.Request) (any, error
 	if err != nil {
 		return nil, err
 	}
-	count, err := target.EmptyTrash()
+	entries, err := target.ListTrash()
 	if err != nil {
 		return nil, err
+	}
+	// Purge per item so each origin passes the write check: items trashed
+	// from shared host mounts stay in place unless the caller holds
+	// hostfs.write for them.
+	count := 0
+	for _, e := range entries {
+		if err := s.requireWriteAccess(ctx, e.OriginalPath); err != nil {
+			continue
+		}
+		if err := target.PurgeTrash(e.ID); err == nil {
+			count++
+		}
 	}
 	return map[string]any{"emptied": true, "count": count}, nil
 }

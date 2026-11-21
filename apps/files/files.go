@@ -380,7 +380,7 @@ func (f *Files) viewLocked(ctx context.Context) sdk.View {
 			State: sdk.ViewReady,
 			Items: []sdk.Item{
 				{ID: "item_target", Label: "Target", Detail: truncateString(f.pendingSrc, 4000)},
-				{ID: "item_notice", Label: "Action", Detail: "Item will be moved to /users/guest/.trash and can be restored later."},
+				{ID: "item_notice", Label: "Action", Detail: "Item will be moved to the trash and can be restored later."},
 			},
 			Actions: []sdk.Action{
 				{ID: "confirm_trash", Label: "Confirm Move to Trash"},
