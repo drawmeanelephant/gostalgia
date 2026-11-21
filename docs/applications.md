@@ -359,8 +359,8 @@ builtin manifests are approved by compilation/registration.
 | `clipboard.read` | `clipboard/read` | `{"target?":"auto"}` | `{text,source}` |
 | `clipboard.write` | `clipboard/write` | `{"text":"...","target?":"auto"}` | `{written:true,bytes,source}` |
 | `clipboard.write` | `clipboard/clear` | none | `{cleared:true}` |
-| `hostfs.read` | `fs/list`, `fs/read` on shared mounts | path on shared mount | directory entries or file content |
-| `hostfs.write` | `fs/write`, `fs/save`, `fs/mkdir` on shared mounts | path on shared mount | write confirmation |
+| `hostfs.read` | `fs/list`, `fs/read` on shared mounts; `fs/trash/list` on items trashed from shared mounts | path on shared mount | directory entries or file content |
+| `hostfs.write` | `fs/write`, `fs/save`, `fs/mkdir` on shared mounts; `fs/restore`, `fs/trash/empty` on items trashed from shared mounts | path on shared mount | write confirmation |
 | `net.egress` | `net/fetch` | `{"url":"...","method?":"GET","headers?":{},"body_base64?":""}` | `{status,headers,data_base64,size}` |
 | `shutdown` | `sys/shutdown` | `{reason?}` | `{stopping:true,reason}`; teardown may close connection |
 | `notify` | `notify/post` | `{"severity":"info|warning|error","title":"...","body":"..."}` | `{posted:true}`; bounded toasts and notification center history |

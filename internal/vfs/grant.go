@@ -67,6 +67,19 @@ func IsAppPrivatePath(appID, envPath string) bool {
 	return norm == appNorm || strings.HasPrefix(norm, appNorm+"/")
 }
 
+// IsProfileTrashPath reports whether envPath is inside a profile trash tree
+// (/users/<profile_id>/.trash or beneath it). Trash internals are
+// system-managed: no grant may cover them, so applications cannot author or
+// tamper with trash metadata or payloads through the ordinary filesystem.
+func IsProfileTrashPath(envPath string) bool {
+	norm, err := Normalize(envPath)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(norm, "/")
+	return len(parts) >= 3 && parts[0] == "users" && parts[2] == ".trash"
+}
+
 // Grant represents a scoped authorization for an application to access a path.
 type Grant struct {
 	ID        string     `json:"id"`
@@ -174,6 +187,9 @@ func (s *GrantStore) issue(appID, envPath string, access AccessMode, recursive, 
 				return cloneGrant(g), false, nil
 			}
 		}
+	}
+	if IsProfileTrashPath(cleanPath) {
+		return nil, errors.New("vfs: cannot grant access to profile trash")
 	}
 
 	b := make([]byte, 16)
@@ -348,6 +364,17 @@ func (s *GrantStore) CheckAccess(appID string, envPath string, mode AccessMode) 
 			Path:    envPath,
 			Code:    ErrPermission,
 			Message: "permission denied: cannot access app private storage root",
+		}
+	}
+
+	// Profile trash trees are system-managed and ungrantable: even a grant
+	// covering the profile's home directory must not reach them.
+	if IsProfileTrashPath(envPath) {
+		return &Error{
+			Op:      "access",
+			Path:    envPath,
+			Code:    ErrPermission,
+			Message: "permission denied: cannot access profile trash",
 		}
 	}
 
