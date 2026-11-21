@@ -176,6 +176,10 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("vfs: %s %s%s: %s%s", e.Op, e.Path, target, e.Message, rec)
 }
 
+// ErrorCode exposes the classification through errors.As so transports
+// (the IPC layer) can carry it without importing this package.
+func (e *Error) ErrorCode() string { return string(e.Code) }
+
 func (e *Error) Unwrap() error {
 	if e.Err != nil {
 		return e.Err

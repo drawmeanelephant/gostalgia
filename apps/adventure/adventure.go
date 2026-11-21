@@ -15,7 +15,9 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -141,12 +143,14 @@ func (a *Adventure) Stop(ctx context.Context) error {
 // a fresh expedition. A corrupt or wrong-version file is a fresh
 // expedition with an honest note; the bad bytes are left alone until the
 // next real change saves over them. A valid save renders its transcript
-// tail and waits pending a continue-or-new choice.
+// tail and waits pending a continue-or-new choice. Any read failure that
+// is not a genuine absence or a denial is an honest error and the app
+// stays unloaded so the next call retries — a fresh expedition must never
+// overwrite a save it could not read.
 func (a *Adventure) ensureLoadedLocked(ctx context.Context) error {
 	if a.loaded {
 		return nil
 	}
-	a.loaded = true
 	a.g = newGame()
 	a.transcript = append(introLines(), a.g.lookLines()...)
 
@@ -155,11 +159,18 @@ func (a *Adventure) ensureLoadedLocked(ctx context.Context) error {
 	}
 	err := a.app.Call(ctx, "fs/read", map[string]string{"path": statePath}, &out)
 	if err != nil {
-		if looksDenied(err) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// no save yet: fresh expedition
+		case errors.Is(err, fs.ErrPermission):
 			a.lastError = fmt.Sprintf("storage access denied (%v) — progress will not be saved", err)
+		default:
+			return fmt.Errorf("the previous save could not be loaded: %w", err)
 		}
-		return nil // no save yet: fresh expedition
+		a.loaded = true
+		return nil
 	}
+	a.loaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
 		a.statusNote = "previous save unreadable — starting a new expedition"
@@ -187,14 +198,6 @@ func (a *Adventure) ensureLoadedLocked(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// looksDenied reports whether an fs error is a grant denial rather than a
-// missing file. The two are intentionally different: absence is normal on
-// first launch, denial means nothing the player does will persist.
-func looksDenied(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "denied") || strings.Contains(msg, "permission")
 }
 
 // loadLocked installs loaded state into the game. Caller holds mu.
