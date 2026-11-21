@@ -35,13 +35,8 @@ import (
 
 const (
 	// DefaultLogCapacity is the default ring buffer capacity per stream (64 KB).
-	DefaultLogCapacity    = 64 * 1024
-	DefaultMaxRestarts    = 5
-	DefaultRestartWindow  = 1 * time.Minute
-	DefaultInitialBackoff = 100 * time.Millisecond
-	DefaultMaxBackoff     = 5 * time.Second
-	DefaultBackoffFactor  = 2.0
-	DefaultMaxHistory     = 100
+	DefaultLogCapacity = 64 * 1024
+	DefaultMaxHistory  = 100
 )
 
 type Kind string
@@ -54,53 +49,12 @@ const (
 type State string
 
 const (
-	StateStarting   State = "starting"
-	StateRunning    State = "running"
-	StateStopping   State = "stopping"
-	StateStopped    State = "stopped"
-	StateFailed     State = "failed"
-	StateRestarting State = "restarting"
-	StateCrashLoop  State = "crashloop"
+	StateStarting State = "starting"
+	StateRunning  State = "running"
+	StateStopping State = "stopping"
+	StateStopped  State = "stopped"
+	StateFailed   State = "failed"
 )
-
-// RestartPolicy defines if and when a process should be restarted on exit.
-type RestartPolicy string
-
-const (
-	RestartNever     RestartPolicy = "never"      // default: do not restart
-	RestartAlways    RestartPolicy = "always"     // restart regardless of exit reason unless explicitly stopped
-	RestartOnFailure RestartPolicy = "on-failure" // restart only when process fails or exits with non-zero code
-)
-
-// SupervisionConfig configures restart and crash loop limits.
-type SupervisionConfig struct {
-	Policy         RestartPolicy `json:"policy"`
-	MaxRestarts    int           `json:"max_restarts,omitempty"`    // max restarts within window before crash-loop cutoff (default: 5)
-	Window         time.Duration `json:"window,omitempty"`          // sliding window for restart count (default: 1m)
-	InitialBackoff time.Duration `json:"initial_backoff,omitempty"` // initial delay before restart (default: 100ms)
-	MaxBackoff     time.Duration `json:"max_backoff,omitempty"`     // max delay before restart (default: 5s)
-	BackoffFactor  float64       `json:"backoff_factor,omitempty"`  // exponential multiplier (default: 2.0)
-}
-
-func (s SupervisionConfig) withDefaults() SupervisionConfig {
-	cfg := s
-	if cfg.MaxRestarts <= 0 {
-		cfg.MaxRestarts = DefaultMaxRestarts
-	}
-	if cfg.Window <= 0 {
-		cfg.Window = DefaultRestartWindow
-	}
-	if cfg.InitialBackoff <= 0 {
-		cfg.InitialBackoff = DefaultInitialBackoff
-	}
-	if cfg.MaxBackoff <= 0 {
-		cfg.MaxBackoff = DefaultMaxBackoff
-	}
-	if cfg.BackoffFactor <= 1.0 {
-		cfg.BackoffFactor = DefaultBackoffFactor
-	}
-	return cfg
-}
 
 // Spec describes a process to start.
 type Spec struct {
@@ -113,14 +67,13 @@ type Spec struct {
 	Dir       string                   `json:"dir,omitempty"`       // child only: working directory
 	Env       []string                 `json:"env,omitempty"`       // child only; nil defaults to deliberate child environment
 	LogLimit  int                      `json:"log_limit,omitempty"` // child only: ring buffer capacity per stream in bytes (default 64KB)
-	Restart   SupervisionConfig        `json:"restart,omitempty"`   // supervision and restart policy
 	Policy    platform.ExecutionPolicy `json:"policy,omitempty"`    // host execution and sandbox policy
 
 	// ExtraFiles are inherited open files passed to the child as fds 3,4,...
 	// (cmd.ExtraFiles). Used to hand confined children a pre-connected IPC
 	// channel so they never need filesystem or socket-connect authority.
 	// Each file is duped into the child at Start; the parent may close its
-	// copy afterwards, but supervised restarts would need a fresh file.
+	// copy afterwards.
 	ExtraFiles []*os.File `json:"-"`
 }
 
@@ -150,41 +103,37 @@ type Logs struct {
 
 // Info is a snapshot of a process's state.
 type Info struct {
-	ID           int32                     `json:"id"`
-	Name         string                    `json:"name"`
-	Kind         Kind                      `json:"kind"`
-	State        State                     `json:"state"`
-	SessionID    string                    `json:"session,omitempty"`
-	User         string                    `json:"user,omitempty"`
-	Caps         []string                  `json:"caps,omitempty"` // granted capabilities, from the spec
-	StartedAt    time.Time                 `json:"started_at,omitempty"`
-	ExitedAt     time.Time                 `json:"exited_at,omitempty"`
-	Err          string                    `json:"error,omitempty"`
-	ExitCode     int                       `json:"exit_code,omitempty"`
-	RestartCount int                       `json:"restart_count,omitempty"`
-	CrashLoop    bool                      `json:"crash_loop,omitempty"`
-	Resources    platform.ResourceUsage    `json:"resources"`
-	Isolation    string                    `json:"isolation,omitempty"`
-	Policy       *platform.ExecutionPolicy `json:"policy,omitempty"`
+	ID        int32                     `json:"id"`
+	Name      string                    `json:"name"`
+	Kind      Kind                      `json:"kind"`
+	State     State                     `json:"state"`
+	SessionID string                    `json:"session,omitempty"`
+	User      string                    `json:"user,omitempty"`
+	Caps      []string                  `json:"caps,omitempty"` // granted capabilities, from the spec
+	StartedAt time.Time                 `json:"started_at,omitempty"`
+	ExitedAt  time.Time                 `json:"exited_at,omitempty"`
+	Err       string                    `json:"error,omitempty"`
+	ExitCode  int                       `json:"exit_code,omitempty"`
+	Resources platform.ResourceUsage    `json:"resources"`
+	Isolation string                    `json:"isolation,omitempty"`
+	Policy    *platform.ExecutionPolicy `json:"policy,omitempty"`
 }
 
 // HistoryEntry is a bounded record of an exited or reaped process instance.
 type HistoryEntry struct {
-	ID           int32                  `json:"id"`
-	Name         string                 `json:"name"`
-	Kind         Kind                   `json:"kind"`
-	State        State                  `json:"state"`
-	SessionID    string                 `json:"session,omitempty"`
-	User         string                 `json:"user,omitempty"`
-	ExitCode     int                    `json:"exit_code,omitempty"`
-	Err          string                 `json:"error,omitempty"`
-	StartedAt    time.Time              `json:"started_at,omitempty"`
-	ExitedAt     time.Time              `json:"exited_at,omitempty"`
-	Duration     string                 `json:"duration,omitempty"`
-	RestartCount int                    `json:"restart_count,omitempty"`
-	CrashLoop    bool                   `json:"crash_loop,omitempty"`
-	Resources    platform.ResourceUsage `json:"resources"`
-	Isolation    string                 `json:"isolation,omitempty"`
+	ID        int32                  `json:"id"`
+	Name      string                 `json:"name"`
+	Kind      Kind                   `json:"kind"`
+	State     State                  `json:"state"`
+	SessionID string                 `json:"session,omitempty"`
+	User      string                 `json:"user,omitempty"`
+	ExitCode  int                    `json:"exit_code,omitempty"`
+	Err       string                 `json:"error,omitempty"`
+	StartedAt time.Time              `json:"started_at,omitempty"`
+	ExitedAt  time.Time              `json:"exited_at,omitempty"`
+	Duration  string                 `json:"duration,omitempty"`
+	Resources platform.ResourceUsage `json:"resources"`
+	Isolation string                 `json:"isolation,omitempty"`
 }
 
 // Event is published on every state transition.
@@ -214,7 +163,7 @@ type Process struct {
 	stderr       *RingBuffer
 	combined     *RingBuffer
 	userStopped  bool
-	restartTimes []time.Time
+	stopHook     func() // optional graceful-stop signal delivered before any kill (child only)
 }
 
 // ID returns the process ID.
@@ -253,6 +202,15 @@ func (p *Process) Caps() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.info.Caps
+}
+
+// SetStopHook installs the graceful-stop signal Stop delivers before any
+// kill escalation. launchExternal installs a hook that closes the child's
+// IPC connection, running the SDK's EOF-cancel and Instance.Stop path.
+func (p *Process) SetStopHook(f func()) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stopHook = f
 }
 
 func (p *Process) setState(state State, err error) {
@@ -324,7 +282,6 @@ func (m *Manager) StartInProc(ctx context.Context, spec Spec, run func(p *Proces
 		return nil, errors.New("process: run function is required")
 	}
 	spec.Kind = KindInProc
-	spec.Restart = spec.Restart.withDefaults()
 	id := m.alloc()
 	masterCtx, masterCancel := context.WithCancel(ipc.WithCapabilities(ctx, security.NewCapabilities(spec.Caps...)))
 	runCtx, runCancel := context.WithCancel(masterCtx)
@@ -375,131 +332,47 @@ func (m *Manager) superviseInProc(p *Process, run func(p *Process) error) {
 		close(p.done)
 	}()
 
-	firstRun := true
-	for {
-		if !firstRun {
-			p.mu.Lock()
-			if p.userStopped || m.isShuttingDown() {
-				p.info.State = StateStopped
-				p.mu.Unlock()
-				m.publish(p)
-				return
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic: %v", r)
 			}
-			runCtx, runCancel := context.WithCancel(p.masterCtx)
-			p.runCtx = runCtx
-			p.runCancel = runCancel
-			p.info.State = StateRunning
-			p.info.StartedAt = time.Now()
-			p.mu.Unlock()
-
-			m.publish(p)
-			m.log.Info("process restarted", "pid", p.info.ID, "name", p.spec.Name, "restart_count", p.info.RestartCount)
-		}
-		firstRun = false
-
-		var err error
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					err = fmt.Errorf("panic: %v", r)
-				}
-			}()
-			err = run(p)
 		}()
+		err = run(p)
+	}()
 
-		p.mu.Lock()
-		runCancel := p.runCancel
-		p.mu.Unlock()
-		if runCancel != nil {
-			runCancel()
-		}
+	p.mu.Lock()
+	runCancel := p.runCancel
+	p.mu.Unlock()
+	if runCancel != nil {
+		runCancel()
+	}
 
-		now := time.Now()
-		p.mu.Lock()
-		p.info.ExitedAt = now
-		userStopped := p.userStopped || m.isShuttingDown()
-		failed := err != nil && !userStopped
+	p.mu.Lock()
+	p.info.ExitedAt = time.Now()
+	userStopped := p.userStopped || m.isShuttingDown()
 
-		if userStopped {
-			p.info.State = StateStopped
-			p.info.Err = ""
-			p.mu.Unlock()
-			m.publish(p)
-			m.log.Info("process stopped", "pid", p.info.ID, "name", p.spec.Name)
-			return
-		}
-
-		if failed {
-			p.info.State = StateFailed
-			p.info.Err = err.Error()
-			m.log.Error("process failed", "pid", p.info.ID, "name", p.spec.Name, "err", err)
-		} else {
-			p.info.State = StateStopped
-			p.info.Err = ""
-			m.log.Info("process stopped", "pid", p.info.ID, "name", p.spec.Name)
-		}
-
-		shouldRestart := false
-		if p.spec.Restart.Policy == RestartAlways {
-			shouldRestart = true
-		} else if p.spec.Restart.Policy == RestartOnFailure && failed {
-			shouldRestart = true
-		}
-
-		if !shouldRestart {
-			p.mu.Unlock()
-			m.publish(p)
-			return
-		}
-
-		// Check crash loop
-		p.restartTimes = append(p.restartTimes, now)
-		windowStart := now.Add(-p.spec.Restart.Window)
-		validIdx := 0
-		for _, t := range p.restartTimes {
-			if t.After(windowStart) {
-				p.restartTimes[validIdx] = t
-				validIdx++
-			}
-		}
-		p.restartTimes = p.restartTimes[:validIdx]
-
-		if len(p.restartTimes) > p.spec.Restart.MaxRestarts {
-			p.info.State = StateCrashLoop
-			p.info.CrashLoop = true
-			p.info.Err = fmt.Sprintf("crash loop: exceeded %d restarts within %s", p.spec.Restart.MaxRestarts, p.spec.Restart.Window)
-			p.mu.Unlock()
-			m.publish(p)
-			m.log.Error("process entered crash loop", "pid", p.info.ID, "name", p.spec.Name, "restarts", len(p.restartTimes))
-			return
-		}
-
-		attempts := len(p.restartTimes) - 1
-		backoff := p.spec.Restart.InitialBackoff
-		for i := 0; i < attempts; i++ {
-			backoff = time.Duration(float64(backoff) * p.spec.Restart.BackoffFactor)
-			if backoff > p.spec.Restart.MaxBackoff {
-				backoff = p.spec.Restart.MaxBackoff
-				break
-			}
-		}
-
-		p.info.State = StateRestarting
-		p.info.RestartCount++
+	if userStopped {
+		p.info.State = StateStopped
+		p.info.Err = ""
 		p.mu.Unlock()
 		m.publish(p)
-		m.log.Info("process restarting after backoff", "pid", p.info.ID, "name", p.spec.Name, "backoff", backoff, "attempt", p.info.RestartCount)
-
-		select {
-		case <-p.masterCtx.Done():
-			p.mu.Lock()
-			p.info.State = StateStopped
-			p.mu.Unlock()
-			m.publish(p)
-			return
-		case <-time.After(backoff):
-		}
+		m.log.Info("process stopped", "pid", p.info.ID, "name", p.spec.Name)
+		return
 	}
+
+	if err != nil {
+		p.info.State = StateFailed
+		p.info.Err = err.Error()
+		m.log.Error("process failed", "pid", p.info.ID, "name", p.spec.Name, "err", err)
+	} else {
+		p.info.State = StateStopped
+		p.info.Err = ""
+		m.log.Info("process stopped", "pid", p.info.ID, "name", p.spec.Name)
+	}
+	p.mu.Unlock()
+	m.publish(p)
 }
 
 // RingBuffer is a concurrency-safe bounded byte ring buffer with drop accounting.
@@ -651,7 +524,6 @@ func (m *Manager) StartChild(ctx context.Context, spec Spec) (*Process, error) {
 		return nil, errors.New("process: child spec requires args")
 	}
 	spec.Kind = KindChild
-	spec.Restart = spec.Restart.withDefaults()
 	id := m.alloc()
 
 	masterCtx, masterCancel := context.WithCancel(ipc.WithCapabilities(ctx, security.NewCapabilities(spec.Caps...)))
@@ -703,6 +575,12 @@ func (m *Manager) StartChild(ctx context.Context, spec Spec) (*Process, error) {
 		masterCancel()
 		return nil, fmt.Errorf("process: start %s: %w", spec.Args[0], err)
 	}
+	if err := platform.EnrollProcessTree(cmd); err != nil {
+		_ = platform.KillProcessTree(cmd)
+		runCancel()
+		masterCancel()
+		return nil, fmt.Errorf("process: enroll %s in process tree: %w", spec.Args[0], err)
+	}
 	if postHook != nil {
 		if err := postHook(cmd.Process.Pid); err != nil {
 			_ = platform.KillProcessTree(cmd)
@@ -741,191 +619,67 @@ func (m *Manager) superviseChild(p *Process) {
 		close(p.done)
 	}()
 
-	firstRun := true
-	for {
-		if !firstRun {
-			p.mu.Lock()
-			if p.userStopped || m.isShuttingDown() {
-				p.info.State = StateStopped
-				p.mu.Unlock()
-				m.publish(p)
-				return
-			}
-			runCtx, runCancel := context.WithCancel(p.masterCtx)
-			cmd := m.buildChildCmd(runCtx, p.spec, p.info.ID, p.stdout, p.stderr, p.combined)
-			postHook, sandboxErr := platform.ConfigureSandbox(cmd, p.spec.Policy)
-			if sandboxErr != nil {
-				runCancel()
-				p.cmd = nil
-				p.pid = 0
-				p.info.State = StateFailed
-				p.info.Err = fmt.Sprintf("restart sandbox configuration failed: %v", sandboxErr)
-				p.mu.Unlock()
-				m.publish(p)
-				m.log.Error("child process restart sandbox failed", "pid", p.info.ID, "err", sandboxErr)
-				return
-			}
-			if err := cmd.Start(); err != nil {
-				runCancel()
-				p.cmd = nil
-				p.pid = 0
-				p.info.State = StateFailed
-				p.info.Err = fmt.Sprintf("restart failed: %v", err)
-				p.mu.Unlock()
-				m.publish(p)
-				m.log.Error("child process restart failed", "pid", p.info.ID, "err", err)
-				return
-			}
-			if postHook != nil {
-				if err := postHook(cmd.Process.Pid); err != nil {
-					_ = platform.KillProcessTree(cmd)
-					runCancel()
-					p.cmd = nil
-					p.pid = 0
-					p.info.State = StateFailed
-					p.info.Err = fmt.Sprintf("restart post-start sandbox policy failed: %v", err)
-					p.mu.Unlock()
-					m.publish(p)
-					m.log.Error("child process restart post-start sandbox policy failed", "pid", p.info.ID, "err", err)
+	p.mu.Lock()
+	cmd := p.cmd
+	runCancel := p.runCancel
+	p.mu.Unlock()
+
+	stopWatcher := make(chan struct{})
+	if p.spec.Policy.DenyDescendants && cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
+		targetPID := cmd.Process.Pid
+		go func() {
+			ticker := time.NewTicker(2 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopWatcher:
 					return
+				case <-ticker.C:
+					platform.KillDescendants(targetPID)
 				}
 			}
-			p.runCtx = runCtx
-			p.runCancel = runCancel
-			p.cmd = cmd
-			p.pid = cmd.Process.Pid
-			p.info.State = StateRunning
-			p.info.StartedAt = time.Now()
-			p.mu.Unlock()
+		}()
+	}
 
-			m.publish(p)
-			m.log.Info("child process restarted", "pid", p.info.ID, "name", p.spec.Name, "restart_count", p.info.RestartCount)
-		}
-		firstRun = false
+	err := cmd.Wait()
+	close(stopWatcher)
+	_ = platform.KillProcessTree(cmd)
+	runCancel()
 
-		p.mu.Lock()
-		cmd := p.cmd
-		runCancel := p.runCancel
-		p.mu.Unlock()
+	p.mu.Lock()
+	p.info.ExitedAt = time.Now()
+	if cmd.ProcessState != nil {
+		p.info.ExitCode = cmd.ProcessState.ExitCode()
+		p.info.Resources = platform.SampleProcessState(cmd.ProcessState)
+	}
 
-		stopWatcher := make(chan struct{})
-		if p.spec.Policy.DenyDescendants && cmd != nil && cmd.Process != nil && cmd.Process.Pid > 0 {
-			targetPID := cmd.Process.Pid
-			go func() {
-				ticker := time.NewTicker(2 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-stopWatcher:
-						return
-					case <-ticker.C:
-						platform.KillDescendants(targetPID)
-					}
-				}
-			}()
-		}
+	userStopped := p.userStopped || m.isShuttingDown()
+	failed := (err != nil || (cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != 0)) && !userStopped
 
-		err := cmd.Wait()
-		close(stopWatcher)
-		_ = platform.KillProcessTree(cmd)
-		runCancel()
-
-		now := time.Now()
-		p.mu.Lock()
-		p.info.ExitedAt = now
-		if cmd.ProcessState != nil {
-			p.info.ExitCode = cmd.ProcessState.ExitCode()
-			p.info.Resources = platform.SampleProcessState(cmd.ProcessState)
-		}
-
-		userStopped := p.userStopped || m.isShuttingDown()
-		failed := (err != nil || (cmd.ProcessState != nil && cmd.ProcessState.ExitCode() != 0)) && !userStopped
-
-		if userStopped {
-			p.info.State = StateStopped
-			p.info.Err = ""
-			p.mu.Unlock()
-			m.publish(p)
-			m.log.Info("child process stopped", "pid", p.info.ID, "name", p.spec.Name)
-			return
-		}
-
-		if failed {
-			p.info.State = StateFailed
-			if cmd.ProcessState != nil {
-				p.info.Err = fmt.Sprintf("exit code %d: %v", cmd.ProcessState.ExitCode(), err)
-			} else if err != nil {
-				p.info.Err = err.Error()
-			}
-			m.log.Info("child process failed", "pid", p.info.ID, "name", p.spec.Name, "exit_code", p.info.ExitCode, "err", p.info.Err)
-		} else {
-			p.info.State = StateStopped
-			p.info.Err = ""
-			m.log.Info("child process exited cleanly", "pid", p.info.ID, "name", p.spec.Name, "exit_code", p.info.ExitCode)
-		}
-
-		shouldRestart := false
-		if p.spec.Restart.Policy == RestartAlways {
-			shouldRestart = true
-		} else if p.spec.Restart.Policy == RestartOnFailure && failed {
-			shouldRestart = true
-		}
-
-		if !shouldRestart {
-			p.mu.Unlock()
-			m.publish(p)
-			return
-		}
-
-		// Check crash loop
-		p.restartTimes = append(p.restartTimes, now)
-		windowStart := now.Add(-p.spec.Restart.Window)
-		validIdx := 0
-		for _, t := range p.restartTimes {
-			if t.After(windowStart) {
-				p.restartTimes[validIdx] = t
-				validIdx++
-			}
-		}
-		p.restartTimes = p.restartTimes[:validIdx]
-
-		if len(p.restartTimes) > p.spec.Restart.MaxRestarts {
-			p.info.State = StateCrashLoop
-			p.info.CrashLoop = true
-			p.info.Err = fmt.Sprintf("crash loop: exceeded %d restarts within %s", p.spec.Restart.MaxRestarts, p.spec.Restart.Window)
-			p.mu.Unlock()
-			m.publish(p)
-			m.log.Error("child process entered crash loop", "pid", p.info.ID, "name", p.spec.Name, "restarts", len(p.restartTimes))
-			return
-		}
-
-		// Exponential backoff
-		attempts := len(p.restartTimes) - 1
-		backoff := p.spec.Restart.InitialBackoff
-		for i := 0; i < attempts; i++ {
-			backoff = time.Duration(float64(backoff) * p.spec.Restart.BackoffFactor)
-			if backoff > p.spec.Restart.MaxBackoff {
-				backoff = p.spec.Restart.MaxBackoff
-				break
-			}
-		}
-
-		p.info.State = StateRestarting
-		p.info.RestartCount++
+	if userStopped {
+		p.info.State = StateStopped
+		p.info.Err = ""
 		p.mu.Unlock()
 		m.publish(p)
-		m.log.Info("child restarting after backoff", "pid", p.info.ID, "name", p.spec.Name, "backoff", backoff, "attempt", p.info.RestartCount)
-
-		select {
-		case <-p.masterCtx.Done():
-			p.mu.Lock()
-			p.info.State = StateStopped
-			p.mu.Unlock()
-			m.publish(p)
-			return
-		case <-time.After(backoff):
-		}
+		m.log.Info("child process stopped", "pid", p.info.ID, "name", p.spec.Name)
+		return
 	}
+
+	if failed {
+		p.info.State = StateFailed
+		if cmd.ProcessState != nil {
+			p.info.Err = fmt.Sprintf("exit code %d: %v", cmd.ProcessState.ExitCode(), err)
+		} else if err != nil {
+			p.info.Err = err.Error()
+		}
+		m.log.Info("child process failed", "pid", p.info.ID, "name", p.spec.Name, "exit_code", p.info.ExitCode, "err", p.info.Err)
+	} else {
+		p.info.State = StateStopped
+		p.info.Err = ""
+		m.log.Info("child process exited cleanly", "pid", p.info.ID, "name", p.spec.Name, "exit_code", p.info.ExitCode)
+	}
+	p.mu.Unlock()
+	m.publish(p)
 }
 
 func (p *Process) isStopping() bool {
@@ -934,8 +688,13 @@ func (p *Process) isStopping() bool {
 	return p.userStopped || p.info.State == StateStopping
 }
 
-// Stop asks a process to stop and waits up to timeout for it to exit.
-// It marks the process as user-stopped to guarantee that restart policies are suppressed.
+// escalationWait bounds the beat a killed process gets to reap before Stop
+// reports failure, on top of the caller's graceful-phase timeout.
+const escalationWait = 5 * time.Second
+
+// Stop asks a process to stop and waits up to timeout for it to exit
+// gracefully before escalating to a tree kill. It marks the process as
+// user-stopped so the exit is recorded as a deliberate stop.
 func (m *Manager) Stop(id int32, timeout time.Duration) error {
 	m.mu.Lock()
 	p, ok := m.procs[id]
@@ -948,7 +707,7 @@ func (m *Manager) Stop(id int32, timeout time.Duration) error {
 	p.userStopped = true
 	state := p.info.State
 	switch state {
-	case StateStopped, StateFailed, StateCrashLoop:
+	case StateStopped, StateFailed:
 		p.mu.Unlock()
 		select {
 		case <-p.done:
@@ -968,29 +727,53 @@ func (m *Manager) Stop(id int32, timeout time.Duration) error {
 
 	p.info.State = StateStopping
 	cmd := p.cmd
+	kind := p.info.Kind
+	stopHook := p.stopHook
 	p.mu.Unlock()
 	m.publish(p)
 
-	p.masterCancel()
-	if cmd != nil {
-		_ = platform.KillProcessTree(cmd)
+	// Graceful phase: in-proc children observe context cancellation (the
+	// documented contract); external app children get their IPC conn closed
+	// through the hook launchExternal installs, running the SDK's EOF-cancel
+	// and Instance.Stop path; other children get a group SIGTERM where the
+	// platform supports it. Kill only follows once the stop deadline passes.
+	if kind == KindInProc {
+		p.masterCancel()
+	} else if stopHook != nil {
+		stopHook()
+	} else {
+		_ = platform.TerminateProcessTree(cmd)
 	}
 
 	select {
 	case <-p.done:
 		return nil
 	case <-time.After(timeout):
-		return fmt.Errorf("process: %d (%s) did not stop within %s", id, p.Info().Name, timeout)
 	}
+
+	// Escalation: kill the whole tree and give reaping one bounded beat.
+	// An in-proc process has nothing left to escalate to.
+	if kind != KindInProc {
+		p.masterCancel()
+		if cmd != nil {
+			_ = platform.KillProcessTree(cmd)
+		}
+		select {
+		case <-p.done:
+			return nil
+		case <-time.After(escalationWait):
+		}
+	}
+	return fmt.Errorf("process: %d (%s) did not stop within %s", id, p.Info().Name, timeout)
 }
 
 // StopAll stops every live process, best effort. Used at shutdown.
-// It sets shuttingDown = true to ensure no supervised processes restart.
+// It sets shuttingDown = true so exits are recorded as deliberate stops.
 func (m *Manager) StopAll(timeout time.Duration) {
 	m.BeginShutdown()
 
 	for _, info := range m.List() {
-		if info.State != StateRunning && info.State != StateStarting && info.State != StateRestarting {
+		if info.State != StateRunning && info.State != StateStarting {
 			continue
 		}
 		if err := m.Stop(info.ID, timeout); err != nil {
@@ -1016,9 +799,9 @@ func (m *Manager) IsShuttingDown() bool {
 }
 
 // BeginShutdown marks the manager as draining before any process is
-// stopped: supervised processes stop restarting, StartInProc/StartChild
-// registrations are refused, and callers checking IsShuttingDown see the
-// shutdown across its whole sequence. StopAll implies it.
+// stopped: StartInProc/StartChild registrations are refused, and callers
+// checking IsShuttingDown see the shutdown across its whole sequence.
+// StopAll implies it.
 func (m *Manager) BeginShutdown() {
 	m.shuttingDown.Store(true)
 }
@@ -1051,7 +834,7 @@ func (m *Manager) Count() int {
 	n := 0
 	for _, p := range m.procs {
 		switch p.Info().State {
-		case StateRunning, StateStarting, StateRestarting:
+		case StateRunning, StateStarting:
 			n++
 		}
 	}
@@ -1073,21 +856,19 @@ func (m *Manager) recordHistory(p *Process) {
 	}
 
 	entry := HistoryEntry{
-		ID:           info.ID,
-		Name:         info.Name,
-		Kind:         info.Kind,
-		State:        info.State,
-		SessionID:    info.SessionID,
-		User:         info.User,
-		ExitCode:     info.ExitCode,
-		Err:          info.Err,
-		StartedAt:    info.StartedAt,
-		ExitedAt:     info.ExitedAt,
-		Duration:     duration,
-		RestartCount: info.RestartCount,
-		CrashLoop:    info.CrashLoop,
-		Resources:    info.Resources,
-		Isolation:    info.Isolation,
+		ID:        info.ID,
+		Name:      info.Name,
+		Kind:      info.Kind,
+		State:     info.State,
+		SessionID: info.SessionID,
+		User:      info.User,
+		ExitCode:  info.ExitCode,
+		Err:       info.Err,
+		StartedAt: info.StartedAt,
+		ExitedAt:  info.ExitedAt,
+		Duration:  duration,
+		Resources: info.Resources,
+		Isolation: info.Isolation,
 	}
 
 	m.history = append(m.history, entry)
@@ -1120,7 +901,7 @@ func (m *Manager) HistoryByID(id int32) (HistoryEntry, bool) {
 	return HistoryEntry{}, false
 }
 
-// Reap removes inactive processes (stopped, failed, or crashloop) from the active process table.
+// Reap removes inactive processes (stopped or failed) from the active process table.
 // Returns the count of processes reaped.
 func (m *Manager) Reap() int {
 	m.mu.Lock()
@@ -1131,7 +912,7 @@ func (m *Manager) Reap() int {
 		state := p.info.State
 		p.mu.Unlock()
 		switch state {
-		case StateStopped, StateFailed, StateCrashLoop:
+		case StateStopped, StateFailed:
 			delete(m.procs, id)
 			reaped++
 		}
@@ -1148,7 +929,7 @@ func (m *Manager) autoReap() {
 		p.mu.Lock()
 		st := p.info.State
 		p.mu.Unlock()
-		if st == StateStopped || st == StateFailed || st == StateCrashLoop {
+		if st == StateStopped || st == StateFailed {
 			inactiveCount++
 		}
 	}
@@ -1161,7 +942,7 @@ func (m *Manager) autoReap() {
 			p.mu.Lock()
 			st := p.info.State
 			p.mu.Unlock()
-			if st == StateStopped || st == StateFailed || st == StateCrashLoop {
+			if st == StateStopped || st == StateFailed {
 				delete(m.procs, id)
 				m.reapedCount++
 				inactiveCount--

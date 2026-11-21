@@ -176,6 +176,10 @@ type Instance interface {
    fresh context, not Run's canceled one, and must honor its deadline. If handler
    draining exhausts the deadline, Stop sees an expired context: release what
    you safely can and return an error, not success.
+   For external applications the stop signal is the runtime closing the child
+   IPC connection: the SDK's read loop sees EOF, cancels the app context, and
+   `Run` returns so `Stop` runs before the process exits. An app that does not
+   exit within the stop deadline is then killed outright.
 6. Remove running state; publish `app.state` with `launched`/`exited` and PID.
    `Manager.Stop` waits for process completion including cleanup. Natural exit
    also cleans up. A later launch creates a new instance with new state.
@@ -293,6 +297,11 @@ When an external app launches:
   is terminated, the runtime cleans up the dedicated socket, revokes credentials,
   retracts all registered `app/<id>/*` routes, and transitions the process to
   `stopped` or `failed`.
+- **Graceful stop, then kill:** `app/stop` first closes the child's IPC
+  connection, so `Run` observes cancellation and `Instance.Stop` runs with its
+  budget — state persisted in `Stop` is written before exit. Only after the
+  stop deadline passes does `platform.KillProcessTree` end the process tree,
+  so an app hanging in `Stop` is still force-terminated promptly.
 - **Presentation contract:** External applications implement `app.Present`
   identically to in-proc apps. View snapshots and action dispatches flow over the
   child socket, rendering inside the Charm shell without the external process

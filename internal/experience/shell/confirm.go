@@ -102,7 +102,7 @@ func (m *Model) openConfirm(c confirmation) tea.Cmd {
 // has not ended and is not already stopping.
 func stoppable(state string) bool {
 	switch state {
-	case "stopping", "stopped", "failed", "crashloop":
+	case "stopping", "stopped", "failed":
 		return false
 	}
 	return true

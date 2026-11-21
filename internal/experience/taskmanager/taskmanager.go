@@ -33,17 +33,15 @@ const (
 
 // ProcessRow represents one process row in the Task Manager table.
 type ProcessRow struct {
-	ID           int32                  `json:"id"`
-	Name         string                 `json:"name"`
-	Kind         string                 `json:"kind"`
-	State        string                 `json:"state"`
-	ExitCode     int                    `json:"exit_code"`
-	StartedAt    time.Time              `json:"started_at"`
-	ExitedAt     time.Time              `json:"exited_at"`
-	RestartCount int                    `json:"restart_count"`
-	CrashLoop    bool                   `json:"crash_loop"`
-	Resources    platform.ResourceUsage `json:"resources"`
-	Error        string                 `json:"error"`
+	ID        int32                  `json:"id"`
+	Name      string                 `json:"name"`
+	Kind      string                 `json:"kind"`
+	State     string                 `json:"state"`
+	ExitCode  int                    `json:"exit_code"`
+	StartedAt time.Time              `json:"started_at"`
+	ExitedAt  time.Time              `json:"exited_at"`
+	Resources platform.ResourceUsage `json:"resources"`
+	Error     string                 `json:"error"`
 }
 
 // Model manages state and rendering for the live Task Manager.
@@ -221,17 +219,15 @@ func (m *Model) Status() (string, string) {
 // FetchProcesses queries proc/list over IPC and returns parsed rows.
 func FetchProcesses(ctx context.Context, client Caller) ([]ProcessRow, error) {
 	var raw []struct {
-		ID           int32                  `json:"id"`
-		Name         string                 `json:"name"`
-		Kind         string                 `json:"kind"`
-		State        string                 `json:"state"`
-		ExitCode     int                    `json:"exit_code"`
-		StartedAt    time.Time              `json:"started_at"`
-		ExitedAt     time.Time              `json:"exited_at"`
-		RestartCount int                    `json:"restart_count"`
-		CrashLoop    bool                   `json:"crash_loop"`
-		Resources    platform.ResourceUsage `json:"resources"`
-		Error        string                 `json:"error"`
+		ID        int32                  `json:"id"`
+		Name      string                 `json:"name"`
+		Kind      string                 `json:"kind"`
+		State     string                 `json:"state"`
+		ExitCode  int                    `json:"exit_code"`
+		StartedAt time.Time              `json:"started_at"`
+		ExitedAt  time.Time              `json:"exited_at"`
+		Resources platform.ResourceUsage `json:"resources"`
+		Error     string                 `json:"error"`
 	}
 	if err := client.Call(ctx, "proc/list", nil, &raw); err != nil {
 		return nil, err
@@ -240,17 +236,15 @@ func FetchProcesses(ctx context.Context, client Caller) ([]ProcessRow, error) {
 	rows := make([]ProcessRow, len(raw))
 	for i, p := range raw {
 		rows[i] = ProcessRow{
-			ID:           p.ID,
-			Name:         p.Name,
-			Kind:         p.Kind,
-			State:        p.State,
-			ExitCode:     p.ExitCode,
-			StartedAt:    p.StartedAt,
-			ExitedAt:     p.ExitedAt,
-			RestartCount: p.RestartCount,
-			CrashLoop:    p.CrashLoop,
-			Resources:    p.Resources,
-			Error:        p.Error,
+			ID:        p.ID,
+			Name:      p.Name,
+			Kind:      p.Kind,
+			State:     p.State,
+			ExitCode:  p.ExitCode,
+			StartedAt: p.StartedAt,
+			ExitedAt:  p.ExitedAt,
+			Resources: p.Resources,
+			Error:     p.Error,
 		}
 	}
 	return rows, nil
@@ -391,7 +385,7 @@ func (m *Model) renderTable(kit ui.Kit, bounds ui.Bounds, hoverPID int32) string
 	} else {
 		liveCount := 0
 		for _, p := range m.procs {
-			if p.State == "running" || p.State == "starting" || p.State == "restarting" {
+			if p.State == "running" || p.State == "starting" {
 				liveCount++
 			}
 		}
@@ -417,10 +411,9 @@ const markerWidth = 2
 // when a narrow terminal cannot fit every column's minimum. PID and NAME are
 // primary and never collapse: they identify the process the keys act on.
 const (
-	prioRestarts = 1
-	prioMemory   = 2
-	prioCPU      = 3
-	prioState    = 4
+	prioMemory = 1
+	prioCPU    = 2
+	prioState  = 3
 )
 
 // ColumnID identifies a table column in a solved bloom frame.
@@ -439,7 +432,6 @@ var tableColumns = []column{
 	{id: "pid", title: "PID", width: 5, cell: func(p ProcessRow) string { return fmt.Sprint(p.ID) }},
 	{id: "name", title: "NAME", width: 20, min: 8, cell: func(p ProcessRow) string { return ui.Sanitize(p.Name) }},
 	{id: "state", title: "STATE", width: 14, collapse: prioState, cell: formatState},
-	{id: "restarts", title: "RESTARTS", width: 8, collapse: prioRestarts, cell: func(p ProcessRow) string { return fmt.Sprint(p.RestartCount) }},
 	{id: "cpu", title: "CPU", width: 8, collapse: prioCPU, cell: func(p ProcessRow) string { return formatCPU(p.Resources) }},
 	{id: "memory", title: "MEMORY", width: 10, collapse: prioMemory, cell: func(p ProcessRow) string { return formatMemory(p.Resources) }},
 }
@@ -670,12 +662,7 @@ func resourcesSupported(procs []ProcessRow) bool {
 }
 
 func formatState(p ProcessRow) string {
-	if p.CrashLoop {
-		return "crash loop"
-	}
 	switch p.State {
-	case "restarting":
-		return "backoff"
 	case "running":
 		return "running"
 	case "stopped":

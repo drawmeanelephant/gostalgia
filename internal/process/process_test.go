@@ -2,16 +2,17 @@ package process
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -27,6 +28,15 @@ import (
 func TestMain(m *testing.M) {
 	switch os.Getenv("GOSTALGIA_TEST_CHILD") {
 	case "1":
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "term_immune":
+		// Swallow SIGTERM so the graceful stop phase cannot terminate this
+		// child; only the post-deadline kill escalation can. On platforms
+		// without SIGTERM the child simply sleeps either way.
+		sigCh := make(chan os.Signal, 4)
+		signal.Notify(sigCh, syscall.SIGTERM)
 		for {
 			time.Sleep(time.Hour)
 		}
@@ -540,146 +550,12 @@ func TestLogsUnknownPID(t *testing.T) {
 	}
 }
 
-func TestRestartNever(t *testing.T) {
-	m, _ := newTestManager(t)
-	var runs atomic.Int32
-	p, err := m.StartInProc(context.Background(), Spec{
-		Name: "failonce",
-		Restart: SupervisionConfig{
-			Policy: RestartNever,
-		},
-	}, func(p *Process) error {
-		runs.Add(1)
-		return errors.New("boom")
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-p.Done()
-	if r := runs.Load(); r != 1 {
-		t.Fatalf("expected 1 run, got %d", r)
-	}
-	info := p.Info()
-	if info.State != StateFailed {
-		t.Fatalf("expected StateFailed, got %s", info.State)
-	}
-	if info.RestartCount != 0 {
-		t.Fatalf("expected 0 restarts, got %d", info.RestartCount)
-	}
-}
-
-func TestRestartOnFailure_Success(t *testing.T) {
-	m, _ := newTestManager(t)
-	var runs atomic.Int32
-	p, err := m.StartInProc(context.Background(), Spec{
-		Name: "succeed",
-		Restart: SupervisionConfig{
-			Policy: RestartOnFailure,
-		},
-	}, func(p *Process) error {
-		runs.Add(1)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-p.Done()
-	if r := runs.Load(); r != 1 {
-		t.Fatalf("expected 1 run, got %d", r)
-	}
-	info := p.Info()
-	if info.State != StateStopped {
-		t.Fatalf("expected StateStopped, got %s", info.State)
-	}
-	if info.RestartCount != 0 {
-		t.Fatalf("expected 0 restarts, got %d", info.RestartCount)
-	}
-}
-
-func TestRestartOnFailure_Recovers(t *testing.T) {
-	m, _ := newTestManager(t)
-	var runs atomic.Int32
-	p, err := m.StartInProc(context.Background(), Spec{
-		Name: "recover",
-		Restart: SupervisionConfig{
-			Policy:         RestartOnFailure,
-			MaxRestarts:    3,
-			Window:         time.Minute,
-			InitialBackoff: 5 * time.Millisecond,
-		},
-	}, func(p *Process) error {
-		count := runs.Add(1)
-		if count < 3 {
-			return errors.New("temporary error")
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-p.Done()
-	if r := runs.Load(); r != 3 {
-		t.Fatalf("expected 3 runs, got %d", r)
-	}
-	info := p.Info()
-	if info.State != StateStopped {
-		t.Fatalf("expected StateStopped, got %s", info.State)
-	}
-	if info.RestartCount != 2 {
-		t.Fatalf("expected 2 restarts, got %d", info.RestartCount)
-	}
-}
-
-func TestInProcCrashLoopCutoff(t *testing.T) {
-	m, _ := newTestManager(t)
-	var runs atomic.Int32
-	p, err := m.StartInProc(context.Background(), Spec{
-		Name: "crasher",
-		Restart: SupervisionConfig{
-			Policy:         RestartOnFailure,
-			MaxRestarts:    3,
-			Window:         time.Minute,
-			InitialBackoff: 2 * time.Millisecond,
-			MaxBackoff:     10 * time.Millisecond,
-		},
-	}, func(p *Process) error {
-		runs.Add(1)
-		return errors.New("fatal crash")
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-p.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("process did not terminate in crash loop")
-	}
-	// Initial run + 3 restarts = 4 runs
-	if r := runs.Load(); r != 4 {
-		t.Fatalf("expected 4 runs (1 initial + 3 restarts), got %d", r)
-	}
-	info := p.Info()
-	if info.State != StateCrashLoop {
-		t.Fatalf("expected StateCrashLoop, got %s", info.State)
-	}
-	if !info.CrashLoop {
-		t.Fatal("expected info.CrashLoop to be true")
-	}
-	if info.RestartCount != 3 {
-		t.Fatalf("expected 3 restarts, got %d", info.RestartCount)
-	}
-}
-
-func TestUserStopSuppressesRestart(t *testing.T) {
+func TestUserStopRecordsStopped(t *testing.T) {
 	m, _ := newTestManager(t)
 	started := make(chan struct{})
 	var runs atomic.Int32
 	p, err := m.StartInProc(context.Background(), Spec{
 		Name: "looping",
-		Restart: SupervisionConfig{
-			Policy:         RestartAlways,
-			InitialBackoff: 5 * time.Millisecond,
-		},
 	}, func(p *Process) error {
 		runs.Add(1)
 		select {
@@ -705,78 +581,6 @@ func TestUserStopSuppressesRestart(t *testing.T) {
 	info := p.Info()
 	if info.State != StateStopped {
 		t.Fatalf("expected StateStopped, got %s", info.State)
-	}
-}
-
-func TestUserStopDuringBackoff(t *testing.T) {
-	m, _ := newTestManager(t)
-	firstFail := make(chan struct{})
-	var runs atomic.Int32
-	p, err := m.StartInProc(context.Background(), Spec{
-		Name: "backoff-stop",
-		Restart: SupervisionConfig{
-			Policy:         RestartOnFailure,
-			InitialBackoff: 2 * time.Second, // long backoff
-		},
-	}, func(p *Process) error {
-		runs.Add(1)
-		close(firstFail)
-		return errors.New("fail into backoff")
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-firstFail
-	deadline := time.Now().Add(time.Second)
-	for p.Info().State != StateRestarting && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if p.Info().State != StateRestarting {
-		t.Fatalf("expected StateRestarting, got %s", p.Info().State)
-	}
-	if err := m.Stop(p.ID(), time.Second); err != nil {
-		t.Fatal(err)
-	}
-	<-p.Done()
-	if r := runs.Load(); r != 1 {
-		t.Fatalf("expected 1 run, got %d", r)
-	}
-	if p.Info().State != StateStopped {
-		t.Fatalf("expected StateStopped, got %s", infoState(p))
-	}
-}
-
-func infoState(p *Process) State {
-	return p.Info().State
-}
-
-func TestChildCrashLoop(t *testing.T) {
-	m, _ := newTestManager(t)
-	p, err := m.StartChild(context.Background(), Spec{
-		Name: "child-crash",
-		Args: childHelperArgs(t),
-		Env:  []string{"GOSTALGIA_TEST_CHILD=exit"},
-		Restart: SupervisionConfig{
-			Policy:         RestartOnFailure,
-			MaxRestarts:    2,
-			Window:         time.Minute,
-			InitialBackoff: 2 * time.Millisecond,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case <-p.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("child did not reach crash loop in time")
-	}
-	info := p.Info()
-	if info.State != StateCrashLoop {
-		t.Fatalf("expected StateCrashLoop, got %s", info.State)
-	}
-	if info.RestartCount != 2 {
-		t.Fatalf("expected 2 restarts, got %d", info.RestartCount)
 	}
 }
 
