@@ -58,10 +58,9 @@ func TestProcessTableRendering(t *testing.T) {
 
 	procs := []ProcessRow{
 		{
-			ID:           1,
-			Name:         "shell-init",
-			State:        "running",
-			RestartCount: 0,
+			ID:    1,
+			Name:  "shell-init",
+			State: "running",
 			Resources: platform.ResourceUsage{
 				Supported:   true,
 				CPUUserMs:   50,
@@ -70,27 +69,24 @@ func TestProcessTableRendering(t *testing.T) {
 			},
 		},
 		{
-			ID:           2,
-			Name:         "flaky-worker",
-			State:        "restarting",
-			RestartCount: 2,
-			Resources:    platform.ResourceUsage{Supported: false},
+			ID:        2,
+			Name:      "flaky-worker",
+			State:     "failed",
+			ExitCode:  1,
+			Resources: platform.ResourceUsage{Supported: false},
 		},
 		{
-			ID:           3,
-			Name:         "broken-app",
-			State:        "crashloop",
-			CrashLoop:    true,
-			RestartCount: 5,
-			Resources:    platform.ResourceUsage{Supported: false},
+			ID:        3,
+			Name:      "broken-app",
+			State:     "stopping",
+			Resources: platform.ResourceUsage{Supported: false},
 		},
 		{
-			ID:           4,
-			Name:         "exited-job",
-			State:        "stopped",
-			ExitCode:     0,
-			RestartCount: 0,
-			Resources:    platform.ResourceUsage{Supported: false},
+			ID:        4,
+			Name:      "exited-job",
+			State:     "stopped",
+			ExitCode:  0,
+			Resources: platform.ResourceUsage{Supported: false},
 		},
 	}
 	tm.SetProcesses(procs)
@@ -107,7 +103,7 @@ func TestProcessTableRendering(t *testing.T) {
 	}
 
 	// Verify required columns and headers
-	for _, header := range []string{"PID", "NAME", "STATE", "RESTARTS", "CPU", "MEMORY"} {
+	for _, header := range []string{"PID", "NAME", "STATE", "CPU", "MEMORY"} {
 		if !strings.Contains(view, header) {
 			t.Fatalf("missing table header %q", header)
 		}
@@ -117,11 +113,11 @@ func TestProcessTableRendering(t *testing.T) {
 	if !strings.Contains(view, "running") {
 		t.Fatal("missing running state in view")
 	}
-	if !strings.Contains(view, "backoff") {
-		t.Fatal("missing backoff state in view for restarting process")
+	if !strings.Contains(view, "failed") {
+		t.Fatal("missing failed state in view")
 	}
-	if !strings.Contains(view, "crash loop") {
-		t.Fatal("missing crash loop state in view for crashloop process")
+	if !strings.Contains(view, "stopping") {
+		t.Fatal("missing stopping state in view")
 	}
 	if !strings.Contains(view, "stopped") {
 		t.Fatal("missing stopped state in view")
@@ -580,7 +576,7 @@ func testLogSearch(t *testing.T, mode ui.ColorMode) {
 
 func TestReceiptInspection(t *testing.T) {
 	tm := New()
-	receipt := receipts.New(8, "crasher", "crashloop", 137, "out of memory", 5, "fatal: killed")
+	receipt := receipts.New(8, "crasher", "failed", 137, "out of memory", "fatal: killed")
 	tm.ShowReceipt(&receipt)
 
 	if tm.Mode() != ModeReceipt {
@@ -696,7 +692,7 @@ func TestResourceFormatting(t *testing.T) {
 func TestColumnsCollapseInPriorityOrder(t *testing.T) {
 	var dropped []string
 	prev := VisibleColumns(200)
-	if strings.Join(prev, " ") != "PID NAME STATE RESTARTS CPU MEMORY" {
+	if strings.Join(prev, " ") != "PID NAME STATE CPU MEMORY" {
 		t.Fatalf("wide table shows %v", prev)
 	}
 	for w := 200; w >= 0; w-- {
@@ -716,7 +712,7 @@ func TestColumnsCollapseInPriorityOrder(t *testing.T) {
 		}
 		prev = cols
 	}
-	if strings.Join(dropped, " ") != "RESTARTS MEMORY CPU STATE" {
+	if strings.Join(dropped, " ") != "MEMORY CPU STATE" {
 		t.Fatalf("collapse order %v", dropped)
 	}
 	var restored []string
@@ -730,7 +726,7 @@ func TestColumnsCollapseInPriorityOrder(t *testing.T) {
 		}
 		prev = cols
 	}
-	if strings.Join(restored, " ") != "STATE CPU MEMORY RESTARTS" {
+	if strings.Join(restored, " ") != "STATE CPU MEMORY" {
 		t.Fatalf("restore order %v", restored)
 	}
 }

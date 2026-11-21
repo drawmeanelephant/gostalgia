@@ -636,6 +636,42 @@ func TestExternalAppLifecycle(t *testing.T) {
 	must(t, m.Stop(extMan.ID, 5*time.Second))
 }
 
+func TestExternalAppGracefulStop(t *testing.T) {
+	bin := getExternalBinary(t)
+	m, _ := newTestManager(t)
+
+	extMan := Manifest{
+		ID:              "com.test.graceful",
+		Name:            "Graceful Stop App",
+		Version:         "1.0.0",
+		Mode:            sdk.ModeExternal,
+		Executable:      bin,
+		Permissions:     []string{sdk.CapIPC},
+		ProtocolVersion: 1,
+	}
+	must(t, m.reg.RegisterExternal(extMan))
+
+	proc, err := m.Launch(context.Background(), extMan.ID)
+	must(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(proc.Logs().Stdout.Content, "external app started") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	must(t, m.Stop(extMan.ID, 5*time.Second))
+
+	stdout := proc.Logs().Stdout.Content
+	if !strings.Contains(stdout, "external app shutting down") {
+		t.Fatalf("Run never observed stop notification; stdout=%q", stdout)
+	}
+	if !strings.Contains(stdout, "external app stopped") {
+		t.Fatalf("Instance.Stop never ran; stdout=%q", stdout)
+	}
+}
+
 func TestExternalAppCrashContainment(t *testing.T) {
 	bin := getExternalBinary(t)
 	m, router := newTestManager(t)
