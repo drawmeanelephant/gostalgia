@@ -37,7 +37,13 @@ do not disconnect it.
 The server dispatches handlers concurrently, with a bounded response queue
 and one socket writer. Queued replies take priority over notifications.
 Handlers must protect their own shared state and honor connection cancellation.
-There is no call-cancellation wire method: canceled calls may still execute.
+A client may abandon an in-flight call with a fire-and-forget cancel frame,
+`{"kind":"cancel","id":N}`: the server releases the call's in-flight slot,
+cancels the handler's request context, and drops any reply the handler
+still produces. Cancels carry no response and are no-ops for unknown IDs;
+peers that never send them are unaffected. Cancellation is best-effort — a
+handler that ignores its context may keep running, but it no longer counts
+against the connection's in-flight bound.
 
 Route retraction is safe against in-flight dispatches: `Unhandle` and
 `UnhandlePrefix` wait — for up to two seconds — for dispatches that
@@ -102,7 +108,9 @@ sandbox enforcement is implemented — see security.md.
 App routes require `ipc` from the incoming caller, then execute under the
 app's manifest grant (not the caller's grant). SDK service calls likewise
 replace capabilities. `app/stop` checks `proc.stop`; `app/launch` uses the
-runtime lifetime, not the request lifetime. `session/*` read endpoints require
+runtime lifetime, not the request lifetime. Calls into external app
+processes carry a 60-second reply deadline: a child that never answers
+fails the call instead of holding the caller's slot forever. `session/*` read endpoints require
 `session.read`; mutation endpoints (`create`, `close`, `attach`, `detach`,
 `workspace/set`, `workspace/clear`) require `session.write`. `profile/*` read
 endpoints (`list`, `get`, `active`) require `profile.read`; mutation endpoints
@@ -137,7 +145,10 @@ a dedicated writer preserves framing. Each call honors its context deadline
 (default 30 s) and plain cancellation, including while queued.
 
 Canceling a call while awaiting its response leaves other calls usable: late
-responses are discarded by ID. An interrupted socket write, malformed frame,
+responses are discarded by ID. Abandoning a call also sends the server a
+cancel frame, releasing the in-flight slot its handler still occupies, so
+repeated timeouts against a wedged route cannot exhaust the 32-slot bound
+and sever the connection. An interrupted socket write, malformed frame,
 or disconnect fails all pending calls and closes the event channel. Use a
 fresh authenticated client after transport failure.
 

@@ -29,8 +29,8 @@ type pendingCall struct {
 }
 
 type clientWrite struct {
-	request Request
-	ctx     context.Context
+	frame []byte
+	ctx   context.Context // nil for fire-and-forget control frames (cancels)
 }
 
 // Client multiplexes calls by ID. One reader demultiplexes responses/events
@@ -110,8 +110,12 @@ func (c *Client) call(ctx context.Context, method string, params, out any, buffe
 		delete(c.pending, id)
 		c.mu.Unlock()
 	}()
+	frame, err := json.Marshal(Request{ID: id, Method: method, Params: raw})
+	if err != nil {
+		return nil, fmt.Errorf("ipc: encode request: %w", err)
+	}
 	select {
-	case c.writes <- clientWrite{Request{ID: id, Method: method, Params: raw}, ctx}:
+	case c.writes <- clientWrite{frame, ctx}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.done:
@@ -122,6 +126,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any, buffe
 	}
 	select {
 	case <-ctx.Done():
+		c.sendCancel(id)
 		return nil, ctx.Err()
 	case result := <-pending.result:
 		if result.err != nil {
@@ -143,7 +148,25 @@ func (c *Client) call(ctx context.Context, method string, params, out any, buffe
 		}
 		return result.sub, nil
 	case <-ctx.Done():
+		c.sendCancel(id)
 		return nil, ctx.Err()
+	}
+}
+
+// sendCancel enqueues a fire-and-forget cancel frame so the server can
+// release the abandoned call's in-flight slot and stop its handler
+// context. Best-effort: a dying connection drops it silently.
+func (c *Client) sendCancel(id int64) {
+	frame, err := json.Marshal(cancelFrame{Kind: kindCancel, ID: id})
+	if err != nil {
+		return
+	}
+	timer := time.NewTimer(writeTimeout)
+	defer timer.Stop()
+	select {
+	case c.writes <- clientWrite{frame: frame}:
+	case <-c.done:
+	case <-timer.C:
 	}
 }
 
@@ -157,22 +180,32 @@ func (c *Client) writeLoop() {
 			return
 		case item = <-c.writes:
 		}
-		if item.ctx.Err() != nil {
-			continue
+		var deadline time.Time
+		var hasDeadline bool
+		var stop func() bool
+		var fired chan struct{}
+		if item.ctx != nil {
+			if item.ctx.Err() != nil {
+				continue
+			}
+			deadline, hasDeadline = item.ctx.Deadline()
+			fired = make(chan struct{})
+			stop = context.AfterFunc(item.ctx, func() {
+				_ = c.conn.SetWriteDeadline(time.Now())
+				close(fired)
+			})
+		} else {
+			// Control frames carry no caller context; bound their write so
+			// a wedged socket cannot stall the writer forever.
+			deadline, hasDeadline = time.Now().Add(writeTimeout), true
 		}
-		deadline, hasDeadline := item.ctx.Deadline()
 		_ = c.conn.SetWriteDeadline(deadline)
-		fired := make(chan struct{})
-		stop := context.AfterFunc(item.ctx, func() {
-			_ = c.conn.SetWriteDeadline(time.Now())
-			close(fired)
-		})
-		err := writeFrame(w, item.request)
-		if !stop() {
+		err := writeRawFrame(w, item.frame)
+		if stop != nil && !stop() {
 			<-fired
 		}
 		if err != nil {
-			if item.ctx.Err() != nil {
+			if item.ctx != nil && item.ctx.Err() != nil {
 				c.fail(fmt.Errorf("ipc: write: %w", item.ctx.Err()))
 			} else if hasDeadline && (errors.Is(err, os.ErrDeadlineExceeded) || !time.Now().Before(deadline)) {
 				c.fail(fmt.Errorf("ipc: write: %w", context.DeadlineExceeded))
@@ -183,6 +216,19 @@ func (c *Client) writeLoop() {
 			return
 		}
 	}
+}
+
+func writeRawFrame(w *bufio.Writer, frame []byte) error {
+	if len(frame)+1 >= maxLine {
+		return errFrameTooLarge
+	}
+	if _, err := w.Write(frame); err != nil {
+		return err
+	}
+	if err := w.WriteByte('\n'); err != nil {
+		return err
+	}
+	return w.Flush()
 }
 
 func (c *Client) readLoop() {
