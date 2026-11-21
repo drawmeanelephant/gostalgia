@@ -19,7 +19,9 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strconv"
 	"strings"
 	"sync"
@@ -186,12 +188,15 @@ func (p *Pomodoro) invalidateLocked(ctx context.Context) {
 // ensureLoadedLocked reads and decodes state.json once. A missing file
 // starts fresh; an unreadable one starts fresh with an honest note. A
 // persisted non-idle phase always relands paused: the timer does not run
-// while the app is off, and the status line says so.
+// while the app is off, and the status line says so. A denied read is
+// reported, since nothing will persist without the grant. Any other read
+// failure is NOT "no save yet": the app reports an honest error and stays
+// unloaded so the next call retries — a fresh timer must never overwrite a
+// save it could not read.
 func (p *Pomodoro) ensureLoadedLocked(ctx context.Context) error {
 	if p.loaded {
 		return nil
 	}
-	p.loaded = true
 	p.config = defaultConfig()
 	p.timer = Timer{Phase: PhaseIdle}
 
@@ -200,8 +205,18 @@ func (p *Pomodoro) ensureLoadedLocked(ctx context.Context) error {
 	}
 	err := p.app.Call(ctx, "fs/read", map[string]string{"path": statePath}, &out)
 	if err != nil {
-		return nil // no save yet: fresh timer, nothing to report
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// no save yet: fresh timer, nothing to report
+		case errors.Is(err, fs.ErrPermission):
+			p.lastError = fmt.Sprintf("storage access denied (%v) — timer state will not be saved", err)
+		default:
+			return fmt.Errorf("the saved timer could not be loaded: %w", err)
+		}
+		p.loaded = true
+		return nil
 	}
+	p.loaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
 		p.statusNote = "previous save unreadable; starting fresh"

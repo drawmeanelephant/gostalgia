@@ -26,6 +26,7 @@ type harness struct {
 	files          map[string][]byte
 	caps           []string // capabilities session/whoami reports
 	denyFS         bool     // fs/read + fs/save denied: simulates a missing grant
+	readErr        error    // if set, the next fs/read fails once with this error
 	soundSupported bool     // sound/status response
 	player         string
 	whoamiErr      error // injectable probe failures
@@ -86,12 +87,17 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		if h.denyFS {
-			return errors.New("permission denied: missing capability \"fs.read\"")
+			return &sdk.Error{Code: sdk.CodePermissionDenied, Message: "permission denied: missing capability \"fs.read\""}
 		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -1231,5 +1237,38 @@ func TestPlayRouteSilentHost(t *testing.T) {
 	}
 	if h.playCalls != 0 {
 		t.Errorf("sound/play called %d times, want 0", h.playCalls)
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let the next change overwrite
+// the saved library.
+func TestTransientReadErrorNeverOverwritesSave(t *testing.T) {
+	h := newHarness(t)
+	h.act(t, 2, stepAction, "", "r0s0", nil)
+	h.act(t, 2, "save", "", "", map[string]string{"save_name": "keep me"})
+
+	h2 := newHarness(t)
+	h2.files = h.files
+	h2.readErr = context.Canceled // first fs/read fails once, transiently
+
+	v := h2.view(t, 2)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry loads the real file; a change then extends it, not
+	// replaces it.
+	v = h2.act(t, 2, stepAction, "", "r1s1", nil)
+	if v.State != sdk.ViewReady {
+		t.Fatalf("retry after transient failure = %q", v.State)
+	}
+	var st diskState
+	if err := json.Unmarshal(h2.files[statePath], &st); err != nil {
+		t.Fatalf("post-change save is not valid json: %v", err)
+	}
+	if len(st.Patterns) != 1 || st.Patterns[0].Name != "keep me" {
+		t.Fatalf("library after transient error and one toggle = %+v, want the seeded pattern kept", st.Patterns)
 	}
 }
