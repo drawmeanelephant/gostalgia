@@ -13,11 +13,13 @@ The structure strictly mirrors the portable environment paths under `data/`:
 
 ```
 backup.gbar
-├── backup.json                                      # Signed manifest descriptor
+├── backup.json                                      # Hashed manifest descriptor
 └── data/
     ├── config/
     │   ├── profiles.json                            # Profile registry
-    │   └── system.json                              # System preferences (optional)
+    │   ├── system.json                              # System preferences
+    │   └── themes/                                  # User-installed themes
+    │       └── <theme>.json
     └── users/
         ├── guest/
         │   ├── config/
@@ -65,7 +67,13 @@ index of all included files:
    - Max total extracted size: 200 MiB (`MaxExtractBytes`)
    - Max total file count: 5,000 files (`MaxFiles`)
    - Max compression ratio: 100x (`MaxCompressionRatio`)
-   - Max single file size: 32 MiB (`MaxSingleFileBytes`)
+   - Max manifest size: 1 MiB (`MaxManifestBytes`)
+   - Max single file size: 50 MiB (`MaxSingleFileBytes`)
+
+   These ceilings are the recovery budgets, not the interactive document
+   cap: archives and restored payloads are written through a bounded save
+   governed by the limits above, so a backup or restored file may exceed
+   `MaxDocumentSize` (16 MiB) without violating it.
 
 2. **Zip Central Directory Pre-Verification**:
    - The archive central directory is parsed and validated in its entirety before
@@ -114,6 +122,30 @@ cancellation), the rollback journal automatically:
 1. Deletes all newly created files.
 2. Restores all overwritten files to their exact prior contents.
 3. Leaves the live environment in an intact, uncorrupted state.
+
+### Live Store Reload
+
+The environment stores several documents as whole-document in-memory caches.
+After a successful restore the recovery service re-reads them so restored
+state is live immediately and the next write does not resurrect stale data:
+
+- The profile registry is reloaded; a changed active profile runs the same
+  switch path as `profile/switch` (hooks plus the `profile.switched`
+  event), which rebinds the user config layer and runtime identity.
+- The layered configuration store reloads its system, user, and app files;
+  staged preview overrides are dropped.
+- Live workspace stores re-read `workspace.json` (history, cwd, view).
+- The document service reloads recents, favorites, and the search index.
+
+The restore report lists the refreshed stores under `reloaded`.
+
+### System Preferences Routing
+
+The system preferences store is a host file (`<root>/config/system.json`)
+outside the VFS. Export reads the live store, and restore routes the
+archive's `/config/system.json` entry to that host path — not to the VFS,
+where nothing would read it. Application principals never receive this
+routing: it would bypass their grant-scoped filesystem checks.
 
 ## IPC Methods
 

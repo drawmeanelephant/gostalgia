@@ -225,7 +225,13 @@ func (s *FavoritesStore) Load() error {
 	data, err := s.vfs.ReadFile(s.storePath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil // missing file starts empty
+			// Missing file means empty persisted state; the in-memory
+			// snapshot must reflect it so a reload does not resurrect
+			// entries the document no longer contains.
+			s.mu.Lock()
+			s.entries = nil
+			s.mu.Unlock()
+			return nil
 		}
 		return err
 	}

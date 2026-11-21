@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,6 +62,73 @@ type DocumentFS interface {
 
 // MaxDocumentSize bounds single-document reads/writes in the VFS layer (16 MiB).
 const MaxDocumentSize = 16 << 20
+
+// BoundedSaver is implemented by filesystems that can stage an atomic save
+// above MaxDocumentSize up to an explicit per-call limit. Bulk data paths
+// such as backup/restore are bounded by their own documented ceilings, not
+// by the interactive document cap.
+type BoundedSaver interface {
+	SaveAtomicBounded(name string, data []byte, perm fs.FileMode, limit int64) error
+}
+
+// SaveAtomicBounded saves data atomically, enforcing limit instead of the
+// interactive MaxDocumentSize cap. Backends that implement BoundedSaver keep
+// their full stage/fsync/rename behavior; other filesystems keep the
+// atomicity contract through a stage-and-rename sequence built from the
+// portable FS primitives.
+func SaveAtomicBounded(fsys FS, name string, data []byte, perm fs.FileMode, limit int64) error {
+	if int64(len(data)) > limit {
+		return &Error{
+			Op:      "save",
+			Path:    name,
+			Code:    ErrTooLarge,
+			Message: fmt.Sprintf("document size %d exceeds limit of %d bytes", len(data), limit),
+		}
+	}
+	if bs, ok := fsys.(BoundedSaver); ok {
+		return bs.SaveAtomicBounded(name, data, perm, limit)
+	}
+	if int64(len(data)) <= MaxDocumentSize {
+		return fsys.SaveAtomic(name, data, perm)
+	}
+	// Generic fallback for filesystems without native large-save support:
+	// stage beside the target, then rename over it.
+	stage := fmt.Sprintf("%s.tmp.%d.%d", name, time.Now().UnixNano(), boundedSaveSeq.Add(1))
+	if err := fsys.WriteFile(stage, data, perm); err != nil {
+		return err
+	}
+	var renameErr error
+	if ro, ok := fsys.(interface {
+		RenameOpt(oldPath, newPath string, overwrite bool) error
+	}); ok {
+		renameErr = ro.RenameOpt(stage, name, true)
+	} else {
+		renameErr = fsys.Rename(stage, name)
+	}
+	if renameErr != nil {
+		recoverName := name + ".recover"
+		if ro, ok := fsys.(interface {
+			RenameOpt(oldPath, newPath string, overwrite bool) error
+		}); ok {
+			if rErr := ro.RenameOpt(stage, recoverName, true); rErr != nil {
+				recoverName = stage
+			}
+		} else if rErr := fsys.Rename(stage, recoverName); rErr != nil {
+			recoverName = stage
+		}
+		return &Error{
+			Op:          "save",
+			Path:        name,
+			RecoverPath: recoverName,
+			Code:        ErrIO,
+			Err:         renameErr,
+			Message:     fmt.Sprintf("atomic replacement failed: %v", renameErr),
+		}
+	}
+	return nil
+}
+
+var boundedSaveSeq atomic.Uint64
 
 // MaxIPCReadLimit bounds default read sizes over IPC (4 MiB).
 const MaxIPCReadLimit = 4 << 20
