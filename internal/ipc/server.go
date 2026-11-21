@@ -229,12 +229,12 @@ func (s *Server) Close() error {
 
 // isTransientAcceptErr reports whether an Accept error is a transient
 // host condition worth retrying rather than a permanently broken
-// listener: net.Error.Temporary() covers the OS-reported cases, and the
-// explicit errnos catch descriptors exhaustion and aborted handshakes on
-// platforms that do not flag them temporary.
+// listener: the explicit errnos cover descriptor exhaustion and aborted
+// handshakes, and timeouts are retryable by nature. net.Error.Temporary
+// is deliberately not consulted — it is deprecated and ill-defined.
 func isTransientAcceptErr(err error) bool {
 	var ne net.Error
-	if errors.As(err, &ne) && ne.Temporary() {
+	if errors.As(err, &ne) && ne.Timeout() {
 		return true
 	}
 	return errors.Is(err, syscall.EMFILE) ||

@@ -32,5 +32,5 @@ func TestTryLockRootMutualExclusion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("lock after release: %v", err)
 	}
-	g.Close()
+	_ = g.Close()
 }

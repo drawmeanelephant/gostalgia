@@ -122,7 +122,7 @@ func TestCheckNotRunningOccupiedWhenUnresponsive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() }) // bound, never Accept()ed
+	t.Cleanup(func() { _ = ln.Close() }) // bound, never Accept()ed
 	writeRuntimeFile(t, root, endpoint, "tok")
 
 	start := time.Now()
