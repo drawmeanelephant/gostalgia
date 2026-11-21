@@ -48,6 +48,7 @@ type rpcMessage struct {
 	OK     bool            `json:"ok,omitempty"`
 	Data   json.RawMessage `json:"data,omitempty"`
 	Error  string          `json:"error,omitempty"`
+	Code   string          `json:"code,omitempty"`
 }
 
 // maxWireFrame bounds one newline-delimited wire frame, matching the
@@ -168,7 +169,7 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 		return fmt.Errorf("sdk: unmarshal auth response: %w", err)
 	}
 	if !authResp.OK {
-		return fmt.Errorf("sdk: auth failed: %s", authResp.Error)
+		return &Error{Code: authResp.Code, Message: fmt.Sprintf("sdk: auth failed: %s", authResp.Error)}
 	}
 
 	// 2. Setup Context and initialize instance
@@ -219,7 +220,7 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 			return ctx.Err()
 		case res := <-resCh:
 			if !res.OK {
-				return errors.New(res.Error)
+				return &Error{Code: res.Code, Message: res.Error}
 			}
 			if out != nil && len(res.Data) > 0 && !bytes.Equal(res.Data, []byte("null")) {
 				return json.Unmarshal(res.Data, out)
@@ -275,7 +276,7 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 		return fmt.Errorf("sdk: unmarshal ready response: %w", err)
 	}
 	if !readyResp.OK {
-		return fmt.Errorf("sdk: ready failed: %s", readyResp.Error)
+		return &Error{Code: readyResp.Code, Message: fmt.Sprintf("sdk: ready failed: %s", readyResp.Error)}
 	}
 
 	// 4. Multiplex requests and run instance
@@ -317,7 +318,7 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 				select {
 				case inFlight <- struct{}{}:
 				default:
-					_ = writeMsg(rpcMessage{ID: msg.ID, OK: false, Error: "sdk: too many in-flight requests"})
+					_ = writeMsg(rpcMessage{ID: msg.ID, OK: false, Error: "sdk: too many in-flight requests", Code: CodeUnavailable})
 					continue
 				}
 				go func(req rpcMessage) {
@@ -326,12 +327,16 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 					h, ok := routes[req.Method]
 					routesMu.RUnlock()
 					if !ok {
-						_ = writeMsg(rpcMessage{ID: req.ID, OK: false, Error: fmt.Sprintf("unknown method %q", req.Method)})
+						_ = writeMsg(rpcMessage{ID: req.ID, OK: false, Error: fmt.Sprintf("unknown method %q", req.Method), Code: CodeUnknownMethod})
 						return
 					}
 					res, hErr := h(appCtx, req.Params)
 					if hErr != nil {
-						_ = writeMsg(rpcMessage{ID: req.ID, OK: false, Error: hErr.Error()})
+						code := ErrorCode(hErr)
+						if code == "" {
+							code = CodeUnknown
+						}
+						_ = writeMsg(rpcMessage{ID: req.ID, OK: false, Error: hErr.Error(), Code: code})
 						return
 					}
 					var rawData json.RawMessage

@@ -162,7 +162,7 @@ func (r *Router) Dispatch(ctx context.Context, req Request) (resp Response) {
 	resp.ID = req.ID
 	defer func() {
 		if p := recover(); p != nil {
-			resp = Response{ID: req.ID, Error: fmt.Sprintf("internal error in %q: %v", req.Method, p)}
+			resp = Response{ID: req.ID, Error: fmt.Sprintf("internal error in %q: %v", req.Method, p), Code: CodeInternal}
 		}
 	}()
 	r.mu.RLock()
@@ -172,17 +172,17 @@ func (r *Router) Dispatch(ctx context.Context, req Request) (resp Response) {
 	}
 	r.mu.RUnlock()
 	if !ok {
-		return Response{ID: req.ID, Error: fmt.Sprintf("unknown method %q", req.Method)}
+		return Response{ID: req.ID, Error: fmt.Sprintf("unknown method %q", req.Method), Code: CodeUnknownMethod}
 	}
 	defer rt.flight.Done()
 
 	data, err := rt.h(ctx, req)
 	if err != nil {
-		return Response{ID: req.ID, Error: err.Error()}
+		return Response{ID: req.ID, Error: err.Error(), Code: ErrorCode(err)}
 	}
 	enc, err := Encode(data)
 	if err != nil {
-		return Response{ID: req.ID, Error: err.Error()}
+		return Response{ID: req.ID, Error: err.Error(), Code: CodeInternal}
 	}
 	return Response{ID: req.ID, OK: true, Data: enc}
 }

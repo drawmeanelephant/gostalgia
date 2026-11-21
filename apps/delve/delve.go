@@ -18,7 +18,9 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"math/rand/v2"
 	"sort"
 	"strconv"
@@ -119,20 +121,21 @@ type Delve struct {
 	app *sdk.Context
 	now func() time.Time
 
-	mu         sync.Mutex
-	loaded     bool
-	pending    bool // a live save waits for continue-or-new
-	g          gameEngine
-	name       string // delver name, carried into new runs
-	seed       uint64
-	started    int64
-	scored     bool // this run's ledger entry was recorded
-	dirty      bool // in-memory change has not reached disk
-	showHelp   bool // the region shows help instead of the log
-	scores     []engine.Score
-	sound      int
-	statusNote string // transient feedback line; cleared on each action
-	lastError  string
+	mu           sync.Mutex
+	loaded       bool
+	pending      bool // a live save waits for continue-or-new
+	g            gameEngine
+	name         string // delver name, carried into new runs
+	seed         uint64
+	started      int64
+	scored       bool // this run's ledger entry was recorded
+	dirty        bool // in-memory change has not reached disk
+	showHelp     bool // the region shows help instead of the log
+	scores       []engine.Score
+	scoresLoaded bool // the ledger read succeeded (or genuinely had none)
+	sound        int
+	statusNote   string // transient feedback line; cleared on each action
+	lastError    string
 }
 
 // Factory constructs a fresh, uninitialized Delve instance.
@@ -187,24 +190,36 @@ func (d *Delve) Stop(ctx context.Context) error {
 // honest note; the bad bytes are left alone until the next real change
 // saves over them. A valid save revives its run and waits pending a
 // continue-or-new choice — unless the run already ended, in which case
-// its tombstone or victory screen shows directly.
+// its tombstone or victory screen shows directly. A denied read is
+// reported, since nothing will persist without the grant. Any other read
+// failure is NOT "no save yet": the app reports an honest error and stays
+// unloaded so the next call retries — a fresh delve must never overwrite a
+// save it could not read.
 func (d *Delve) ensureLoadedLocked(ctx context.Context) error {
 	if d.loaded {
 		return nil
 	}
-	d.loaded = true
-	d.loadScoresLocked(ctx)
+	if err := d.loadScoresLocked(ctx); err != nil {
+		return err
+	}
 
 	var out struct {
 		DataBase64 string `json:"data_base64"`
 	}
 	err := d.app.Call(ctx, "fs/read", map[string]string{"path": statePath}, &out)
 	if err != nil {
-		if looksDenied(err) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// no save yet: the stairs wait
+		case errors.Is(err, fs.ErrPermission):
 			d.lastError = fmt.Sprintf("storage access denied (%v) — runs will not be saved", err)
+		default:
+			return fmt.Errorf("the previous delve could not be loaded: %w", err)
 		}
-		return nil // no save yet: the stairs wait
+		d.loaded = true
+		return nil
 	}
+	d.loaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
 		d.statusNote = "previous save unreadable — the stairs wait for a fresh delve"
@@ -241,35 +256,42 @@ func (d *Delve) ensureLoadedLocked(ctx context.Context) error {
 
 // loadScoresLocked reads the ledger once, tolerating absence and damage:
 // a missing ledger is an empty one, a corrupt one heals on the next
-// recorded score. It never blocks loading the run itself.
-func (d *Delve) loadScoresLocked(ctx context.Context) {
+// recorded score. A denied read also passes — the write path is denied
+// too, so nothing is lost — but scoresLoaded stays false so a later
+// record retries the read instead of appending blind. Any other read
+// failure is an error: an unread ledger must never be replaced by a lone
+// new entry.
+func (d *Delve) loadScoresLocked(ctx context.Context) error {
 	var out struct {
 		DataBase64 string `json:"data_base64"`
 	}
-	if err := d.app.Call(ctx, "fs/read", map[string]string{"path": scoresPath}, &out); err != nil {
-		return
+	err := d.app.Call(ctx, "fs/read", map[string]string{"path": scoresPath}, &out)
+	if err != nil {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			d.scoresLoaded = true
+		case errors.Is(err, fs.ErrPermission):
+			// no grant: the ledger still cannot be lost to a blind write
+		default:
+			return fmt.Errorf("the score ledger could not be loaded: %w", err)
+		}
+		return nil
 	}
+	d.scoresLoaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
-		return
+		return nil
 	}
 	var sc diskScores
 	if err := json.Unmarshal(data, &sc); err != nil {
-		return
+		return nil
 	}
 	d.scores = sc.Scores
 	sortScores(d.scores)
 	if len(d.scores) > maxScores {
 		d.scores = d.scores[:maxScores]
 	}
-}
-
-// looksDenied reports whether an fs error is a grant denial rather than a
-// missing file. The two are intentionally different: absence is normal on
-// first launch, denial means nothing the player does will persist.
-func looksDenied(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "denied") || strings.Contains(msg, "permission")
+	return nil
 }
 
 // persistLocked writes the whole save document atomically. Callers hold mu.
@@ -310,9 +332,22 @@ func (d *Delve) saveLocked(ctx context.Context) {
 }
 
 // recordScoreLocked appends the finished run's ledger entry to
-// scores.json: top-10 by value, descending. Callers hold mu.
+// scores.json: top-10 by value, descending. If the ledger could not be
+// read at load (denied grant or transient failure), the read retries here
+// first — a lone new entry must never replace a ledger it could not see.
+// Callers hold mu.
 func (d *Delve) recordScoreLocked(ctx context.Context) {
 	d.scored = true
+	if !d.scoresLoaded {
+		if err := d.loadScoresLocked(ctx); err != nil {
+			d.statusNote = fmt.Sprintf("ledger failed: %v", err)
+			return
+		}
+		if !d.scoresLoaded {
+			d.statusNote = "ledger could not be read — the score was not recorded"
+			return
+		}
+	}
 	d.scores = append(d.scores, d.g.FinalScore())
 	sortScores(d.scores)
 	if len(d.scores) > maxScores {
