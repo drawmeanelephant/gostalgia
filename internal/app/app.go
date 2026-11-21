@@ -636,12 +636,12 @@ func writeWireMessage(conn io.Writer, mu *sync.Mutex, msg rpcWireMessage) error 
 	return err
 }
 
-// maxWireLine bounds one child wire frame, matching the 4 MiB line cap the
+// maxWireLine bounds one child wire frame, matching the 6 MiB line cap the
 // ipc server enforces (internal/ipc/server.go). maxChildInFlight bounds
 // concurrent child-initiated dispatches, matching the ipc server's
 // per-connection in-flight limit.
 const (
-	maxWireLine      = 4 << 20
+	maxWireLine      = 6 << 20
 	maxChildInFlight = 32
 )
 
@@ -658,7 +658,12 @@ const (
 	maxRouteNameLen = 64
 )
 
-var errWireFrameTooLarge = errors.New("app: wire frame exceeds 4 MiB limit")
+// routeReplyTimeout bounds how long an external route call may wait for the
+// child's reply: a child that never answers must not pin the caller's
+// in-flight slot forever. It is a var so tests can shrink it.
+var routeReplyTimeout = 60 * time.Second
+
+var errWireFrameTooLarge = errors.New("app: wire frame exceeds 6 MiB limit")
 
 // validRouteName reports whether name is a valid local route identifier:
 // [a-z] followed by [a-z0-9_-], at most maxRouteNameLen bytes.
@@ -1288,11 +1293,15 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 				return nil, fmt.Errorf("app: send to child: %w", err)
 			}
 
+			replyTimer := time.NewTimer(routeReplyTimeout)
+			defer replyTimer.Stop()
 			select {
 			case <-c.Done():
 				return nil, c.Err()
 			case <-life.Done():
 				return nil, fmt.Errorf("app: instance stopped")
+			case <-replyTimer.C:
+				return nil, fmt.Errorf("app: route %q: no reply from instance within %s", localName, routeReplyTimeout)
 			case res, ok := <-resCh:
 				if !ok {
 					return nil, fmt.Errorf("app: connection closed")

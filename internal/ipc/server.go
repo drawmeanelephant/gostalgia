@@ -17,8 +17,13 @@ import (
 	"gostalgia/internal/security"
 )
 
-// maxLine bounds one protocol line (request or response).
-const maxLine = 4 << 20 // 4 MiB
+// maxLine bounds one protocol line (request or response). It is sized so a
+// maximum service payload — 4 MiB of raw data base64-encoded plus the JSON
+// envelope — fits end-to-end; a 4 MiB frame cap would make the documented
+// payload limit unreachable.
+const maxLine = 6 << 20 // 6 MiB
+
+var errFrameTooLarge = errors.New("ipc: frame exceeds limit")
 
 const (
 	maxInFlight      = 32
@@ -79,6 +84,14 @@ func (s staticAuthenticator) Validate(token string) error {
 type queuedResponse struct {
 	response   Response
 	disconnect bool
+}
+
+// inFlightCall tracks one dispatched request: its method (for subscription
+// activation) and the cancel func of its per-request context, invoked when
+// the peer abandons the call.
+type inFlightCall struct {
+	method string
+	cancel context.CancelFunc
 }
 
 // Server serves the router over a local listener. Every connection must
@@ -245,7 +258,7 @@ func (s *Server) handleConn(conn net.Conn) {
 	authCtx = context.WithValue(authCtx, streamKey{}, stream)
 	responses := make(chan queuedResponse, s.maxInFlight)
 	var flightMu sync.Mutex
-	active := make(map[int64]string)
+	active := make(map[int64]inFlightCall)
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
@@ -293,9 +306,14 @@ func (s *Server) handleConn(conn net.Conn) {
 			_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 			if isResponse {
 				flightMu.Lock()
-				method := active[resp.ID]
+				call, tracked := active[resp.ID]
 				delete(active, resp.ID)
 				flightMu.Unlock()
+				if !tracked {
+					// The peer canceled while the handler ran and already
+					// discarded the call; skip the stale reply.
+					continue
+				}
 				if err := writeResponse(w, resp); err != nil {
 					return
 				}
@@ -304,7 +322,7 @@ func (s *Server) handleConn(conn net.Conn) {
 				}
 				// Activate delivery only after the subscribe acknowledgement.
 				var info SubscriptionInfo
-				if method == SubscribeMethod && resp.OK && json.Unmarshal(resp.Data, &info) == nil && info.Subscription != 0 {
+				if call.method == SubscribeMethod && resp.OK && json.Unmarshal(resp.Data, &info) == nil && info.Subscription != 0 {
 					current := stream.current()
 					if current != nil && current.ID == info.Subscription {
 						sub = current
@@ -330,23 +348,37 @@ func (s *Server) handleConn(conn net.Conn) {
 		if err != nil {
 			return
 		}
+		if req.kind == kindCancel {
+			// Fire-and-forget cancellation: free the slot and stop the
+			// handler's request context. A reply produced after this
+			// point is dropped by the writer — the peer already
+			// discarded the call.
+			flightMu.Lock()
+			if call, ok := active[req.ID]; ok {
+				delete(active, req.ID)
+				call.cancel()
+			}
+			flightMu.Unlock()
+			continue
+		}
 		flightMu.Lock()
-		if active[req.ID] != "" || len(active) >= s.maxInFlight {
+		if _, dup := active[req.ID]; dup || len(active) >= s.maxInFlight {
 			flightMu.Unlock()
 			// Duplicate IDs and floods are protocol violations. Closing
 			// bounds goroutines, response memory and work per connection.
 			return
 		}
-		active[req.ID] = req.Method
+		reqCtx, reqCancel := context.WithCancel(authCtx)
+		active[req.ID] = inFlightCall{method: req.Method, cancel: reqCancel}
 		flightMu.Unlock()
-		go func(req Request) {
+		go func(req Request, reqCtx context.Context, reqCancel context.CancelFunc) {
+			defer reqCancel()
 			reply := queuedResponse{}
 			if err := s.auth.Validate(token); err != nil {
 				s.log.Warn("ipc: connection credential invalidated", "remote", conn.RemoteAddr(), "err", err)
 				reply.response = Response{ID: req.ID, Error: "unauthorized: credential revoked", Code: CodeUnauthorized}
 				reply.disconnect = true
 			} else {
-				reqCtx := authCtx
 				if curPrincipal, _, err := s.auth.Authenticate(token); err == nil {
 					reqCtx = WithPrincipal(reqCtx, curPrincipal)
 				}
@@ -356,7 +388,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			case responses <- reply:
 			case <-ctx.Done():
 			}
-		}(req)
+		}(req, reqCtx, reqCancel)
 	}
 }
 
@@ -368,7 +400,22 @@ func readRequest(r *bufio.Scanner) (Request, error) {
 		}
 		return Request{}, err
 	}
+	var head struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal(r.Bytes(), &head); err != nil {
+		return Request{}, fmt.Errorf("ipc: bad request: %w", err)
+	}
 	var req Request
+	if head.Kind != "" {
+		// Control frames carry no method; the only kind today is cancel.
+		if err := json.Unmarshal(r.Bytes(), &req); err != nil ||
+			head.Kind != kindCancel || req.ID <= 0 || req.Method != "" || len(req.Params) > 0 {
+			return Request{}, errors.New("ipc: malformed cancel frame")
+		}
+		req.kind = kindCancel
+		return req, nil
+	}
 	if err := json.Unmarshal(r.Bytes(), &req); err != nil {
 		return Request{}, fmt.Errorf("ipc: bad request: %w", err)
 	}
@@ -402,7 +449,7 @@ func writeFrame(w *bufio.Writer, frame any) error {
 		if resp, ok := frame.(Response); ok {
 			b, _ = json.Marshal(Response{ID: resp.ID, Error: "ipc: response exceeds frame limit", Code: CodeTooLarge})
 		} else {
-			return errors.New("ipc: frame exceeds limit")
+			return errFrameTooLarge
 		}
 	}
 	if _, err := w.Write(b); err != nil {
