@@ -24,7 +24,7 @@ func TestHostFSOpenRejectsSpecialFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 
 	for _, tc := range []struct {
 		name string

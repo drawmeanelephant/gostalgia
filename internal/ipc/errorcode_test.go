@@ -54,8 +54,8 @@ func TestClientRoundTripPreservesErrorCode(t *testing.T) {
 		return nil, fmt.Errorf("vfs: %w", fs.ErrNotExist)
 	}))
 	srv := NewServer(ln, r, "sekrit", slog.New(slog.NewTextHandler(discard{}, nil)))
-	t.Cleanup(func() { srv.Close() })
-	go srv.Serve()
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -65,7 +65,7 @@ func TestClientRoundTripPreservesErrorCode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 
 	err = client.Call(context.Background(), "fs/read", nil, nil)
 	if err == nil {
@@ -88,7 +88,7 @@ func TestClientRoundTripPreservesErrorCode(t *testing.T) {
 func TestClientToleratesOldPeerWithoutCode(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	go func() {
-		defer serverConn.Close()
+		defer func() { _ = serverConn.Close() }()
 		r := bufio.NewScanner(serverConn)
 		w := bufio.NewWriter(serverConn)
 		for r.Scan() {

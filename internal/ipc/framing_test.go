@@ -83,7 +83,7 @@ func TestCancelDuringBlockedWriteReturnsContextError(t *testing.T) {
 	release, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
-		defer peer.Close()
+		defer func() { _ = peer.Close() }()
 		r := bufio.NewScanner(peer)
 		if r.Scan() {
 			_, _ = fmt.Fprintln(peer, `{"id":1,"ok":true}`)

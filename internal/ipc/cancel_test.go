@@ -29,7 +29,7 @@ func TestCancelReleasesInFlightSlot(t *testing.T) {
 		return "pong", nil
 	}))
 	srv := NewServer(ln, r, "t", nil, WithMaxInFlight(4))
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 	t.Cleanup(func() {
 		_ = srv.Close()
 		close(release)
@@ -39,7 +39,7 @@ func TestCancelReleasesInFlightSlot(t *testing.T) {
 	must(t, err)
 	client, err := NewClient(conn, "t")
 	must(t, err)
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 
 	// Saturate the in-flight bound with calls that time out client-side.
 	for i := 0; i < 4; i++ {
@@ -73,14 +73,14 @@ func TestCancelPropagatesToHandlerContext(t *testing.T) {
 		return nil, ctx.Err()
 	}))
 	srv := NewServer(ln, r, "t", nil)
-	go srv.Serve()
+	go func() { _ = srv.Serve() }()
 	t.Cleanup(func() { _ = srv.Close() })
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	must(t, err)
 	client, err := NewClient(conn, "t")
 	must(t, err)
-	t.Cleanup(func() { client.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

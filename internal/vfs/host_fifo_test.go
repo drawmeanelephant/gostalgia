@@ -51,7 +51,7 @@ func TestHostFSStatDoesNotBlockOnSpecialFiles(t *testing.T) {
 	// conventional temp location.
 	dir, err := os.MkdirTemp("/tmp", "gostalgia-fifo-")
 	must(t, err)
-	t.Cleanup(func() { os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	must(t, syscall.Mkfifo(filepath.Join(dir, "fifo"), 0o644))
 	sock := filepath.Join(dir, "sock")
@@ -59,7 +59,7 @@ func TestHostFSStatDoesNotBlockOnSpecialFiles(t *testing.T) {
 	must(t, err)
 	// Keep the listener bound for the test: closing it unlinks the
 	// socket file on darwin.
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	h, err := NewHost(dir)
 	must(t, err)

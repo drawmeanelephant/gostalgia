@@ -19,16 +19,16 @@ func newAdversarialServer(t *testing.T, opts ...ServerOption) (*Server, net.List
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	token := "adversarial-secret-token"
 	router := NewRouter()
-	router.Handle("test/echo", func(ctx context.Context, req Request) (any, error) {
+	_ = router.Handle("test/echo", func(ctx context.Context, req Request) (any, error) {
 		var p any
 		_ = DecodeParams(req.Params, &p)
 		return p, nil
 	})
-	router.Handle("test/slow", func(ctx context.Context, req Request) (any, error) {
+	_ = router.Handle("test/slow", func(ctx context.Context, req Request) (any, error) {
 		select {
 		case <-time.After(200 * time.Millisecond):
 			return "done", nil
@@ -36,7 +36,7 @@ func newAdversarialServer(t *testing.T, opts ...ServerOption) (*Server, net.List
 			return nil, ctx.Err()
 		}
 	})
-	router.Handle("test/oversized", func(ctx context.Context, req Request) (any, error) {
+	_ = router.Handle("test/oversized", func(ctx context.Context, req Request) (any, error) {
 		return strings.Repeat("A", maxLine), nil
 	})
 
@@ -368,7 +368,7 @@ func TestConnectionBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extra dial: %v", err)
 	}
-	defer extraConn.Close()
+	defer func() { _ = extraConn.Close() }()
 
 	_ = extraConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	buf := make([]byte, 64)
@@ -394,7 +394,7 @@ func TestConnectionBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new dial after freeing slot: %v", err)
 	}
-	defer newConn.Close()
+	defer func() { _ = newConn.Close() }()
 
 	authReq := fmt.Sprintf(`{"id":1,"method":"auth","params":{"token":%q}}`+"\n", token)
 	if _, err := newConn.Write([]byte(authReq)); err != nil {

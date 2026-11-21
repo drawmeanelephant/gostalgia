@@ -7,7 +7,7 @@ import (
 
 func TestHostFSDocumentOps(t *testing.T) {
 	h := newTestHostFS(t)
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 
 	// 1. SaveAtomic new file
 	err := h.SaveAtomic("doc.txt", []byte("hello world"), 0o644)
@@ -233,7 +233,7 @@ func TestMemFSDocumentOps(t *testing.T) {
 
 func TestVFSDocumentOps(t *testing.T) {
 	hostFS := newTestHostFS(t)
-	defer hostFS.Close()
+	defer func() { _ = hostFS.Close() }()
 
 	v := New(hostFS)
 	mem := NewMem()

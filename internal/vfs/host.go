@@ -117,7 +117,7 @@ func (h *HostFS) Stat(name string) (fs.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return f.Stat()
 }
 
@@ -129,7 +129,7 @@ func (h *HostFS) ReadFile(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return io.ReadAll(f)
 }
 
@@ -141,7 +141,7 @@ func (h *HostFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	entries, err := f.ReadDir(-1)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return entries, err
@@ -171,7 +171,7 @@ func (h *HostFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		}
 		if cf, err := h.root.OpenFile(child, os.O_RDONLY|openNonblock, 0); err == nil {
 			info, err := cf.Stat()
-			cf.Close()
+			_ = cf.Close()
 			if err == nil {
 				entries[i] = hostEntry{DirEntry: e, info: info}
 			}
@@ -279,7 +279,7 @@ func (h *HostFS) syncDir(dir string) {
 	if err != nil {
 		return
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	err = d.Sync()
 	if h.saveDirSyncHook != nil {
 		h.saveDirSyncHook(dir, err)

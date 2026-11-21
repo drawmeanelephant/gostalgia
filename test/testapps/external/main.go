@@ -81,14 +81,14 @@ func (a *externalApp) Init(ctx *sdk.Context) error {
 }
 
 func (a *externalApp) Run(ctx context.Context) error {
-	fmt.Fprintln(os.Stdout, "external app started")
+	_, _ = fmt.Fprintln(os.Stdout, "external app started")
 	<-ctx.Done()
-	fmt.Fprintln(os.Stdout, "external app shutting down")
+	_, _ = fmt.Fprintln(os.Stdout, "external app shutting down")
 	return ctx.Err()
 }
 
 func (a *externalApp) Stop(ctx context.Context) error {
-	fmt.Fprintln(os.Stdout, "external app stopped")
+	_, _ = fmt.Fprintln(os.Stdout, "external app stopped")
 	return nil
 }
 

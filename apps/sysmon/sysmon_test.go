@@ -732,7 +732,7 @@ func TestConcurrentHandlersAndActions(t *testing.T) {
 					t.Errorf("sort: %v", err)
 				}
 			case 2:
-				h.tryAct(1, "details", "proc_9")
+				_, _ = h.tryAct(1, "details", "proc_9")
 			case 3:
 				if _, err := h.handlers["snapshot"](context.Background(), nil); err != nil {
 					t.Errorf("snapshot route: %v", err)

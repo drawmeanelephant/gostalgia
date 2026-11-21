@@ -245,7 +245,7 @@ func (s *Store) syncDir(dir string) {
 	if err != nil {
 		return
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	err = d.Sync()
 	if s.dirSyncHook != nil {
 		s.dirSyncHook(dir, err)

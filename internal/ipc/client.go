@@ -57,7 +57,7 @@ func NewClient(conn net.Conn, token string) (*Client, error) {
 	go c.readLoop()
 	go c.writeLoop()
 	if _, err := c.call(context.Background(), "auth", map[string]string{"token": token}, nil, 0); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("ipc: auth failed: %w", err)
 	}
 	return c, nil
@@ -329,7 +329,7 @@ func (c *Client) fail(err error) {
 		c.sub = nil
 	}
 	c.mu.Unlock()
-	c.conn.Close()
+	_ = c.conn.Close()
 }
 
 func (c *Client) Close() error {
@@ -393,7 +393,7 @@ func (c *Client) Subscribe(ctx context.Context, p SubscribeParams) (*ClientSubsc
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		// The server may have subscribed before cancellation. Disconnect
 		// rather than leaving an unowned subscription on this connection.
-		c.Close()
+		_ = c.Close()
 	}
 	return sub, err
 }
@@ -401,7 +401,7 @@ func (c *Client) Subscribe(ctx context.Context, p SubscribeParams) (*ClientSubsc
 func (s *ClientSubscription) Close(ctx context.Context) error {
 	err := s.client.Call(ctx, UnsubscribeMethod, map[string]uint64{"subscription": s.Info.Subscription}, nil)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		s.client.Close()
+		_ = s.client.Close()
 	}
 	return err
 }
