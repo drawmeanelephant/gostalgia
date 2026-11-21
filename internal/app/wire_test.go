@@ -43,7 +43,7 @@ func writeWire(t *testing.T, conn net.Conn, msg rpcWireMessage) {
 	}
 }
 
-// A frame beyond the 4 MiB wire cap is a protocol violation: the loop must
+// A frame beyond the 6 MiB wire cap is a protocol violation: the loop must
 // error and close the connection rather than buffer it without bound.
 func TestChildWireLoopRejectsOversizedFrame(t *testing.T) {
 	dispatch := func(req rpcWireMessage) rpcWireMessage {
@@ -56,7 +56,7 @@ func TestChildWireLoopRejectsOversizedFrame(t *testing.T) {
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 7; i++ {
 			if _, err := childConn.Write(chunk); err != nil {
 				return
 			}

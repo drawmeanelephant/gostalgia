@@ -272,7 +272,7 @@ func TestOversizedPayloads(t *testing.T) {
 		t.Fatal("auth scan failed")
 	}
 
-	// Frame exceeding maxLine (4 MiB + 1024 bytes)
+	// Frame exceeding maxLine (6 MiB + 1024 bytes)
 	giantPayload := strings.Repeat("Z", maxLine+1024)
 	oversizedReq := fmt.Sprintf(`{"id":2,"method":"test/echo","params":%q}`+"\n", giantPayload)
 
