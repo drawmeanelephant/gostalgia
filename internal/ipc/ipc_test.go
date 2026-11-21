@@ -243,7 +243,7 @@ func TestClientBadTokenRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := NewServer(ln, NewRouter(), "sekrit", slog.New(slog.NewTextHandler(discard{}, nil)))
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -261,7 +261,7 @@ func TestClientNonAuthFirstRequestRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := NewServer(ln, NewRouter(), "sekrit", slog.New(slog.NewTextHandler(discard{}, nil)))
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 	go func() { _ = srv.Serve() }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
@@ -271,7 +271,7 @@ func TestClientNonAuthFirstRequestRejected(t *testing.T) {
 	// Speak the protocol directly: first request is not auth.
 	req := Request{ID: 1, Method: "sys/ping"}
 	b, _ := json.Marshal(req)
-	conn.Write(append(b, '\n'))
+	_, _ = conn.Write(append(b, '\n'))
 	buf := make([]byte, 512)
 	n, _ := conn.Read(buf)
 	var resp Response
@@ -595,7 +595,7 @@ func TestServerWithTokenStoreOperatorAndApp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("operator auth failed: %v", err)
 	}
-	defer opClient.Close()
+	defer func() { _ = opClient.Close() }()
 
 	var opWhoami struct {
 		Principal string   `json:"principal"`

@@ -45,7 +45,7 @@ func TestServeWithOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 
 	endpoint := "unix://" + sockPath
 	token := "test-token-123"
@@ -58,7 +58,7 @@ func TestServeWithOptions(t *testing.T) {
 			serverErrCh <- err
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		reader := bufio.NewReader(conn)
 		writeMsg := func(id int64, ok bool, data any, errStr string) {

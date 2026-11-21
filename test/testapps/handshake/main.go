@@ -65,7 +65,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "handshake: dial:", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	reader := bufio.NewReader(conn)
 	token := os.Getenv("GOSTALGIA_APP_TOKEN")
 	appID := os.Getenv("GOSTALGIA_APP_ID")

@@ -506,9 +506,6 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 			return fmt.Errorf("app: too many routes (limit %d)", maxAppRoutes)
 		}
 		routes[method] = func(parent context.Context, req ipc.Request) (any, error) {
-			if err := ipc.RequireCap(parent, security.CapIPC); err != nil {
-				return nil, err
-			}
 			mu.Lock()
 			if !active {
 				mu.Unlock()
@@ -563,7 +560,7 @@ func (m *Manager) launchInProc(ctx context.Context, man Manifest, ra *runningApp
 		err = life.Err()
 	}
 	if err == nil {
-		err = m.router.HandleBatch(routes)
+		err = m.router.HandleBatchPolicy(routes, ipc.Baseline)
 	}
 	if err != nil {
 		stopErr := cleanup()
@@ -1256,9 +1253,6 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 		routeMethod := base + rName
 		localName := rName
 		routes[routeMethod] = func(parent context.Context, req ipc.Request) (any, error) {
-			if err := ipc.RequireCap(parent, security.CapIPC); err != nil {
-				return nil, err
-			}
 			mu.Lock()
 			if !active {
 				mu.Unlock()
@@ -1318,7 +1312,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 	}
 
 	if len(routes) > 0 {
-		if err := m.router.HandleBatch(routes); err != nil {
+		if err := m.router.HandleBatchPolicy(routes, ipc.Baseline); err != nil {
 			dropConn()
 			_ = m.procs.Stop(proc.ID(), 2*time.Second)
 			if m.tokens != nil && appToken != "" {

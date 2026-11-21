@@ -27,22 +27,14 @@ func (s *ProcService) Init(ctx *service.Context) error {
 }
 
 func (s *ProcService) Start(ctx context.Context) error {
-	if err := s.ctx.Router.Handle("proc/list", s.list); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("proc/info", s.info); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("proc/logs", s.logs); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("proc/history", s.history); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("proc/reap", s.reap); err != nil {
-		return err
-	}
-	return s.ctx.Router.Handle("proc/stop", s.stop)
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"proc/list":    {Handler: s.list, Policy: ipc.Cap(security.CapProcList)},
+		"proc/info":    {Handler: s.info, Policy: ipc.Cap(security.CapProcList)},
+		"proc/logs":    {Handler: s.logs, Policy: ipc.Cap(security.CapProcList)},
+		"proc/history": {Handler: s.history, Policy: ipc.Cap(security.CapProcList)},
+		"proc/reap":    {Handler: s.reap, Policy: ipc.Cap(security.CapProcStop)},
+		"proc/stop":    {Handler: s.stop, Policy: ipc.Cap(security.CapProcStop)},
+	})
 }
 
 func (s *ProcService) Stop(ctx context.Context) error {
@@ -51,31 +43,19 @@ func (s *ProcService) Stop(ctx context.Context) error {
 }
 
 func (s *ProcService) list(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcList); err != nil {
-		return nil, err
-	}
 	return s.ctx.Procs.List(), nil
 }
 
 func (s *ProcService) history(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcList); err != nil {
-		return nil, err
-	}
 	return s.ctx.Procs.History(), nil
 }
 
 func (s *ProcService) reap(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcStop); err != nil {
-		return nil, err
-	}
 	reaped := s.ctx.Procs.Reap()
 	return map[string]any{"reaped": reaped}, nil
 }
 
 func (s *ProcService) info(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcList); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID int32 `json:"id"`
 	}
@@ -97,9 +77,6 @@ func (s *ProcService) info(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *ProcService) logs(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcList); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID     int32  `json:"id"`
 		Stream string `json:"stream,omitempty"` // "stdout", "stderr", "combined", or ""
@@ -172,9 +149,6 @@ func tailLines(s string, n int) string {
 var maxProcStopTimeout = 60 * time.Second
 
 func (s *ProcService) stop(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapProcStop); err != nil {
-		return nil, err
-	}
 	var p struct {
 		ID      int32 `json:"id"`
 		Timeout int   `json:"timeout_seconds,omitempty"`

@@ -34,16 +34,28 @@ type Router struct {
 // retraction can never slip between resolving the route and counting the
 // dispatch.
 type route struct {
-	h      Handler
-	flight sync.WaitGroup
+	h       Handler
+	policy  Policy
+	decided bool // policy was declared at registration, not defaulted
+	flight  sync.WaitGroup
+}
+
+// Route binds a handler to the authorization policy Dispatch enforces
+// before invoking it.
+type Route struct {
+	Handler Handler
+	Policy  Policy
 }
 
 func NewRouter() *Router {
 	return &Router{routes: map[string]*route{}}
 }
 
-// Handle registers a handler. Duplicate methods are rejected: routes are
-// owned by exactly one subsystem or application instance.
+// Handle registers a handler without a policy decision. The route admits
+// any caller that reaches it; service routes must instead be registered
+// through HandlePolicy or HandleRoutes so the router can enforce the
+// declared authorization — the route-authorization test fails for
+// undecided routes in the wired environment.
 func (r *Router) Handle(method string, h Handler) error {
 	if method == "" || h == nil {
 		return fmt.Errorf("ipc: invalid route %q", method)
@@ -57,8 +69,45 @@ func (r *Router) Handle(method string, h Handler) error {
 	return nil
 }
 
-// HandleBatch installs a route set atomically, rejecting any conflict without
+// HandlePolicy registers a handler with the authorization policy Dispatch
+// enforces before invoking it. Duplicate methods are rejected: routes are
+// owned by exactly one subsystem or application instance.
+func (r *Router) HandlePolicy(method string, h Handler, p Policy) error {
+	if method == "" || h == nil {
+		return fmt.Errorf("ipc: invalid route %q", method)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.routes[method]; dup {
+		return fmt.Errorf("ipc: route %q is already registered", method)
+	}
+	r.routes[method] = &route{h: h, policy: p, decided: true}
+	return nil
+}
+
+// HandleRoutes installs a route set atomically — each method bound to its
+// own handler and declared policy — rejecting any conflict without
 // publishing partial application initialization.
+func (r *Router) HandleRoutes(routes map[string]Route) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for method, rt := range routes {
+		if method == "" || rt.Handler == nil {
+			return fmt.Errorf("ipc: invalid route %q", method)
+		}
+		if _, dup := r.routes[method]; dup {
+			return fmt.Errorf("ipc: route %q is already registered", method)
+		}
+	}
+	for method, rt := range routes {
+		r.routes[method] = &route{h: rt.Handler, policy: rt.Policy, decided: true}
+	}
+	return nil
+}
+
+// HandleBatch installs a route set atomically, rejecting any conflict without
+// publishing partial application initialization. Like Handle, it registers
+// routes without a policy decision.
 func (r *Router) HandleBatch(routes map[string]Handler) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -72,6 +121,26 @@ func (r *Router) HandleBatch(routes map[string]Handler) error {
 	}
 	for method, h := range routes {
 		r.routes[method] = &route{h: h}
+	}
+	return nil
+}
+
+// HandleBatchPolicy installs a route set atomically under one shared
+// authorization policy — used where a batch of routes makes a single
+// capability decision, like an application's exported methods.
+func (r *Router) HandleBatchPolicy(routes map[string]Handler, p Policy) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for method, h := range routes {
+		if method == "" || h == nil {
+			return fmt.Errorf("ipc: invalid route %q", method)
+		}
+		if _, dup := r.routes[method]; dup {
+			return fmt.Errorf("ipc: route %q is already registered", method)
+		}
+	}
+	for method, h := range routes {
+		r.routes[method] = &route{h: h, policy: p, decided: true}
 	}
 	return nil
 }
@@ -144,6 +213,19 @@ func (r *Router) remove(method string) *route {
 	return rt
 }
 
+// RoutePolicy reports the authorization policy declared for method, and
+// whether a decision was ever made: undecided routes (registered through
+// Handle or HandleBatch without a policy) admit any caller.
+func (r *Router) RoutePolicy(method string) (Policy, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	rt, ok := r.routes[method]
+	if !ok {
+		return Policy{}, false
+	}
+	return rt.policy, rt.decided
+}
+
 // Methods lists registered method names, sorted.
 func (r *Router) Methods() []string {
 	r.mu.RLock()
@@ -176,6 +258,9 @@ func (r *Router) Dispatch(ctx context.Context, req Request) (resp Response) {
 	}
 	defer rt.flight.Done()
 
+	if err := rt.policy.Authorize(ctx); err != nil {
+		return Response{ID: req.ID, Error: err.Error(), Code: ErrorCode(err)}
+	}
 	data, err := rt.h(ctx, req)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error(), Code: ErrorCode(err)}

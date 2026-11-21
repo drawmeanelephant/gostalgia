@@ -35,53 +35,20 @@ func (s *ProfileService) Init(ctx *service.Context) error {
 }
 
 func (s *ProfileService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"profile/list":   s.list,
-		"profile/get":    s.get,
-		"profile/active": s.active,
-		"profile/create": s.create,
-		"profile/update": s.update,
-		"profile/switch": s.switchProfile,
-		"profile/delete": s.deleteProfile,
-	}
-
-	for route, handler := range routes {
-		if err := s.ctx.Router.Handle(route, handler); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"profile/list":   {Handler: s.list, Policy: ipc.OperatorOr(security.CapProfileRead, security.CapAdmin)},
+		"profile/get":    {Handler: s.get, Policy: ipc.OperatorOr(security.CapProfileRead, security.CapAdmin)},
+		"profile/active": {Handler: s.active, Policy: ipc.OperatorOr(security.CapProfileRead, security.CapAdmin)},
+		"profile/create": {Handler: s.create, Policy: ipc.OperatorOr(security.CapProfileWrite, security.CapAdmin)},
+		"profile/update": {Handler: s.update, Policy: ipc.OperatorOr(security.CapProfileWrite, security.CapAdmin)},
+		"profile/switch": {Handler: s.switchProfile, Policy: ipc.OperatorOr(security.CapProfileWrite, security.CapAdmin)},
+		"profile/delete": {Handler: s.deleteProfile, Policy: ipc.OperatorOr(security.CapProfileWrite, security.CapAdmin)},
+	})
 }
 
 func (s *ProfileService) Stop(ctx context.Context) error {
 	s.ctx.Router.UnhandlePrefix("profile/")
 	return nil
-}
-
-func (s *ProfileService) requireReadCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapProfileRead) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapProfileRead)
-}
-
-func (s *ProfileService) requireWriteCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapProfileWrite) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapProfileWrite)
 }
 
 type ProfileListResponse struct {
@@ -90,9 +57,6 @@ type ProfileListResponse struct {
 }
 
 func (s *ProfileService) list(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return ProfileListResponse{Profiles: []profile.Profile{}, Active: ""}, nil
 	}
@@ -103,9 +67,6 @@ func (s *ProfileService) list(ctx context.Context, req ipc.Request) (any, error)
 }
 
 func (s *ProfileService) get(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}
@@ -130,9 +91,6 @@ func (s *ProfileService) get(ctx context.Context, req ipc.Request) (any, error) 
 }
 
 func (s *ProfileService) active(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}
@@ -148,9 +106,6 @@ type CreateProfileRequest struct {
 }
 
 func (s *ProfileService) create(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}
@@ -176,9 +131,6 @@ type UpdateProfileRequest struct {
 }
 
 func (s *ProfileService) update(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}
@@ -200,9 +152,6 @@ type SwitchProfileRequest struct {
 }
 
 func (s *ProfileService) switchProfile(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}
@@ -231,9 +180,6 @@ type DeleteProfileRequest struct {
 }
 
 func (s *ProfileService) deleteProfile(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Profiles == nil {
 		return nil, fmt.Errorf("profile: manager unavailable")
 	}

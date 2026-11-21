@@ -35,18 +35,12 @@ func (s *ClipboardService) Init(ctx *service.Context) error {
 }
 
 func (s *ClipboardService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"clipboard/read":   s.read,
-		"clipboard/write":  s.write,
-		"clipboard/status": s.status,
-		"clipboard/clear":  s.clear,
-	}
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"clipboard/read":   {Handler: s.read, Policy: ipc.Cap(security.CapClipboardRead)},
+		"clipboard/write":  {Handler: s.write, Policy: ipc.Cap(security.CapClipboardWrite)},
+		"clipboard/status": {Handler: s.status, Policy: ipc.Baseline},
+		"clipboard/clear":  {Handler: s.clear, Policy: ipc.Cap(security.CapClipboardWrite)},
+	})
 }
 
 func (s *ClipboardService) Stop(ctx context.Context) error {
@@ -59,10 +53,6 @@ type clipboardReadParams struct {
 }
 
 func (s *ClipboardService) read(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapClipboardRead); err != nil {
-		return nil, err
-	}
-
 	var p clipboardReadParams
 	_ = ipc.DecodeParams(req.Params, &p)
 	if p.Target == "" {
@@ -139,10 +129,6 @@ type clipboardWriteParams struct {
 }
 
 func (s *ClipboardService) write(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapClipboardWrite); err != nil {
-		return nil, err
-	}
-
 	var p clipboardWriteParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -218,10 +204,6 @@ func (s *ClipboardService) write(ctx context.Context, req ipc.Request) (any, err
 }
 
 func (s *ClipboardService) status(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
-
 	policy := security.DefaultOperatorPolicy()
 	if s.ctx != nil && s.ctx.Policy != nil {
 		policy = s.ctx.Policy.Get()
@@ -243,10 +225,6 @@ func (s *ClipboardService) status(ctx context.Context, req ipc.Request) (any, er
 }
 
 func (s *ClipboardService) clear(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapClipboardWrite); err != nil {
-		return nil, err
-	}
-
 	s.mu.Lock()
 	s.internalText = ""
 	s.updatedAt = time.Now()

@@ -109,7 +109,7 @@ func TestNotifyPost_OnlyApplications(t *testing.T) {
 	if resp.OK {
 		t.Fatal("expected rejection for operator caller")
 	}
-	if !strings.Contains(resp.Error, "only applications") {
+	if !strings.Contains(resp.Error, "app principal required") {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
 }

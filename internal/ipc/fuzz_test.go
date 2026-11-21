@@ -98,8 +98,8 @@ func FuzzServerFrames(f *testing.F) {
 		})
 
 		serverConn, clientConn := net.Pipe()
-		defer serverConn.Close()
-		defer clientConn.Close()
+		defer func() { _ = serverConn.Close() }()
+		defer func() { _ = clientConn.Close() }()
 
 		srv := NewServer(nil, router, "secret", nil,
 			WithHandshakeTimeout(100*time.Millisecond),

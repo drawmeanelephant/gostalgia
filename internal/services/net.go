@@ -39,16 +39,10 @@ func (s *NetService) Init(ctx *service.Context) error {
 }
 
 func (s *NetService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"net/fetch":  s.fetch,
-		"net/status": s.status,
-	}
-	for method, h := range routes {
-		if err := s.ctx.Router.Handle(method, h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"net/fetch":  {Handler: s.fetch, Policy: ipc.Cap(security.CapNetEgress)},
+		"net/status": {Handler: s.status, Policy: ipc.Baseline},
+	})
 }
 
 func (s *NetService) Stop(ctx context.Context) error {
@@ -65,10 +59,6 @@ type fetchParams struct {
 }
 
 func (s *NetService) fetch(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapNetEgress); err != nil {
-		return nil, err
-	}
-
 	var p fetchParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -174,10 +164,6 @@ func (s *NetService) fetch(ctx context.Context, req ipc.Request) (any, error) {
 }
 
 func (s *NetService) status(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapIPC); err != nil {
-		return nil, err
-	}
-
 	policy := security.DefaultOperatorPolicy()
 	if s.ctx != nil && s.ctx.Policy != nil {
 		policy = s.ctx.Policy.Get()

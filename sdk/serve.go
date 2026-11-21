@@ -139,7 +139,7 @@ func ServeWithOptions(ctx context.Context, inst Instance, opts ServeOptions) err
 	if err != nil {
 		return fmt.Errorf("sdk: connect: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
 	var writeMu sync.Mutex

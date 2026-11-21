@@ -45,50 +45,17 @@ func (s *RecoveryService) Init(ctx *service.Context) error {
 }
 
 func (s *RecoveryService) Start(ctx context.Context) error {
-	routes := map[string]ipc.Handler{
-		"backup/export":  s.exportBackup,
-		"backup/inspect": s.inspectBackup,
-		"backup/preview": s.previewBackup,
-		"backup/restore": s.restoreBackup,
-	}
-
-	for route, handler := range routes {
-		if err := s.ctx.Router.Handle(route, handler); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"backup/export":  {Handler: s.exportBackup, Policy: ipc.OperatorOr(security.CapBackupWrite, security.CapAdmin)},
+		"backup/inspect": {Handler: s.inspectBackup, Policy: ipc.OperatorOr(security.CapBackupRead, security.CapAdmin)},
+		"backup/preview": {Handler: s.previewBackup, Policy: ipc.OperatorOr(security.CapBackupRead, security.CapAdmin)},
+		"backup/restore": {Handler: s.restoreBackup, Policy: ipc.OperatorOr(security.CapBackupWrite, security.CapAdmin)},
+	})
 }
 
 func (s *RecoveryService) Stop(ctx context.Context) error {
 	s.ctx.Router.UnhandlePrefix("backup/")
 	return nil
-}
-
-func (s *RecoveryService) requireReadCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapBackupRead) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapBackupRead)
-}
-
-func (s *RecoveryService) requireWriteCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapBackupWrite) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapBackupWrite)
 }
 
 // Type aliases for IPC parameter payloads
@@ -221,10 +188,6 @@ func (f *scopedBackupFS) Rename(oldPath, newPath string) error {
 }
 
 func (s *RecoveryService) exportBackup(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
-
 	var p BackupExportParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -298,10 +261,6 @@ func (s *RecoveryService) exportBackup(ctx context.Context, req ipc.Request) (an
 }
 
 func (s *RecoveryService) inspectBackup(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
-
 	var p BackupPathParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -329,10 +288,6 @@ func (s *RecoveryService) inspectBackup(ctx context.Context, req ipc.Request) (a
 }
 
 func (s *RecoveryService) previewBackup(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
-
 	var p BackupPathParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -371,10 +326,6 @@ func (s *RecoveryService) systemConfigPath(ctx context.Context) string {
 }
 
 func (s *RecoveryService) restoreBackup(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
-
 	var p BackupRestoreParams
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err

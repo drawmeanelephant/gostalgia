@@ -346,24 +346,38 @@ builtin manifests are approved by compilation/registration.
 
 | Capability | Methods / purpose | Params | Result |
 |---|---|---|---|
-| `ipc` | All SDK calls; app handlers; `sys/status` | none for status | runtime status JSON |
-| `fs.read` | `fs/list` | `{"path":"/users/guest"}` (default `/`) | `{path,entries:[{name,is_dir,size,mode}]}` |
-| `fs.read` | `fs/read` | `{"path":"/users/guest/documents/note.txt"}` | `{path,size,data_base64}` |
-| `fs.write` | `fs/write` | `{path,data_base64}` | `{path,written}` |
-| `fs.write` | `fs/mkdir`, `fs/remove` | `{path}` | `{path,created:true}` / `{path,removed:true}` |
-| `proc.list` | `proc/list` | none | array `{id,name,kind,state,caps,...}` |
-| `proc.stop` | `proc/stop` | `{id,timeout_seconds?}` (default 5, max 60) | `{id,stopped:true}` |
+| `ipc` | All SDK calls; app handlers; `sys/status`, `sys/policy`, `sys/ping`, `session/whoami`, `clipboard/status`, `sound/status`, `net/status`, `hostfs/list` | none for status/policy/ping | runtime status, operator policy, `{pong:true,version}`, caller identity, feature/mount/net status |
+| `ipc` | `app/invalidate` (app-only: marks its own view stale), `doc/recents`, `doc/favorites` (filtered to the caller), `doc/associations`, `doc/associations/resolve`, `doc/handoff` | `{path,app_id?,mode?}` for handoff | caller-scoped lists, association table, handoff result |
+| `fs.read` | `fs/list`, `fs/stat`, `fs/read` | `{"path":"/users/guest"}` (default `/` for list) | `{path,entries:[{name,is_dir,size,mode}]}` / stat fields / `{path,size,data_base64}` |
+| `fs.read` | `fs/trash/list` | none | trashed entries visible to the caller |
+| `fs.read` | `theme/list`, `theme/get` | `{name}` for get | built-in and user theme registry |
+| `fs.read` | `doc/search`, `doc/lookup` (app callers are scoped to their grants) | `{query,extension?,limit?}` | permission-filtered document matches |
+| `fs.write` | `fs/write`, `fs/save`, `fs/mkdir`, `fs/remove`, `fs/rename`, `fs/copy`, `fs/move`, `fs/trash` | `{path,data_base64}` / `{src,dst}` / `{path}` | write/move/trash confirmations |
+| `fs.write` | `fs/restore`, `fs/trash/empty` | `{id,dst?,overwrite?}` | restore/purge confirmations |
+| `fs.write` | `doc/recents/add`, `doc/recents/remove`, `doc/recents/clear`, `doc/favorites/add`, `doc/favorites/remove`, `doc/favorites/reorder`, `doc/favorites/clear` | `{path}` / `{paths}` | recents and favorites mutations, scoped for app callers |
+| `proc.list` | `proc/list`, `proc/info`, `proc/logs`, `proc/history` | `{id,stream?,tail?}` | array `{id,name,kind,state,caps,...}` / info / logs / exited history |
+| `proc.stop` | `proc/stop`, `proc/reap`, `app/stop` | `{id,timeout_seconds?}` (default 5, max 60) | `{id,stopped:true}` / `{reaped}` |
 | `app.list` | `app/list` | none | array `{manifest,running,pid?}` |
 | `app.launch` | `app/launch` | `{"id":"com.example.counter"}` | `{id,pid}` |
-| `proc.stop` | `app/stop` | `{id}` (app ID string) | `{id,stopped:true}` |
 | `clipboard.read` | `clipboard/read` | `{"target?":"auto"}` | `{text,source}` |
-| `clipboard.write` | `clipboard/write` | `{"text":"...","target?":"auto"}` | `{written:true,bytes,source}` |
-| `clipboard.write` | `clipboard/clear` | none | `{cleared:true}` |
+| `clipboard.write` | `clipboard/write`, `clipboard/clear` | `{"text":"...","target?":"auto"}` | `{written:true,bytes,source}` / `{cleared:true}` |
+| `config.read` | `config/get`, `config/list`, `config/snapshot`, `config/validate`, `config/explain` | `{path,layer?,app_id?}` | layered values, snapshots, validation and provenance |
+| `config.write` | `config/set`, `config/unset`, `config/reset`, `config/preview`, `config/cancel_preview`, `config/commit_preview` | `{path,value,layer?,app_id?}` | layer mutations; `system` layer additionally requires `admin` |
+| `session.read` or operator | `session/list`, `session/get`, `session/attach`, `session/detach`, `session/workspace/get` | `{session_id,process_id?}` | session records and workspace state |
+| `session.write` or operator | `session/create`, `session/close`, `session/workspace/set`, `session/workspace/clear` | `{user_id,session_id,workspace?}` | session lifecycle and workspace mutations |
+| `profile.read` or operator | `profile/list`, `profile/get`, `profile/active` | `{id}` | profile records and the active id |
+| `profile.write` or operator | `profile/create`, `profile/update`, `profile/switch`, `profile/delete` | `{id,...}` | profile lifecycle and activation |
+| `backup.read` or operator | `backup/inspect`, `backup/preview` | `{path}` | backup manifest and restore preview |
+| `backup.write` or operator | `backup/export`, `backup/restore` | `{path,components?,strategy?}` | archive export and restore |
+| `package.read` | `pkg/list`, `pkg/inspect` | `{id}` or `{path}` | installed package set, manifest inspection |
+| `package.write` | `pkg/install`, `pkg/update`, `pkg/uninstall`, `pkg/rollback` | `{path}` / `{id}` | signed package lifecycle |
+| `admin` or operator | `fs/grant`, `fs/grant/revoke`, `hostfs/mount`, `hostfs/unmount`, `sys/policy/update`, `doc/associations/register`, `events/v1/subscribe`, `events/v1/unsubscribe`, `events/v1/history` | route-specific | grants, mounts, operator policy, associations, event subscriptions |
+| `admin` or operator, or the owning app | `fs/grant/list` | `{app_id?}` | issued VFS grants (apps see only their own) |
 | `hostfs.read` | `fs/list`, `fs/read` on shared mounts; `fs/trash/list` on items trashed from shared mounts | path on shared mount | directory entries or file content |
 | `hostfs.write` | `fs/write`, `fs/save`, `fs/mkdir` on shared mounts; `fs/restore`, `fs/trash/empty` on items trashed from shared mounts | path on shared mount | write confirmation |
 | `net.egress` | `net/fetch` | `{"url":"...","method?":"GET","headers?":{},"body_base64?":""}` | `{status,headers,data_base64,size}` |
 | `shutdown` | `sys/shutdown` | `{reason?}` | `{stopping:true,reason}`; teardown may close connection |
-| `notify` | `notify/post` | `{"severity":"info|warning|error","title":"...","body":"..."}` | `{posted:true}`; bounded toasts and notification center history |
+| `notify` | `notify/post` (app-only) | `{"severity":"info|warning|error","title":"...","body":"..."}` | `{posted:true}`; bounded toasts and notification center history |
 | `sound` | `sound/play` | `{"sound":"bark"}` or `{"notes":[{"frequency_hz":440,"duration_ms":150,"wave":"sine"}]}` | `{played:true,player,notes,duration_ms,bytes}`; bounded synthesized tones |
 
 `sys/ping` returns `{pong:true,version}`. `session/whoami` returns

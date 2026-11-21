@@ -25,8 +25,8 @@ func authenticatedEventServer(t *testing.T) (*Server, *events.Bus, *Router, *sec
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	must(t, err)
 	s := NewServer(ln, r, tokens, nil)
-	go s.Serve()
-	t.Cleanup(func() { s.Close() })
+	go func() { _ = s.Serve() }()
+	t.Cleanup(func() { _ = s.Close() })
 	return s, bus, r, tokens, appToken
 }
 
@@ -36,7 +36,7 @@ func authenticatedEventClient(t *testing.T, s *Server, token string) *Client {
 	must(t, err)
 	c, err := NewClient(conn, token)
 	must(t, err)
-	t.Cleanup(func() { c.Close() })
+	t.Cleanup(func() { _ = c.Close() })
 	return c
 }
 

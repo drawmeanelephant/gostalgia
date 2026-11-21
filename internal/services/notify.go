@@ -37,7 +37,8 @@ func (s *NotifyService) Init(ctx *service.Context) error {
 }
 
 func (s *NotifyService) Start(ctx context.Context) error {
-	return s.ctx.Router.Handle("notify/post", s.post)
+	return s.ctx.Router.HandlePolicy("notify/post", s.post,
+		ipc.AppOnly(security.CapNotify))
 }
 
 func (s *NotifyService) Stop(ctx context.Context) error {
@@ -52,13 +53,15 @@ type postParams struct {
 }
 
 func (s *NotifyService) post(ctx context.Context, req ipc.Request) (any, error) {
-	if err := ipc.RequireCap(ctx, security.CapNotify); err != nil {
-		return nil, err
-	}
-
+	// The route policy admits only application principals holding the
+	// notify capability; this repeats the check so the handler cannot be
+	// invoked off-router with weaker guarantees.
 	principal := ipc.CallerPrincipal(ctx)
 	if !principal.IsApp() || principal.AppID == "" {
 		return nil, fmt.Errorf("notify/post: only applications can post notifications")
+	}
+	if err := ipc.RequireCap(ctx, security.CapNotify); err != nil {
+		return nil, err
 	}
 
 	var p postParams

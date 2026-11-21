@@ -38,31 +38,17 @@ func (s *SessionService) Init(ctx *service.Context) error {
 }
 
 func (s *SessionService) Start(ctx context.Context) error {
-	if err := s.ctx.Router.Handle("session/list", s.list); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/get", s.get); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/create", s.create); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/close", s.close); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/attach", s.attach); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/detach", s.detach); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/workspace/get", s.workspaceGet); err != nil {
-		return err
-	}
-	if err := s.ctx.Router.Handle("session/workspace/set", s.workspaceSet); err != nil {
-		return err
-	}
-	return s.ctx.Router.Handle("session/workspace/clear", s.workspaceClear)
+	return s.ctx.Router.HandleRoutes(map[string]ipc.Route{
+		"session/list":            {Handler: s.list, Policy: ipc.OperatorOr(security.CapSessionRead, security.CapAdmin)},
+		"session/get":             {Handler: s.get, Policy: ipc.OperatorOr(security.CapSessionRead, security.CapAdmin)},
+		"session/create":          {Handler: s.create, Policy: ipc.OperatorOr(security.CapSessionWrite, security.CapAdmin)},
+		"session/close":           {Handler: s.close, Policy: ipc.OperatorOr(security.CapSessionWrite, security.CapAdmin)},
+		"session/attach":          {Handler: s.attach, Policy: ipc.OperatorOr(security.CapSessionRead, security.CapAdmin)},
+		"session/detach":          {Handler: s.detach, Policy: ipc.OperatorOr(security.CapSessionRead, security.CapAdmin)},
+		"session/workspace/get":   {Handler: s.workspaceGet, Policy: ipc.OperatorOr(security.CapSessionRead, security.CapAdmin)},
+		"session/workspace/set":   {Handler: s.workspaceSet, Policy: ipc.OperatorOr(security.CapSessionWrite, security.CapAdmin)},
+		"session/workspace/clear": {Handler: s.workspaceClear, Policy: ipc.OperatorOr(security.CapSessionWrite, security.CapAdmin)},
+	})
 }
 
 func (s *SessionService) Stop(ctx context.Context) error {
@@ -78,32 +64,6 @@ type SessionDetail struct {
 	StoppedAt   time.Time            `json:"stopped_at,omitempty"`
 	Active      bool                 `json:"active"`
 	Attachments []session.Attachment `json:"attachments"`
-}
-
-func (s *SessionService) requireReadCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapSessionRead) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapSessionRead)
-}
-
-func (s *SessionService) requireWriteCap(ctx context.Context) error {
-	if ipc.RequireCap(ctx, security.CapSessionWrite) == nil {
-		return nil
-	}
-	if ipc.RequireCap(ctx, security.CapAdmin) == nil {
-		return nil
-	}
-	if ipc.CallerPrincipal(ctx).IsOperator() {
-		return nil
-	}
-	return ipc.RequireCap(ctx, security.CapSessionWrite)
 }
 
 func (s *SessionService) resolveSession(ctx context.Context, sessionID string) (*session.Session, error) {
@@ -145,9 +105,6 @@ func (s *SessionService) resolveSession(ctx context.Context, sessionID string) (
 }
 
 func (s *SessionService) list(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	if s.ctx.Sessions == nil {
 		return []SessionDetail{}, nil
 	}
@@ -171,9 +128,6 @@ func (s *SessionService) list(ctx context.Context, req ipc.Request) (any, error)
 }
 
 func (s *SessionService) get(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		ID string `json:"id"`
 	}
@@ -195,9 +149,6 @@ func (s *SessionService) get(ctx context.Context, req ipc.Request) (any, error) 
 }
 
 func (s *SessionService) create(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		UserID   string `json:"user_id"`
 		UserName string `json:"user_name"`
@@ -233,9 +184,6 @@ func (s *SessionService) create(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *SessionService) close(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		ID string `json:"id"`
 	}
@@ -263,9 +211,6 @@ type SessionAttachResponse struct {
 }
 
 func (s *SessionService) attach(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		SessionID  string `json:"session_id"`
 		ClientType string `json:"client_type"`
@@ -310,9 +255,6 @@ func (s *SessionService) attach(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *SessionService) detach(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		SessionID    string `json:"session_id"`
 		AttachmentID string `json:"attachment_id"`
@@ -338,9 +280,6 @@ func (s *SessionService) detach(ctx context.Context, req ipc.Request) (any, erro
 }
 
 func (s *SessionService) workspaceGet(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireReadCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		SessionID string `json:"session_id"`
 	}
@@ -359,9 +298,6 @@ func (s *SessionService) workspaceGet(ctx context.Context, req ipc.Request) (any
 }
 
 func (s *SessionService) workspaceSet(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		SessionID  string `json:"session_id"`
 		CWD        string `json:"cwd"`
@@ -400,9 +336,6 @@ func (s *SessionService) workspaceSet(ctx context.Context, req ipc.Request) (any
 }
 
 func (s *SessionService) workspaceClear(ctx context.Context, req ipc.Request) (any, error) {
-	if err := s.requireWriteCap(ctx); err != nil {
-		return nil, err
-	}
 	var params struct {
 		SessionID    string `json:"session_id"`
 		ClearHistory bool   `json:"clear_history"`

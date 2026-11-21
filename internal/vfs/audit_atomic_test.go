@@ -11,7 +11,7 @@ import (
 
 func TestAuditHostFSSaveAtomicSyncsParentDir(t *testing.T) {
 	h := newTestHostFS(t)
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 
 	var synced []string
 	h.saveDirSyncHook = func(dir string, err error) {
