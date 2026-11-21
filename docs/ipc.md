@@ -204,6 +204,12 @@ and sever the connection. An interrupted socket write, malformed frame,
 or disconnect fails all pending calls and closes the event channel. Use a
 fresh authenticated client after transport failure.
 
+State a handler binds to the serving connection is reclaimed when that
+connection closes: `session/attach` registers its attachment for release, so
+a client that crashes or drops without `session/detach` cannot leak the
+slot. Application child wires get the same contract — attachments an app
+makes are released when the app exits.
+
 ## Version 1 event subscriptions
 
 All three event methods require `admin`, not merely `ipc`. They expose a

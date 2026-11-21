@@ -3,6 +3,7 @@ package shell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -172,6 +173,55 @@ func TestShellAttachedModeAndDetach(t *testing.T) {
 	}
 	if !mock.isDetachCalled() {
 		t.Fatal("expected session/detach to be called")
+	}
+}
+
+// failingAttachCaller behaves like mockSessionCaller but refuses
+// session/attach the way a session at its attachment limit does.
+type failingAttachCaller struct {
+	mockSessionCaller
+	attachErr error
+}
+
+func (f *failingAttachCaller) Call(ctx context.Context, method string, params any, result any) error {
+	if method == "session/attach" {
+		return f.attachErr
+	}
+	return f.mockSessionCaller.Call(ctx, method, params, result)
+}
+
+// #260: a failed session/attach must surface in the transcript instead of
+// silently degrading to a shell with no workspace history or cwd.
+func TestShellAttachFailureSurfaces(t *testing.T) {
+	mock := &failingAttachCaller{
+		attachErr: errors.New(`session: session "session-1" is not active or attachment limit reached`),
+	}
+	model := New(context.Background(), mock, nil)
+	model.SetAttached(true)
+
+	initCmd := model.Init()
+	if initCmd == nil {
+		t.Fatal("Init returned no command")
+	}
+	batch, ok := initCmd().(tea.BatchMsg)
+	if !ok || len(batch) == 0 {
+		t.Fatalf("Init command = %T, want tea.BatchMsg", initCmd())
+	}
+	msg, ok := batch[0]().(resultMsg)
+	if !ok {
+		t.Fatalf("refresh command produced %T, want resultMsg", batch[0]())
+	}
+	model.Update(msg)
+
+	found := false
+	for _, e := range model.transcript {
+		if strings.Contains(e.text, "attach") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("attach failure not surfaced; transcript = %+v", model.transcript)
 	}
 }
 

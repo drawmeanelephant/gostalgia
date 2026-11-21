@@ -199,6 +199,87 @@ func TestProfileService_DeleteRemovesUserTree(t *testing.T) {
 	}
 }
 
+// GH-7: profile/delete must close the deleted profile's sessions and drop
+// its workspace store. A still-live session of the departed user must not
+// resurrect /users/<id>, and a profile re-created under the same id must
+// not inherit the deleted profile's workspace history.
+func TestProfileService_DeleteClosesSessionsAndRetiresWorkspace(t *testing.T) {
+	env := newTestEnv(t)
+	ctx := context.Background()
+	caps := security.AdminCapabilities()
+
+	resp := env.call(ctx, caps, "profile/create", CreateProfileRequest{ID: "departed", Name: "Departed"})
+	if !resp.OK {
+		t.Fatalf("profile/create failed: %s", resp.Error)
+	}
+
+	// A live session for the departed user, holding private history.
+	resp = env.call(ctx, caps, "session/create", map[string]any{"user_id": "u-departed", "user_name": "departed"})
+	if !resp.OK {
+		t.Fatalf("session/create failed: %s", resp.Error)
+	}
+	var created SessionDetail
+	must(t, json.Unmarshal(resp.Data, &created))
+	resp = env.call(ctx, caps, "session/workspace/set", map[string]any{
+		"session_id": created.ID,
+		"cmd":        "departed-private-command",
+	})
+	if !resp.OK {
+		t.Fatalf("workspace/set failed: %s", resp.Error)
+	}
+
+	resp = env.call(ctx, caps, "profile/delete", DeleteProfileRequest{ID: "departed"})
+	if !resp.OK {
+		t.Fatalf("profile/delete failed: %s", resp.Error)
+	}
+
+	// The profile's sessions are closed, not orphaned.
+	resp = env.call(ctx, caps, "session/get", map[string]any{"id": created.ID})
+	if resp.OK {
+		t.Fatal("deleted profile's session is still live")
+	}
+	if _, err := env.ctx.VFS.Stat("/users/departed"); err == nil {
+		t.Fatal("/users/departed still exists after profile/delete")
+	}
+
+	// A writer still holding the old session cannot resurrect the tree.
+	resp = env.call(ctx, caps, "session/workspace/set", map[string]any{
+		"session_id": created.ID,
+		"cmd":        "posthumous",
+	})
+	if resp.OK {
+		t.Fatal("workspace/set on a deleted profile's session succeeded")
+	}
+	if _, err := env.ctx.VFS.Stat("/users/departed"); err == nil {
+		t.Fatal("workspace save resurrected /users/departed")
+	}
+
+	// A re-created profile with the same id inherits nothing.
+	resp = env.call(ctx, caps, "profile/create", CreateProfileRequest{ID: "departed", Name: "Departed II"})
+	if !resp.OK {
+		t.Fatalf("profile/re-create failed: %s", resp.Error)
+	}
+	resp = env.call(ctx, caps, "session/create", map[string]any{"user_id": "u-departed", "user_name": "departed"})
+	if !resp.OK {
+		t.Fatalf("session/create for new profile failed: %s", resp.Error)
+	}
+	var recreated SessionDetail
+	must(t, json.Unmarshal(resp.Data, &recreated))
+	resp = env.call(ctx, caps, "session/workspace/get", map[string]any{"session_id": recreated.ID})
+	if !resp.OK {
+		t.Fatalf("workspace/get failed: %s", resp.Error)
+	}
+	var wsState struct {
+		History []string `json:"history"`
+	}
+	must(t, json.Unmarshal(resp.Data, &wsState))
+	for _, h := range wsState.History {
+		if h == "departed-private-command" {
+			t.Fatal("re-created profile inherited the deleted profile's history")
+		}
+	}
+}
+
 // #74: profile/* must not accept the baseline ipc cap — an app with only
 // 'ipc' can no longer enumerate, create, switch, update, or delete profiles.
 // (PoC: internal/services/audit_findings_test.go on the audit branch.)

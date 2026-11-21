@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +147,73 @@ func TestSessionDetachAndWorkspacePersistenceE2E(t *testing.T) {
 	}
 	if att3.Workspace.CurrentDir != "/users/guest/documents" {
 		t.Fatalf("expected persisted cwd /users/guest/documents, got %s", att3.Workspace.CurrentDir)
+	}
+}
+
+// #260: attachments are bound to the IPC connection — a client that drops
+// without session/detach releases its slot. 32 crashed shells must not
+// permanently block re-attach on the never-closed boot session.
+func TestSessionAttachmentsReleasedOnDisconnectE2E(t *testing.T) {
+	root := t.TempDir()
+	rt, err := runtime.Boot(context.Background(), runtime.Options{Root: root})
+	must(t, err)
+	t.Cleanup(func() { rt.Shutdown("attachment leak test") })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	sessionID := ""
+	for i := 0; i < session.MaxAttachmentsPerSession; i++ {
+		client := dialRunning(t, root)
+		var att struct {
+			SessionID    string `json:"session_id"`
+			AttachmentID string `json:"attachment_id"`
+		}
+		if err := client.Call(ctx, "session/attach", map[string]any{
+			"client_type": "shell",
+			"client_id":   fmt.Sprintf("crashed-%d", i),
+		}, &att); err != nil {
+			t.Fatalf("attach %d failed: %v", i, err)
+		}
+		if sessionID == "" {
+			sessionID = att.SessionID
+		}
+		// Disconnect without detaching — a crashed or killed shell.
+		_ = client.Close()
+	}
+
+	// The dropped connections release their slots; the next attach succeeds.
+	probe := dialRunning(t, root)
+	defer func() { _ = probe.Close() }()
+
+	var attachments int
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var detail struct {
+			Attachments []struct {
+				ID string `json:"id"`
+			} `json:"attachments"`
+		}
+		must(t, probe.Call(ctx, "session/get", map[string]any{"id": sessionID}, &detail))
+		attachments = len(detail.Attachments)
+		if attachments == 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if attachments != 0 {
+		t.Fatalf("attachments recorded on %s with zero connected shells: %d", sessionID, attachments)
+	}
+
+	var att struct {
+		SessionID   string `json:"session_id"`
+		ActiveCount int    `json:"active_count"`
+	}
+	must(t, probe.Call(ctx, "session/attach", map[string]any{"client_type": "shell"}, &att))
+	if att.SessionID != sessionID {
+		t.Fatalf("attached to %s, want %s", att.SessionID, sessionID)
+	}
+	if att.ActiveCount != 1 {
+		t.Fatalf("active_count = %d, want 1 (leaked attachments were not reclaimed)", att.ActiveCount)
 	}
 }

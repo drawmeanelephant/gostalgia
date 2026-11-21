@@ -1,8 +1,10 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"strings"
 	"sync"
@@ -418,6 +420,95 @@ func TestSetVFSDoesNotRaceWorkspaceWrites(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// GH-7: deleting a profile closes its sessions and retires the shared
+// workspace store, so a still-running writer cannot resurrect the removed
+// /users/<id> tree — and a later profile reusing the id inherits nothing.
+func TestCloseForUserRetiresWorkspace(t *testing.T) {
+	m, _ := newTestManager(t)
+	m.SetVFS(vfs.NewMem())
+
+	alice, err := m.Create(security.User{ID: "u-alice", Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice2, err := m.Create(security.User{ID: "u-alice", Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := m.Create(security.User{ID: "u-bob", Name: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ws := m.Workspace(alice.ID)
+	if ws == nil {
+		t.Fatal("no workspace for a live session")
+	}
+	if ws != m.Workspace(alice2.ID) {
+		t.Fatal("same-user sessions did not share the workspace store")
+	}
+	if err := ws.AppendHistory("deleted-profile-secret"); err != nil {
+		t.Fatal(err)
+	}
+
+	// profile/delete: close the profile's sessions and retire its store.
+	if n := m.CloseForUser("alice"); n != 2 {
+		t.Fatalf("CloseForUser closed %d sessions, want 2", n)
+	}
+	if alice.Active() || alice2.Active() {
+		t.Fatal("deleted profile's sessions still active")
+	}
+	if !bob.Active() {
+		t.Fatal("another user's session was wrongly closed")
+	}
+
+	// The retired store rejects writes instead of recreating the tree.
+	if err := ws.AppendHistory("posthumous"); !errors.Is(err, ErrWorkspaceRetired) {
+		t.Fatalf("retired store save = %v, want ErrWorkspaceRetired", err)
+	}
+	if err := ws.SetCurrentDir("/users/alice"); !errors.Is(err, ErrWorkspaceRetired) {
+		t.Fatalf("retired store SetCurrentDir = %v, want ErrWorkspaceRetired", err)
+	}
+
+	// A second CloseForUser is a no-op, not an error.
+	if n := m.CloseForUser("alice"); n != 0 {
+		t.Fatalf("second CloseForUser = %d, want 0", n)
+	}
+}
+
+// GH-7: a retired store must never recreate a deleted /users/<id> tree —
+// writes after the tree is gone fail instead of resurrecting it.
+func TestRetiredWorkspaceCannotRecreateDeletedTree(t *testing.T) {
+	m, _ := newTestManager(t)
+	memFS := vfs.NewMem()
+	m.SetVFS(memFS)
+
+	s, err := m.Create(security.User{ID: "u-alice", Name: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := m.Workspace(s.ID)
+	if err := ws.AppendHistory("private-cmd"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memFS.Stat("users/alice/config/workspace.json"); err != nil {
+		t.Fatalf("workspace file not written: %v", err)
+	}
+
+	m.CloseForUser("alice")
+	if err := memFS.RemoveAll("users/alice"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A writer still holding the store fails, and the tree stays gone.
+	if err := ws.AppendHistory("zombie"); !errors.Is(err, ErrWorkspaceRetired) {
+		t.Fatalf("retired store save = %v, want ErrWorkspaceRetired", err)
+	}
+	if _, err := memFS.Stat("users/alice"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("retired store resurrected /users/alice (stat err %v)", err)
+	}
 }
 
 func TestWorkspaceCorruptedFileRecovery(t *testing.T) {

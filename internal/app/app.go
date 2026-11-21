@@ -1331,6 +1331,11 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 		registered = true
 	}
 
+	// Connection-bound state created over the child wire — session
+	// attachments — is reclaimed when this run ends, matching the release
+	// a dropped socket connection gives socket clients.
+	dispatchCtx, runReaper := ipc.BindReaper(life)
+
 	var cleanupOnce sync.Once
 	cleanup := func() error {
 		cleanupOnce.Do(func() {
@@ -1346,6 +1351,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 			if m.grants != nil {
 				m.grants.RevokeAppSession(man.ID)
 			}
+			runReaper()
 			if registered {
 				m.router.UnhandlePrefix(base)
 			}
@@ -1361,7 +1367,7 @@ func (m *Manager) launchExternal(ctx context.Context, man Manifest, ra *runningA
 	}
 
 	dispatch := func(req rpcWireMessage) rpcWireMessage {
-		childCtx := ipc.WithCapabilities(life, security.NewCapabilities(caps...))
+		childCtx := ipc.WithCapabilities(dispatchCtx, security.NewCapabilities(caps...))
 		m.mu.Lock()
 		curPID := ra.pid
 		m.mu.Unlock()

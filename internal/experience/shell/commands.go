@@ -100,6 +100,7 @@ type resultMsg struct {
 	sessionID        string
 	attachmentID     string
 	activeCount      int
+	attachErr        error
 	workspaceHistory []string
 	initialView      string
 	switchedUser     string
