@@ -126,6 +126,15 @@ complete versions after reverification. Boot reverifies both retained versions.
 Only one previous version is retained; failed cleanup can leave inert orphan
 directories that are never selected or launched.
 
+A package whose boot-time load fails — corrupt `state.json`, a missing or
+corrupt active version, an invalid pointer — is quarantined rather than
+bricking the environment boot. Quarantined packages are logged, reported in
+`pkg list`/`pkg inspect` with `quarantined` and `quarantine_reason`, never
+registered for launch, and refuse rollback. `pkg uninstall` removes a
+quarantined package, which is the repair path before reinstalling. A
+corrupt or missing previous version alone is rollback-only damage: the
+pointer is dropped and the package stays usable.
+
 Update and rollback stop live apps but do not automatically relaunch them.
 After a failure occurring after termination, the previous version remains
 runnable via `launch APP-ID`. Uninstall atomically retracts the app directory

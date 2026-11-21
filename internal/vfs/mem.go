@@ -284,18 +284,24 @@ func (m *MemFS) RemoveAll(name string) error {
 }
 
 func (m *MemFS) SaveAtomic(name string, data []byte, perm fs.FileMode) error {
+	return m.SaveAtomicBounded(name, data, perm, MaxDocumentSize)
+}
+
+// SaveAtomicBounded is SaveAtomic with an explicit size limit instead of the
+// interactive document cap.
+func (m *MemFS) SaveAtomicBounded(name string, data []byte, perm fs.FileMode, limit int64) error {
 	if err := validFSName("save", name); err != nil {
 		return err
 	}
 	if name == "." {
 		return m.fail("save", name, fs.ErrInvalid)
 	}
-	if int64(len(data)) > MaxDocumentSize {
+	if int64(len(data)) > limit {
 		return &Error{
 			Op:      "save",
 			Path:    "/" + name,
 			Code:    ErrTooLarge,
-			Message: fmt.Sprintf("document size %d exceeds limit of %d bytes", len(data), MaxDocumentSize),
+			Message: fmt.Sprintf("document size %d exceeds limit of %d bytes", len(data), limit),
 		}
 	}
 	if perm == 0 {
