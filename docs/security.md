@@ -129,9 +129,13 @@ The runtime defends against local threats operating on the host machine:
   is passed to the child process.
 - **Uncooperative or hostile application processes:** Applications that ignore
   cancellation, block shutdown, or attempt CPU/memory exhaustion are bounded by
-  supervisory timeouts and OS resource limits. If an application fails to exit
-  within its stop deadline, the process supervisor sends `SIGKILL` to the entire
-  process group (`platform.KillProcessTree`), preventing zombie or orphan escape.
+  supervisory timeouts and OS resource limits. A stop first delivers the
+  graceful signal — the external app's IPC connection closes, running the
+  SDK's cancel and `Instance.Stop` path; if an application still fails to
+  exit within its stop deadline, the process supervisor kills the entire
+  process tree (`platform.KillProcessTree`: `SIGKILL` to the process group
+  on Unix, the child's Job Object on Windows), preventing zombie or orphan
+  escape.
 
 ---
 
@@ -198,8 +202,9 @@ Gostalgia supports four explicit isolation levels declared in application manife
 - Spawns out-of-process as a separate OS process via `os/exec`.
 - Environment is sanitized via `process.CleanEnv`, stripping parent environment
   variables and secrets.
-- Allocated a new process group (`Setpgid: true` on Unix; `CREATE_NEW_PROCESS_GROUP`
-  on Windows) for clean teardown via `platform.KillProcessTree`.
+- Allocated a new process group (`Setpgid: true` on Unix) or a dedicated Job
+  Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (Windows), for clean
+  whole-tree teardown via `platform.KillProcessTree`.
 - Operates under standard OS user privileges without sandbox restrictions.
 
 #### 3. `sandbox` (OS Sandboxing)
