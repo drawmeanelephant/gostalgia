@@ -377,7 +377,7 @@ event-type request on the returned `tea.View`.
   applications* never collapse and window around the selected app. Home
   keys act only on the items on screen: with documents collapsed, Up/Down
   stop at the last running app and Enter opens it. In the Task Manager
-  table, `RESTARTS` collapses first, then `MEMORY`, `CPU` and `STATE`;
+  table, `MEMORY` collapses first, then `CPU` and `STATE`;
   `PID` and `NAME` never collapse, and the `PID` column widens so no ID is
   cut. When no process in the table reports supported resource metrics, the
   `CPU` and `MEMORY` columns are omitted rather than filled with dashes,

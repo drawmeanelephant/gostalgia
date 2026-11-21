@@ -187,7 +187,7 @@ func TestHeaderRunningAppCountFollowsAcceptedProcessPolls(t *testing.T) {
 	// app adds one. Unrelated rows stay uncounted.
 	m.Update(procUpdateMsg{seq: 4, procs: []taskmanager.ProcessRow{
 		env, echoStopped, indexer, notesRunning, clockRunning,
-		{ID: 43, Name: "com.gostalgia.notes", Kind: "inproc", State: "restarting"},
+		{ID: 43, Name: "com.gostalgia.notes", Kind: "inproc", State: "running"},
 	}})
 	expectCount("Apps (2)", "deduplicated process rows")
 

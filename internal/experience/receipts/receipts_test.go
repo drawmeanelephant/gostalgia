@@ -15,7 +15,7 @@ func TestCrashReceiptCreationAndSanitization(t *testing.T) {
 	name := "bad-app\x1b[2J"
 	reason := "exit code 1: \aerror occurred"
 
-	r := New(42, name, "failed", 1, reason, 2, rawLogs)
+	r := New(42, name, "failed", 1, reason, rawLogs)
 
 	if r.PID != 42 {
 		t.Fatalf("expected PID 42, got %d", r.PID)
@@ -32,9 +32,6 @@ func TestCrashReceiptCreationAndSanitization(t *testing.T) {
 	if r.ExitCode != 1 {
 		t.Fatalf("expected exit code 1, got %d", r.ExitCode)
 	}
-	if r.RestartCount != 2 {
-		t.Fatalf("expected restarts 2, got %d", r.RestartCount)
-	}
 	if !strings.HasPrefix(r.ID, "CR-42-") {
 		t.Fatalf("unexpected ID format: %s", r.ID)
 	}
@@ -47,7 +44,7 @@ func TestCrashReceiptLogExcerptBounding(t *testing.T) {
 		lines = append(lines, fmt.Sprintf("line %03d: log message", i))
 	}
 	raw := strings.Join(lines, "\n")
-	r := New(10, "flooder", "crashloop", 137, "crash loop", 5, raw)
+	r := New(10, "flooder", "crashloop", 137, "crash loop", raw)
 
 	if !r.Truncated {
 		t.Fatal("expected truncated flag to be true")
@@ -65,10 +62,10 @@ func TestCrashReceiptLogExcerptBounding(t *testing.T) {
 func TestStoreBoundingAndLookup(t *testing.T) {
 	store := NewStore(3)
 
-	r1 := New(1, "app-1", "failed", 1, "err 1", 0, "log 1")
-	r2 := New(2, "app-2", "failed", 1, "err 2", 1, "log 2")
-	r3 := New(1, "app-1", "crashloop", 1, "crashloop", 3, "log 3")
-	r4 := New(4, "app-4", "failed", 2, "err 4", 0, "log 4")
+	r1 := New(1, "app-1", "failed", 1, "err 1", "log 1")
+	r2 := New(2, "app-2", "failed", 1, "err 2", "log 2")
+	r3 := New(1, "app-1", "crashloop", 1, "crashloop", "log 3")
+	r4 := New(4, "app-4", "failed", 2, "err 4", "log 4")
 
 	store.Add(r1)
 	store.Add(r2)
@@ -103,7 +100,7 @@ func TestStoreBoundingAndLookup(t *testing.T) {
 }
 
 func TestRenderReceipt(t *testing.T) {
-	r := New(7, "demo-service", "failed", 1, "panic in main", 1, "line 1\nline 2\npanic: nil pointer dereference\n")
+	r := New(7, "demo-service", "failed", 1, "panic in main", "line 1\nline 2\npanic: nil pointer dereference\n")
 	kit := ui.New(theme.Nostalgia(), ui.ANSI256)
 
 	bounds := ui.Bounds{Width: 80, Height: 24}
@@ -134,7 +131,7 @@ func TestRenderReceipt(t *testing.T) {
 // returns.
 func TestRenderReceiptCompactShowsIdentityAndReason(t *testing.T) {
 	kit := ui.New(theme.Nostalgia(), ui.Plain)
-	r := New(7, "demo-service", "failed", 1, "panic in main", 2, "line 1\nline 2\npanic: nil pointer dereference\n")
+	r := New(7, "demo-service", "failed", 1, "panic in main", "line 1\nline 2\npanic: nil pointer dereference\n")
 	r.ID = "CR-7-test"
 	need := 3 + identityRows(r) // border, title and bottom border
 	for h := 1; h < need; h++ {
@@ -149,7 +146,7 @@ func TestRenderReceiptCompactShowsIdentityAndReason(t *testing.T) {
 			t.Fatalf("height %d: reason missing:\n%s", h, out)
 		}
 	}
-	if out := Render(kit, r, ui.Bounds{Width: 60, Height: 6}); !strings.Contains(out, "#CR-7-test") || !strings.Contains(out, "Restarts: 2") || !strings.Contains(out, "panic: nil pointer") {
+	if out := Render(kit, r, ui.Bounds{Width: 60, Height: 9}); !strings.Contains(out, "#CR-7-test") || !strings.Contains(out, "Exit code: 1") || !strings.Contains(out, "panic: nil pointer") {
 		t.Fatalf("compact receipt with room lost its details:\n%s", out)
 	}
 	out := Render(kit, r, ui.Bounds{Width: 40, Height: need})
@@ -163,8 +160,8 @@ func TestRenderReceiptCompactShowsIdentityAndReason(t *testing.T) {
 		t.Fatalf("narrow receipt not compact:\n%s", out)
 	}
 
-	// Without a reason or restarts the bordered receipt needs less room.
-	plain := New(8, "quiet", "stopped", 0, "", 0, "")
+	// Without a reason the bordered receipt needs less room.
+	plain := New(8, "quiet", "stopped", 0, "", "")
 	if out := Render(kit, plain, ui.Bounds{Width: 60, Height: 5}); !strings.Contains(out, "CRASH RECEIPT #") || !strings.Contains(out, "Exit code: 0") {
 		t.Fatalf("bordered receipt without reason:\n%s", out)
 	}
