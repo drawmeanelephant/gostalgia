@@ -100,6 +100,7 @@ type harness struct {
 	notifies   []notification
 	denyNotify bool
 	denyFS     bool
+	readErr    error // if set, the next fs/read fails once with this error
 
 	fmu         sync.Mutex // guards the four fetch fields for Run tests
 	feeds       map[string][]byte
@@ -156,12 +157,17 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		if h.denyFS {
-			return errors.New(`permission denied: missing capability "fs.read"`)
+			return &sdk.Error{Code: sdk.CodePermissionDenied, Message: `permission denied: missing capability "fs.read"`}
 		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -1079,5 +1085,38 @@ func TestUnknownActionIsIPCError(t *testing.T) {
 	h := newHarness(t)
 	if _, err := h.tryAct(2, "launch_missiles", "", nil); err == nil {
 		t.Error("unknown action should be an IPC error")
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let the next change overwrite
+// the saved subscriptions.
+func TestTransientReadErrorNeverOverwritesFeeds(t *testing.T) {
+	h := newHarness(t)
+	url := "https://news.example.com/feed.xml"
+	h.feeds[url] = []byte(rssFixture)
+	h.act(t, 2, "subscribe", "", map[string]string{"feed_url": url})
+
+	h2 := newHarness(t)
+	h2.files = h.files
+	h2.readErr = context.Canceled // first fs/read fails once, transiently
+	url2 := "https://other.example.com/feed.xml"
+	h2.feeds[url2] = []byte(rssFixture)
+
+	v := h2.view(t, 2)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry loads the real file; a subscribe then extends it, not
+	// replaces it.
+	v = h2.act(t, 2, "subscribe", "", map[string]string{"feed_url": url2})
+	var st diskState
+	if err := json.Unmarshal(h2.files[statePath], &st); err != nil {
+		t.Fatalf("post-change save is not valid json: %v", err)
+	}
+	if len(st.Feeds) != 2 {
+		t.Fatalf("%d feed(s) on disk after a transient read error and one subscribe, want 2", len(st.Feeds))
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,8 +18,9 @@ import (
 // harness models the app-private VFS partition. deny simulates a missing
 // fs grant. There is no clock: the game moves only when the player does.
 type harness struct {
-	deny bool // fs/read+fs/save denied: simulates missing grants
-	seq  atomic.Int64
+	deny    bool  // fs/read+fs/save denied: simulates missing grants
+	readErr error // if set, the next fs/read fails once with this error
+	seq     atomic.Int64
 
 	fmu   sync.Mutex // guards files; concurrent handlers share the map
 	files map[string][]byte
@@ -69,13 +69,18 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	h.fmu.Lock()
 	defer h.fmu.Unlock()
 	if h.deny {
-		return errors.New("permission denied: caller not authorized")
+		return &sdk.Error{Code: sdk.CodePermissionDenied, Message: "permission denied: caller not authorized"}
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -765,5 +770,50 @@ func TestConcurrentHandlersAndActions(t *testing.T) {
 	h.route(t, "state", nil, &out)
 	if out.TranscriptLines > transcriptKeep {
 		t.Errorf("transcript = %d lines, bound is %d", out.TranscriptLines, transcriptKeep)
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let a fresh expedition
+// overwrite the saved one.
+func TestTransientReadErrorNeverOverwritesSave(t *testing.T) {
+	h := newHarness(t)
+	h.seedSave(t, diskState{
+		Version:   stateVersion,
+		Room:      "cellar",
+		Inventory: []string{"lamp", "key"},
+		Flags:     []string{"lamp_lit"},
+		Turns:     6,
+		Transcript: []string{
+			"— THE BRASS ELEPHANT —", "> go down", "== Flooded Cellar ==",
+		},
+	})
+	h.readErr = context.Canceled // first fs/read fails once, transiently
+
+	v := h.view(t, 1)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry revives the real save: only a loaded file offers the
+	// pending continue-or-new choice.
+	v = h.view(t, 1)
+	if v.State == sdk.ViewError || !strings.Contains(v.Status, "earlier expedition") {
+		t.Fatalf("retry did not revive the pending save: %+v", v)
+	}
+	h.act(t, 1, "continue", nil)
+	h.cmd(t, "look")
+
+	data, ok := h.files[statePath]
+	if !ok {
+		t.Fatal("no saved state")
+	}
+	var st diskState
+	if err := json.Unmarshal(data, &st); err != nil {
+		t.Fatalf("post-change save is not valid json: %v", err)
+	}
+	if st.Room != "cellar" || len(st.Inventory) != 2 {
+		t.Fatalf("persisted expedition after transient failure = %+v, want the seeded run kept", st)
 	}
 }

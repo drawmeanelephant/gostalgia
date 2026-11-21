@@ -32,7 +32,8 @@ type harness struct {
 	now      time.Time
 	files    map[string][]byte
 	notifies []notification
-	deny     bool // notify/post denied: simulates a missing grant
+	deny     bool  // notify/post denied: simulates a missing grant
+	readErr  error // if set, the next fs/read fails once with this error
 	seq      atomic.Int64
 
 	app      *Pomodoro
@@ -80,9 +81,14 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -858,5 +864,38 @@ func TestV1FallbackKeepsCountdown(t *testing.T) {
 	}
 	if findField(v, "work_min") != nil {
 		t.Error("fields hidden while running at v1 too")
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let the next change overwrite
+// the saved timer.
+func TestTransientReadErrorNeverOverwritesTimer(t *testing.T) {
+	h := newHarness(t)
+	h.act(t, 2, "start", "", nil) // running work session, persisted
+
+	h2 := newHarness(t)
+	h2.files = h.files
+	h2.readErr = context.Canceled // first fs/read fails once, transiently
+
+	v := h2.view(t, 2)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry loads the real file: the seeded running session relands
+	// paused, so skipping it advances to a break — a fresh idle timer
+	// would have no skip to offer.
+	v = h2.act(t, 2, "skip", "", nil)
+	var st diskState
+	if err := json.Unmarshal(h2.files[statePath], &st); err != nil {
+		t.Fatalf("post-change save is not valid json: %v", err)
+	}
+	if st.Timer.Phase != PhaseShort {
+		t.Fatalf("persisted timer after transient failure = %+v, want the skipped work session's break", st.Timer)
+	}
+	if len(st.Log) != 1 || !st.Log[0].Skipped {
+		t.Fatalf("log after transient failure = %+v, want the seeded session's skip entry", st.Log)
 	}
 }

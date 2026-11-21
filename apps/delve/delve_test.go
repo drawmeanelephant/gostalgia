@@ -83,9 +83,10 @@ func newFakeEngine() *fakeGameEngine {
 // harness models the app-private VFS partition plus the sound service.
 // The newGame/reviveGame package vars are pointed at fakes for each test.
 type harness struct {
-	deny     bool // fs/read+fs/save denied: simulates missing grants
-	noSound  bool // sound/status reports unsupported
-	soundErr bool // sound/play calls fail
+	deny     bool             // fs/read+fs/save denied: simulates missing grants
+	readErr  map[string]error // one-shot fs/read failures keyed by path
+	noSound  bool             // sound/status reports unsupported
+	soundErr bool             // sound/play calls fail
 	seq      atomic.Int64
 
 	fmu    sync.Mutex
@@ -170,12 +171,16 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	defer h.fmu.Unlock()
 	switch method {
 	case "fs/read":
+		if err := h.readErr[p.Path]; err != nil {
+			delete(h.readErr, p.Path)
+			return err
+		}
 		if h.deny {
-			return errors.New("permission denied: caller not authorized")
+			return &sdk.Error{Code: sdk.CodePermissionDenied, Message: "permission denied: caller not authorized"}
 		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -1215,5 +1220,61 @@ func TestConcurrentHandlersAndActions(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Fatalf("concurrent handler error: %v", err)
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let a fresh delve overwrite
+// the saved run.
+func TestTransientReadErrorNeverOverwritesSave(t *testing.T) {
+	h := newHarness(t)
+	seedSave(t, h, diskState{
+		Version:    stateVersion,
+		Run:        base64.StdEncoding.EncodeToString([]byte("revived-blob")),
+		PlayerName: "Old Delver",
+		Seed:       99,
+		Started:    1700000000,
+	})
+	h.readErr = map[string]error{statePath: context.Canceled}
+
+	v := h.view(t, 3)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry revives the real run instead of waiting on the stairs.
+	v = h.view(t, 3)
+	if v.State == sdk.ViewError {
+		t.Fatalf("retry did not recover: %+v", v)
+	}
+	if len(h.revCalls) != 1 || string(h.revCalls[0]) != "revived-blob" {
+		t.Fatalf("the seeded run was not revived after retry: %+v", h.revCalls)
+	}
+}
+
+// A transient failure reading scores.json is not "no ledger yet" either:
+// the load errors honestly instead of letting a lone new entry replace a
+// ledger it never saw.
+func TestTransientLedgerErrorBlocksLoad(t *testing.T) {
+	h := newHarness(t)
+	h.seedFile(t, scoresPath, diskScores{
+		Version: stateVersion,
+		Scores:  []engine.Score{{Name: "A", Value: 500, Depth: 3, Outcome: "won"}},
+	})
+	h.readErr = map[string]error{scoresPath: context.Canceled}
+
+	v := h.view(t, 3)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient ledger failure view = %+v, want an honest error", v)
+	}
+
+	v = h.view(t, 3)
+	if v.State == sdk.ViewError {
+		t.Fatalf("retry did not recover: %+v", v)
+	}
+	var sc diskScores
+	if err := json.Unmarshal(h.files[scoresPath], &sc); err != nil || len(sc.Scores) != 1 {
+		t.Fatalf("ledger after transient failure = %+v, want the seeded entry kept", sc)
 	}
 }
