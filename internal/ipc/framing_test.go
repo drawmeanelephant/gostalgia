@@ -33,6 +33,38 @@ func TestNDJSONRejectsUnterminatedFrames(t *testing.T) {
 	}
 }
 
+// A request whose frame exceeds the wire cap fails only that call, before
+// any byte is written: the connection and its other calls survive.
+func TestOversizedCallFailsOnlyThatCall(t *testing.T) {
+	s, _, _ := eventServer(t)
+	c := eventClient(t, s)
+	err := c.Call(testContext(t), "test/echo", strings.Repeat("x", maxLine), nil)
+	if err == nil || !strings.Contains(err.Error(), "frame exceeds limit") {
+		t.Fatalf("oversized call = %v, want a frame-limit error", err)
+	}
+	must(t, c.Call(testContext(t), "test/echo", 7, nil))
+}
+
+// A frame between the old 4 MiB cap and the wire limit must round-trip:
+// this is what a documented-limit fs/write looks like end-to-end.
+func TestLargeFrameWithinLimitRoundTrips(t *testing.T) {
+	s, _, r := eventServer(t)
+	must(t, r.Handle("test/blob", func(ctx context.Context, req Request) (any, error) {
+		var p string
+		if err := DecodeParams(req.Params, &p); err != nil {
+			return nil, err
+		}
+		return p, nil
+	}))
+	c := eventClient(t, s)
+	payload := strings.Repeat("y", 5<<20)
+	var out string
+	must(t, c.Call(testContext(t), "test/blob", payload, &out))
+	if out != payload {
+		t.Fatal("payload did not round-trip")
+	}
+}
+
 func TestOversizedResponseLeavesCallsUsable(t *testing.T) {
 	s, _, r := eventServer(t)
 	must(t, r.Handle("test/large", func(context.Context, Request) (any, error) {
