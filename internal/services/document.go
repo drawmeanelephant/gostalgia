@@ -234,16 +234,33 @@ func (s *DocumentService) recentsRemove(ctx context.Context, req ipc.Request) (a
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
 	}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		// Scoped removal: an app may only drop entries it can see in a
+		// filtered recents list — granted paths, or entries tagged with
+		// its own id. An unmatched entry is a silent no-op so the
+		// response stays indistinguishable from an absent one.
+		if err := s.store.Recents().RemoveFor(p.Path, principal.AppID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.store.Recents().Remove(p.Path); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true}, nil
 }
 
-// recentsClear removes all recents entries.
+// recentsClear removes all recents entries for an operator, or only the
+// caller-visible entries for an app.
 func (s *DocumentService) recentsClear(ctx context.Context, req ipc.Request) (any, error) {
 	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
 		return nil, err
+	}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		if err := s.store.Recents().ClearFor(principal.AppID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	}
 	if err := s.store.Recents().Clear(); err != nil {
 		return nil, err
@@ -326,13 +343,22 @@ func (s *DocumentService) favoritesRemove(ctx context.Context, req ipc.Request) 
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
 	}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		// Same scoped-removal rule as recents: only entries the app can
+		// see in a filtered favorites list may be dropped.
+		if err := s.store.Favorites().RemoveFor(p.Path, principal.AppID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.store.Favorites().Remove(p.Path); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true}, nil
 }
 
-// favoritesReorder updates the order of favorites.
+// favoritesReorder updates the order of favorites. App callers reorder only
+// the caller-visible subset; entries outside their grants keep their ranks.
 func (s *DocumentService) favoritesReorder(ctx context.Context, req ipc.Request) (any, error) {
 	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
 		return nil, err
@@ -343,16 +369,29 @@ func (s *DocumentService) favoritesReorder(ctx context.Context, req ipc.Request)
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
 	}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		if err := s.store.Favorites().ReorderFor(p.Paths, principal.AppID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
+	}
 	if err := s.store.Favorites().Reorder(p.Paths); err != nil {
 		return nil, err
 	}
 	return map[string]any{"ok": true}, nil
 }
 
-// favoritesClear removes all favorites.
+// favoritesClear removes all favorites for an operator, or only the
+// caller-visible entries for an app.
 func (s *DocumentService) favoritesClear(ctx context.Context, req ipc.Request) (any, error) {
 	if err := ipc.RequireCap(ctx, security.CapFileWrite); err != nil {
 		return nil, err
+	}
+	if principal := ipc.CallerPrincipal(ctx); principal.IsApp() {
+		if err := s.store.Favorites().ClearFor(principal.AppID); err != nil {
+			return nil, err
+		}
+		return map[string]any{"ok": true}, nil
 	}
 	if err := s.store.Favorites().Clear(); err != nil {
 		return nil, err

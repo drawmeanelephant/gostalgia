@@ -131,6 +131,66 @@ func (s *RecentsStore) Clear() error {
 	return s.saveLocked()
 }
 
+// appMutable reports whether an app caller may drop the entry: it must be
+// visible to the caller under the same grant rule List applies, or tagged
+// with the caller's own app id so an app can always retract entries it
+// recorded itself.
+func (s *RecentsStore) appMutable(callerAppID string, e sdk.RecentDocument) bool {
+	if e.AppID != "" && e.AppID == callerAppID {
+		return true
+	}
+	return s.grants == nil || s.grants.CheckAccess(callerAppID, e.Path, vfs.AccessRead) == nil
+}
+
+// RemoveFor deletes a recents entry on behalf of an app caller. Entries the
+// app could not see in a filtered List — and did not record itself — are
+// left untouched, so an unmatched removal is indistinguishable from
+// removing an absent entry.
+func (s *RecentsStore) RemoveFor(envPath string, callerAppID string) error {
+	norm, err := vfs.Normalize(envPath)
+	if err != nil {
+		return err
+	}
+	clean := "/" + norm
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]sdk.RecentDocument, 0, len(s.entries))
+	removed := false
+	for _, e := range s.entries {
+		if e.Path == clean && s.appMutable(callerAppID, e) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	if !removed {
+		return nil
+	}
+	s.entries = filtered
+	return s.saveLocked()
+}
+
+// ClearFor removes only the recents entries an app caller may drop, leaving
+// entries outside its grants and other apps' tagged entries intact.
+func (s *RecentsStore) ClearFor(callerAppID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	filtered := make([]sdk.RecentDocument, 0, len(s.entries))
+	for _, e := range s.entries {
+		if !s.appMutable(callerAppID, e) {
+			filtered = append(filtered, e)
+		}
+	}
+	if len(filtered) == len(s.entries) {
+		return nil
+	}
+	s.entries = filtered
+	return s.saveLocked()
+}
+
 // List returns recent documents, filtered by caller permissions and optionally checking existence.
 func (s *RecentsStore) List(callerAppID string, verifyExists bool) []sdk.RecentDocument {
 	s.mu.RLock()
