@@ -20,7 +20,9 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"sort"
 	"strings"
@@ -220,23 +222,31 @@ func (r *RSS) poll(ctx context.Context) {
 // is simply no subscriptions. A corrupt file is an honest banner over an
 // empty reader; the bad bytes are left alone until the next real change
 // saves over them. A denied read is also reported, since nothing will
-// persist without the grant.
+// persist without the grant. Any other read failure is NOT "no save yet":
+// the app reports an honest error and stays unloaded so the next call
+// retries — an empty reader must never overwrite a save it could not read.
 func (r *RSS) ensureLoadedLocked(ctx context.Context) error {
 	if r.loaded {
 		return nil
 	}
-	r.loaded = true
 
 	var out struct {
 		DataBase64 string `json:"data_base64"`
 	}
 	err := r.app.Call(ctx, "fs/read", map[string]string{"path": statePath}, &out)
 	if err != nil {
-		if looksDenied(err) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// no save yet: empty reader
+		case errors.Is(err, fs.ErrPermission):
 			r.lastError = fmt.Sprintf("storage access denied (%v) — subscriptions will not be saved", err)
+		default:
+			return fmt.Errorf("saved reader state could not be loaded: %w", err)
 		}
-		return nil // no save yet: empty reader
+		r.loaded = true
+		return nil
 	}
+	r.loaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
 		r.lastError = "saved reader state is unreadable — starting empty; the next change saves over it"
@@ -260,14 +270,6 @@ func (r *RSS) ensureLoadedLocked(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// looksDenied reports whether an fs error is a grant denial rather than
-// a missing file. The two are intentionally different: absence is normal
-// on first launch, denial means nothing the user does will persist.
-func looksDenied(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "denied") || strings.Contains(msg, "permission")
 }
 
 // sanitizeLocked repairs loaded state in place and reports whether it

@@ -133,17 +133,20 @@ type presentationPanes struct {
 // steps down one version at a time while the app reports an unsupported
 // version, so an app speaking only an older contract keeps rendering and a
 // future newer shell does not strand mid-version apps at the oldest contract.
-// The fallback matches error text because the protocol has no structured
-// unsupported-version error; keep the message check this narrow. The stamped
-// snapshot version is the negotiated version callers reuse on action and
-// cancel requests. A reply stamped newer than requested is rejected: an app
-// speaking raw IPC must not serve elements the shell never asked for.
+// The fallback matches the structured error code first, then the error text
+// for apps still speaking the pre-code protocol; keep the message check this
+// narrow. The stamped snapshot version is the negotiated version callers
+// reuse on action and cancel requests. A reply stamped newer than requested
+// is rejected: an app speaking raw IPC must not serve elements the shell
+// never asked for.
 func fetchView(ctx context.Context, client Caller, id string, version int) (sdk.View, int, error) {
 	var data sdk.View
 	for {
 		err := client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version}, &data)
 		if err != nil {
-			if version > sdk.MinPresentationVersion && strings.Contains(err.Error(), "unsupported version") {
+			unsupported := ipc.ErrorCode(err) == ipc.CodeUnsupportedVersion ||
+				strings.Contains(err.Error(), "unsupported version")
+			if version > sdk.MinPresentationVersion && unsupported {
 				version--
 				continue
 			}

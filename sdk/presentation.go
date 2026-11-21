@@ -433,7 +433,10 @@ func (c *Context) Present(snapshot func(context.Context) (View, error), action f
 			return nil, err
 		}
 		if p.Version < MinPresentationVersion || p.Version > PresentationVersion {
-			return nil, fmt.Errorf("presentation: unsupported version %d", p.Version)
+			return nil, &Error{
+				Code:    CodeUnsupportedVersion,
+				Message: fmt.Sprintf("presentation: unsupported version %d", p.Version),
+			}
 		}
 		ctx = context.WithValue(ctx, requestVersionKey{}, p.Version)
 		v, err := snapshot(ctx)
