@@ -35,7 +35,7 @@ func acceptTestServer(t *testing.T, ln net.Listener) *Server {
 		return map[string]bool{"pong": true}, nil
 	}))
 	srv := NewServer(ln, r, "sekrit", slog.New(slog.NewTextHandler(io.Discard, nil)))
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { _ = srv.Close() })
 	return srv
 }
 
@@ -64,7 +64,7 @@ func TestServeRetriesTransientAcceptError(t *testing.T) {
 	must(t, err)
 	client, err := NewClient(conn, "sekrit")
 	must(t, err)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	var pong map[string]bool
 	must(t, client.Call(context.Background(), "sys/ping", nil, &pong))
 	if !pong["pong"] {

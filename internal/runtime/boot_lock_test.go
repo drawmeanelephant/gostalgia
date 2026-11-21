@@ -74,7 +74,7 @@ func TestRefusedBootDoesNotTouchRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed lock: %v", err)
 	}
-	defer lock.Close()
+	defer func() { _ = lock.Close() }()
 
 	if _, err := Boot(context.Background(), Options{Root: root, LogOutput: io.Discard}); !errors.Is(err, platform.ErrLocked) {
 		t.Fatalf("boot on locked root = %v, want ErrLocked", err)

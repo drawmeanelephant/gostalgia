@@ -116,7 +116,7 @@ func Boot(ctx context.Context, opts Options) (_ *Runtime, retErr error) {
 	}
 	defer func() {
 		if retErr != nil {
-			rootLock.Close()
+			_ = rootLock.Close()
 		}
 	}()
 	if err := checkNotRunning(root); err != nil {
@@ -462,7 +462,7 @@ func (rt *Runtime) Shutdown(reason string) {
 			// runtime.json) must finish while the claim is still ours, so
 			// a next boot cannot write its record and then lose it to an
 			// exiting instance's cleanup.
-			rt.rootLock.Close()
+			_ = rt.rootLock.Close()
 		}
 		close(rt.completed)
 	})
@@ -525,7 +525,7 @@ func checkNotRunning(root string) error {
 	if err != nil {
 		return nil // nothing is listening: stale file from a dead instance
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(checkProbeTimeout))
 	client, err := ipc.NewClient(conn, info.Token)
 	if err != nil {
@@ -536,6 +536,6 @@ func checkNotRunning(root string) error {
 		}
 		return fmt.Errorf("runtime: endpoint %s answers but cannot authenticate the recorded instance; treating root as occupied: %w", info.Endpoint, err)
 	}
-	client.Close()
+	_ = client.Close()
 	return fmt.Errorf("runtime: environment is already running (pid %d, endpoint %s)", info.PID, info.Endpoint)
 }
