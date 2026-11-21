@@ -464,14 +464,14 @@ func TestTasksTableCollapsesColumnsAndKeepsSelection(t *testing.T) {
 			t.Fatalf("%dx%d: no PID/NAME header:\n%s", size[0], size[1], screen)
 		}
 		if size[0] >= 80 {
-			for _, title := range []string{"STATE", "RESTARTS", "CPU", "MEMORY"} {
+			for _, title := range []string{"STATE", "CPU", "MEMORY"} {
 				if !strings.Contains(header, title) {
 					t.Fatalf("%dx%d: %s collapsed with room to spare: %q", size[0], size[1], title, header)
 				}
 			}
 		}
 		if size[0] == 30 {
-			for _, title := range []string{"STATE", "RESTARTS", "CPU", "MEMORY"} {
+			for _, title := range []string{"STATE", "CPU", "MEMORY"} {
 				if strings.Contains(header, title) {
 					t.Fatalf("30x10: %s kept instead of collapsing: %q", title, header)
 				}

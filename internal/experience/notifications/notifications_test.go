@@ -216,7 +216,7 @@ func TestRenderPanel(t *testing.T) {
 	}
 
 	// Populated panel with receipt
-	receipt := receipts.New(12, "worker", "failed", 1, "bad state", 0, "logs")
+	receipt := receipts.New(12, "worker", "failed", 1, "bad state", "logs")
 	mgr.Record(Notification{
 		Title:     "Worker Crashed",
 		Message:   "Worker exited unexpectedly",

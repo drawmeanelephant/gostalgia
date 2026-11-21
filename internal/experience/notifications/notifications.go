@@ -37,7 +37,7 @@ type Notification struct {
 	Seen      bool                   `json:"seen"`
 	Receipt   *receipts.CrashReceipt `json:"receipt,omitempty"`
 	// Badge names the notification in place of its level's label, for
-	// notices that are neither crashes nor restart backoffs.
+	// notices that are not crashes.
 	Badge string `json:"badge,omitempty"`
 	// Wrap lets the notification's toast wrap its message over up to
 	// maxToastRows rows rather than cut it to one, for a message the reader

@@ -171,7 +171,7 @@ func TestNotificationCenterAndToasts(t *testing.T) {
 	m := New(context.Background(), client, nil)
 
 	// Record notification (crashed app)
-	r := receipts.New(10, "broken-daemon", "failed", 1, "nil pointer", 1, "panic: nil pointer dereference")
+	r := receipts.New(10, "broken-daemon", "failed", 1, "nil pointer", "panic: nil pointer dereference")
 	m.receipts.Add(r)
 	m.notifs.Record(notifications.Notification{
 		ID:        "ntf-1",
@@ -292,7 +292,6 @@ func TestProcessLifecycleCrashDiagnostics(t *testing.T) {
 	client.procs[0].State = "failed"
 	client.procs[0].ExitCode = 2
 	client.procs[0].Error = "terminated by signal"
-	client.procs[0].RestartCount = 1
 
 	cmd := m.handleProcessUpdates(client.procs)
 	if cmd == nil {
@@ -354,7 +353,7 @@ func TestCommandsTasksNotificationsReceiptsReap(t *testing.T) {
 	}
 
 	// Test 'receipt' commands
-	r := receipts.New(20, "job", "failed", 1, "oom", 0, "out of memory")
+	r := receipts.New(20, "job", "failed", 1, "oom", "out of memory")
 	m.receipts.Add(r)
 
 	resList := execute(context.Background(), client, "/users/guest", "receipt")
