@@ -189,7 +189,7 @@ func (s *GrantStore) issue(appID, envPath string, access AccessMode, recursive, 
 		}
 	}
 	if IsProfileTrashPath(cleanPath) {
-		return nil, errors.New("vfs: cannot grant access to profile trash")
+		return nil, false, errors.New("vfs: cannot grant access to profile trash")
 	}
 
 	b := make([]byte, 16)
