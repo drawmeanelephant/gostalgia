@@ -2,8 +2,10 @@ package security
 
 import (
 	"fmt"
+	"net/netip"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -141,14 +143,14 @@ func (p OperatorPolicy) CheckNetwork(targetURL string) error {
 		return fmt.Errorf("%w: plaintext HTTP is not allowed by policy (HTTPS required)", ErrPolicyNetworkDenied)
 	}
 
-	hostname := strings.ToLower(u.Hostname())
+	hostname := canonicalizeHost(u.Hostname())
 	if hostname == "" {
 		return fmt.Errorf("%w: empty host", ErrPolicyNetworkDenied)
 	}
 
 	// Check blocked hosts
 	for _, blocked := range p.Network.BlockedHosts {
-		if strings.EqualFold(hostname, blocked) {
+		if hostname == canonicalizeHost(blocked) {
 			return fmt.Errorf("%w: host %q is blocked by policy", ErrPolicyNetworkDenied, hostname)
 		}
 	}
@@ -157,7 +159,8 @@ func (p OperatorPolicy) CheckNetwork(targetURL string) error {
 	if len(p.Network.AllowedHosts) > 0 {
 		matched := false
 		for _, allowed := range p.Network.AllowedHosts {
-			if allowed == "*" || strings.EqualFold(hostname, allowed) {
+			allowed = canonicalizeHost(allowed)
+			if allowed == "*" || hostname == allowed {
 				matched = true
 				break
 			}
@@ -203,6 +206,85 @@ func (p OperatorPolicy) CheckNetwork(targetURL string) error {
 	}
 
 	return nil
+}
+
+var errNotIPv4Literal = errors.New("not an IPv4 literal")
+
+// canonicalizeHost normalizes a request host or host-list entry so alternate
+// spellings of the same destination compare equal: it lowercases, strips a
+// single trailing dot (the fully-qualified form of a DNS name), drops brackets
+// around IPv6 literals, and normalizes IP literals to canonical netip text.
+// Besides standard forms it recognizes the IPv4 spellings inet_aton-style
+// system resolvers accept — bare decimal ("2130706433"), hexadecimal
+// ("0x7f000001"), octal ("0177.0.0.1"), mixed-radix, and abbreviated dotted
+// components ("127.1") — since the dialer resolves those to the same address.
+func canonicalizeHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Unmap().String()
+	}
+	if addr, err := parseIPv4Literal(host); err == nil {
+		return addr.String()
+	}
+	return host
+}
+
+// parseIPv4Literal parses the non-standard IPv4 literal forms that
+// inet_aton(3)-style resolvers accept but netip.ParseAddr rejects: up to four
+// decimal/octal/hexadecimal components where the last component expands to
+// fill the remaining address bytes ("127.0.0.1", "127.1", "10.0.513",
+// "0x7f.0.0.1", "2130706433").
+func parseIPv4Literal(host string) (netip.Addr, error) {
+	parts := strings.Split(host, ".")
+	if len(parts) > 4 {
+		return netip.Addr{}, errNotIPv4Literal
+	}
+	vals := make([]uint64, len(parts))
+	for i, part := range parts {
+		v, err := parseIPv4Component(part)
+		if err != nil {
+			return netip.Addr{}, errNotIPv4Literal
+		}
+		vals[i] = v
+	}
+	for _, v := range vals[:len(vals)-1] {
+		if v > 0xff {
+			return netip.Addr{}, errNotIPv4Literal
+		}
+	}
+	lastBits := uint(8 * (5 - len(vals)))
+	if last := vals[len(vals)-1]; last >= 1<<lastBits {
+		return netip.Addr{}, errNotIPv4Literal
+	}
+	ip := uint64(0)
+	for _, v := range vals[:len(vals)-1] {
+		ip = ip<<8 | v
+	}
+	ip = ip<<lastBits | vals[len(vals)-1]
+	return netip.AddrFrom4([4]byte{byte(ip >> 24), byte(ip >> 16), byte(ip >> 8), byte(ip)}), nil
+}
+
+// parseIPv4Component parses one inet_aton-style component: hexadecimal with a
+// "0x" prefix, octal with a leading "0", otherwise decimal.
+func parseIPv4Component(part string) (uint64, error) {
+	if part == "" || part[0] == '+' || part[0] == '-' {
+		return 0, errNotIPv4Literal
+	}
+	base := 10
+	switch {
+	case strings.HasPrefix(part, "0x"):
+		base, part = 16, part[2:]
+	case len(part) > 1 && part[0] == '0':
+		base, part = 8, part[1:]
+	}
+	if part == "" {
+		return 0, errNotIPv4Literal
+	}
+	return strconv.ParseUint(part, base, 32)
 }
 
 // PolicyStore provides thread-safe access to the runtime OperatorPolicy.
