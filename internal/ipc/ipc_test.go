@@ -158,6 +158,85 @@ func TestClientRoundTrip(t *testing.T) {
 	}
 }
 
+// #260: callbacks registered via OnConnClose run when the serving
+// connection drops, so connection-bound state — session attachments — is
+// reclaimed even when the client never asks for release.
+func TestOnConnCloseRunsOnDisconnect(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan string, 2)
+	r := NewRouter()
+	must(t, r.Handle("test/bind", func(ctx context.Context, req Request) (any, error) {
+		var p struct {
+			Key string `json:"key"`
+		}
+		_ = DecodeParams(req.Params, &p)
+		OnConnClose(ctx, func() { released <- p.Key })
+		return map[string]any{"bound": p.Key}, nil
+	}))
+	log := slog.New(slog.NewTextHandler(discard{}, nil))
+	srv := NewServer(ln, r, "sekrit", log)
+	t.Cleanup(func() { srv.Close() })
+	go srv.Serve()
+
+	dial := func() *Client {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := NewClient(conn, "sekrit")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// First connection binds a key, then drops without releasing it.
+	c1 := dial()
+	if err := c1.Call(ctx, "test/bind", map[string]string{"key": "att-1"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	must(t, c1.Close())
+	select {
+	case got := <-released:
+		if got != "att-1" {
+			t.Fatalf("reaped %q, want att-1", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnConnClose callback never ran on disconnect")
+	}
+
+	// A callback registered on a live connection does not run early, and
+	// in-process dispatch (no connection) is a safe no-op.
+	if got := connReaperOf(context.Background()); got != nil {
+		t.Fatal("background context carried a connection reaper")
+	}
+	c2 := dial()
+	defer c2.Close()
+	if err := c2.Call(ctx, "test/bind", map[string]string{"key": "att-2"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-released:
+		t.Fatalf("reaper fired early on a live connection: %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	must(t, c2.Close())
+	select {
+	case got := <-released:
+		if got != "att-2" {
+			t.Fatalf("reaped %q, want att-2", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnConnClose callback never ran for second connection")
+	}
+}
+
 func TestClientBadTokenRejected(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -240,6 +240,12 @@ func (s *Server) handleConn(conn net.Conn) {
 
 	authCtx := WithPrincipal(WithCapabilities(ctx, caps), principal)
 	token := p.Token
+	// Connection-bound state registered by handlers (session attachments)
+	// is reclaimed here no matter how the connection ends — clean quit,
+	// crash, or revoked credential.
+	reaper := &connReaper{}
+	defer reaper.run()
+	authCtx = context.WithValue(authCtx, connReaperKey{}, reaper)
 	stream := &eventStream{}
 	defer stream.close()
 	authCtx = context.WithValue(authCtx, streamKey{}, stream)
