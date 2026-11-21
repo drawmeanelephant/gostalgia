@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	"gostalgia/internal/ipc"
 	"gostalgia/internal/security"
 	"gostalgia/internal/vfs"
 )
@@ -312,6 +315,63 @@ func TestFSSizeLimitsOverIPC(t *testing.T) {
 	if resp.OK {
 		t.Fatal("fs/save exceeding MaxIPCWriteLimit should fail")
 	}
+}
+
+// Issue #264: a write at the documented MaxIPCWriteLimit must survive the
+// wire end-to-end — the base64 envelope of a 4 MiB payload overflows the
+// old 4 MiB frame cap, and a frame rejection must fail only that call, not
+// the whole connection.
+func TestFSWriteDocumentedLimitOverSocket(t *testing.T) {
+	env := newTestEnv(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	must(t, err)
+	srv := ipc.NewServer(ln, env.router, "test-token", nil)
+	go srv.Serve()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	must(t, err)
+	client, err := ipc.NewClient(conn, "test-token")
+	must(t, err)
+	t.Cleanup(func() { client.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	data := make([]byte, vfs.MaxIPCWriteLimit)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	err = client.Call(ctx, "fs/write", map[string]string{
+		"path":        "/users/guest/documents/big.bin",
+		"data_base64": base64.StdEncoding.EncodeToString(data),
+	}, nil)
+	if err != nil {
+		t.Fatalf("fs/write at the documented limit failed end-to-end: %v", err)
+	}
+
+	var stat struct {
+		Size int64 `json:"size"`
+	}
+	must(t, client.Call(ctx, "fs/stat", map[string]string{
+		"path": "/users/guest/documents/big.bin",
+	}, &stat))
+	if stat.Size != int64(len(data)) {
+		t.Fatalf("stat size = %d, want %d", stat.Size, len(data))
+	}
+
+	// A request whose frame cannot fit at all fails only that call; the
+	// connection and its other calls survive.
+	err = client.Call(ctx, "fs/write", map[string]string{
+		"path":        "/users/guest/documents/too-big.bin",
+		"data_base64": base64.StdEncoding.EncodeToString(make([]byte, 2*vfs.MaxIPCWriteLimit)),
+	}, nil)
+	if err == nil {
+		t.Fatal("frame-overflowing write unexpectedly succeeded")
+	}
+	must(t, client.Call(ctx, "fs/stat", map[string]string{
+		"path": "/users/guest/documents/big.bin",
+	}, &stat))
 }
 
 func TestAppPrivateStorageIsolationOverIPC(t *testing.T) {
