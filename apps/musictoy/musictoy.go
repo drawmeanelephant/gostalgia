@@ -31,7 +31,9 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"strconv"
 	"strings"
 	"sync"
@@ -210,23 +212,32 @@ func (t *Toy) Stop(ctx context.Context) error {
 // is simply a fresh blank pattern. A corrupt or wrong-version file is an
 // honest error banner over a usable fresh state; the bad bytes are left
 // alone until the next real change saves over them. A denied read is also
-// reported, since nothing will persist without the grant.
+// reported, since nothing will persist without the grant. Any other read
+// failure is NOT "no save yet": the app reports an honest error and stays
+// unloaded so the next call retries — a fresh pattern must never overwrite
+// a save it could not read.
 func (t *Toy) ensureLoadedLocked(ctx context.Context) error {
 	if t.loaded {
 		return nil
 	}
-	t.loaded = true
 
 	var out struct {
 		DataBase64 string `json:"data_base64"`
 	}
 	err := t.app.Call(ctx, "fs/read", map[string]string{"path": statePath}, &out)
 	if err != nil {
-		if looksDenied(err) {
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			// no save yet: fresh pattern
+		case errors.Is(err, fs.ErrPermission):
 			t.lastError = fmt.Sprintf("storage access denied (%v) — patterns will not be saved", err)
+		default:
+			return fmt.Errorf("saved patterns could not be loaded: %w", err)
 		}
-		return nil // no save yet: fresh pattern
+		t.loaded = true
+		return nil
 	}
+	t.loaded = true
 	data, err := base64.StdEncoding.DecodeString(out.DataBase64)
 	if err != nil {
 		t.lastError = "saved patterns are unreadable — starting fresh; the next change saves over them"
@@ -251,13 +262,6 @@ func (t *Toy) ensureLoadedLocked(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-// looksDenied reports whether an fs error is a grant denial rather than a
-// missing file.
-func looksDenied(err error) bool {
-	msg := err.Error()
-	return strings.Contains(msg, "denied") || strings.Contains(msg, "permission")
 }
 
 // sanitizeLocked repairs loaded state in place and reports whether it

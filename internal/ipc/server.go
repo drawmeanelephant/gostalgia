@@ -230,20 +230,20 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 	if req.Method != "auth" {
-		_ = writeResponse(w, Response{ID: req.ID, Error: "unauthorized: first request must be auth"})
+		_ = writeResponse(w, Response{ID: req.ID, Error: "unauthorized: first request must be auth", Code: CodeUnauthorized})
 		return
 	}
 	var p struct {
 		Token string `json:"token"`
 	}
 	if err := DecodeParams(req.Params, &p); err != nil {
-		_ = writeResponse(w, Response{ID: req.ID, Error: err.Error()})
+		_ = writeResponse(w, Response{ID: req.ID, Error: err.Error(), Code: CodeInvalid})
 		return
 	}
 	principal, caps, err := s.auth.Authenticate(p.Token)
 	if err != nil {
 		s.log.Warn("ipc: rejected connection with invalid token", "remote", conn.RemoteAddr(), "err", err)
-		_ = writeResponse(w, Response{ID: req.ID, Error: err.Error()})
+		_ = writeResponse(w, Response{ID: req.ID, Error: err.Error(), Code: CodeUnauthorized})
 		return
 	}
 	if err := writeResponse(w, Response{ID: req.ID, OK: true}); err != nil {
@@ -307,7 +307,7 @@ func (s *Server) handleConn(conn net.Conn) {
 				if !isResponse {
 					return
 				}
-				resp = Response{ID: resp.ID, Error: "unauthorized: credential revoked"}
+				resp = Response{ID: resp.ID, Error: "unauthorized: credential revoked", Code: CodeUnauthorized}
 			}
 			_ = conn.SetWriteDeadline(time.Now().Add(s.writeTimeout))
 			if isResponse {
@@ -382,7 +382,7 @@ func (s *Server) handleConn(conn net.Conn) {
 			reply := queuedResponse{}
 			if err := s.auth.Validate(token); err != nil {
 				s.log.Warn("ipc: connection credential invalidated", "remote", conn.RemoteAddr(), "err", err)
-				reply.response = Response{ID: req.ID, Error: "unauthorized: credential revoked"}
+				reply.response = Response{ID: req.ID, Error: "unauthorized: credential revoked", Code: CodeUnauthorized}
 				reply.disconnect = true
 			} else {
 				if curPrincipal, _, err := s.auth.Authenticate(token); err == nil {
@@ -453,7 +453,7 @@ func writeFrame(w *bufio.Writer, frame any) error {
 	}
 	if len(b)+1 >= maxLine {
 		if resp, ok := frame.(Response); ok {
-			b, _ = json.Marshal(Response{ID: resp.ID, Error: "ipc: response exceeds frame limit"})
+			b, _ = json.Marshal(Response{ID: resp.ID, Error: "ipc: response exceeds frame limit", Code: CodeTooLarge})
 		} else {
 			return errFrameTooLarge
 		}

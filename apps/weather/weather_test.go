@@ -38,6 +38,7 @@ type harness struct {
 	fetch      func(url string) fetchReply
 	fetchCalls []string
 	denyFS     bool
+	readErr    error // if set, the next fs/read fails once with this error
 	seq        atomic.Int64
 
 	app      *Weather
@@ -106,12 +107,17 @@ func (h *harness) call(_ context.Context, method string, params, out any) error 
 	}
 	switch method {
 	case "fs/read":
+		if h.readErr != nil {
+			err := h.readErr
+			h.readErr = nil
+			return err
+		}
 		if h.denyFS {
-			return errors.New("permission denied: missing capability \"fs.read\"")
+			return &sdk.Error{Code: sdk.CodePermissionDenied, Message: "permission denied: missing capability \"fs.read\""}
 		}
 		data, ok := h.files[p.Path]
 		if !ok {
-			return fmt.Errorf("not_found: %s", p.Path)
+			return &sdk.Error{Code: sdk.CodeNotFound, Message: fmt.Sprintf("not_found: %s", p.Path)}
 		}
 		return reply(map[string]any{"path": p.Path, "data_base64": base64.StdEncoding.EncodeToString(data)})
 	case "fs/save":
@@ -982,5 +988,35 @@ func TestRoutesRoundTrip(t *testing.T) {
 	}
 	if msg := h.failRoute(t, "refresh", nil); !strings.Contains(msg, "save a place") {
 		t.Errorf("refresh with no places = %q", msg)
+	}
+}
+
+// A transient fs/read failure (a canceled call racing the first view, a
+// host I/O error, the read-size bound) is not "no save yet": the app must
+// say so honestly, retry the load, and never let the next change overwrite
+// the saved places.
+func TestTransientReadErrorNeverOverwritesPlaces(t *testing.T) {
+	h := newHarness(t)
+	h.saveFirst(t, 1) // searches Paris and saves it as loc_1
+
+	h2 := newHarness(t)
+	h2.files = h.files
+	h2.readErr = context.Canceled // first fs/read fails once, transiently
+
+	v := h2.view(t, 1)
+	if v.State != sdk.ViewError || v.Error == "" {
+		t.Fatalf("transient read failure view = %+v, want an honest error", v)
+	}
+
+	// The retry loads the real file; saving another place then extends
+	// the list, not replaces it.
+	h2.act(t, 1, "search", "", map[string]string{"place": "paris again"})
+	v = h2.act(t, 1, "save", "cand_1", nil) // Paris, Texas — other coords
+	if findItem(v, "loc_2") == nil {
+		t.Fatalf("second save after transient failure produced no loc_2: %+v", v.Items)
+	}
+	st := h2.readState(t)
+	if len(st.Locations) != 2 {
+		t.Fatalf("%d place(s) on disk after a transient read error and one save, want 2", len(st.Locations))
 	}
 }

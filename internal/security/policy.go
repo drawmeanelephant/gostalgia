@@ -11,10 +11,18 @@ import (
 	"sync"
 )
 
+// policyError is a policy denial sentinel: the message keeps its
+// "policy_denied:" prefix for text consumers while ErrorCode exposes the
+// same classification structurally to the IPC layer.
+type policyError string
+
+func (e policyError) Error() string     { return string(e) }
+func (e policyError) ErrorCode() string { return "policy_denied" }
+
 var (
-	ErrPolicyDisabled         = errors.New("policy_denied: integration is disabled by operator policy")
-	ErrPolicyHostFSNotAllowed = errors.New("policy_denied: host path is not within allowed paths")
-	ErrPolicyNetworkDenied    = errors.New("policy_denied: network egress denied by operator policy")
+	ErrPolicyDisabled         = policyError("policy_denied: integration is disabled by operator policy")
+	ErrPolicyHostFSNotAllowed = policyError("policy_denied: host path is not within allowed paths")
+	ErrPolicyNetworkDenied    = policyError("policy_denied: network egress denied by operator policy")
 )
 
 // ClipboardPolicy controls access to the host system clipboard.
