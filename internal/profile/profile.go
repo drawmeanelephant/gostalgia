@@ -183,6 +183,11 @@ func (m *Manager) load() error {
 
 	var state serializedState
 	if err := json.Unmarshal(data, &state); err != nil {
+		if kept := m.quarantineLocked(); kept != "" {
+			m.log.Error("profiles: registry is corrupt; quarantined damaged file before restoring defaults",
+				"path", m.storePath, "quarantined_to", kept, "error", err)
+			return fmt.Errorf("parse profiles json: %w (damaged file kept at %s)", err, kept)
+		}
 		return fmt.Errorf("parse profiles json: %w", err)
 	}
 
@@ -204,6 +209,27 @@ func (m *Manager) load() error {
 	}
 
 	return nil
+}
+
+// quarantineLocked renames the damaged registry aside — to
+// profiles.json.corrupt-<timestamp> — so the default registry that the
+// caller is about to write does not destroy a still-salvageable file.
+// It returns the quarantine path, or "" when the file could not be moved.
+func (m *Manager) quarantineLocked() string {
+	if m.fsys == nil {
+		return ""
+	}
+	rel := fsPath(m.storePath)
+	target := fmt.Sprintf("%s.corrupt-%s", m.storePath, time.Now().UTC().Format("20060102T150405Z"))
+	if err := m.fsys.Rename(rel, fsPath(target)); err != nil {
+		// A same-second second quarantine needs a unique name rather than
+		// a lost file.
+		target = fmt.Sprintf("%s.corrupt-%d", m.storePath, time.Now().UTC().UnixNano())
+		if err := m.fsys.Rename(rel, fsPath(target)); err != nil {
+			return ""
+		}
+	}
+	return target
 }
 
 func (m *Manager) saveLocked() error {

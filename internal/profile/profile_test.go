@@ -196,3 +196,69 @@ func TestProfileManagerCorruptRecovery(t *testing.T) {
 		t.Fatalf("expected 1 profile in recovered store, got %d", len(mgr.List()))
 	}
 }
+
+// #261: a damaged profiles.json must be quarantined — renamed aside —
+// before the default guest-only registry is written over its path, so an
+// operator can still salvage the mostly-readable original.
+func TestProfileManagerCorruptQuarantine(t *testing.T) {
+	memFS := vfs.NewMem()
+	mgr, err := NewManager(memFS, DefaultProfilesPath, nil, slog.Default())
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+	if _, err := mgr.Create("alice", "Alice"); err != nil {
+		t.Fatalf("Create alice failed: %v", err)
+	}
+	if _, err := mgr.Create("bob", "Bob"); err != nil {
+		t.Fatalf("Create bob failed: %v", err)
+	}
+
+	// Corrupt one byte of the registry: invalid JSON overall, but alice and
+	// bob are still plainly readable inside the damaged file.
+	data, err := memFS.ReadFile("config/profiles.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data[0] = 'x'
+	if err := memFS.WriteFile("config/profiles.json", data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, err := NewManager(memFS, DefaultProfilesPath, nil, slog.Default())
+	if err != nil {
+		t.Fatalf("recovery boot failed: %v", err)
+	}
+	if got := len(recovered.List()); got != 1 || recovered.ActiveID() != DefaultProfileID {
+		t.Fatalf("expected guest-only recovered registry, got %d profiles active=%s", got, recovered.ActiveID())
+	}
+
+	entries, err := memFS.ReadDir("config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var quarantined []string
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "profiles.json.corrupt-") {
+			quarantined = append(quarantined, e.Name())
+		}
+	}
+	if len(quarantined) != 1 {
+		t.Fatalf("files matching profiles.json.corrupt-* = %v, want exactly 1", quarantined)
+	}
+	salvage, err := memFS.ReadFile("config/" + quarantined[0])
+	if err != nil {
+		t.Fatalf("read quarantined copy: %v", err)
+	}
+	if !strings.Contains(string(salvage), "alice") || !strings.Contains(string(salvage), "bob") {
+		t.Fatal("quarantined copy lost the original profile data")
+	}
+
+	// The fresh registry still parses as the guest-only default.
+	state, err := memFS.ReadFile("config/profiles.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(state), `"guest"`) || strings.Contains(string(state), "alice") {
+		t.Fatalf("fresh registry is not the guest-only default: %s", state)
+	}
+}

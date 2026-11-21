@@ -240,6 +240,9 @@ and personal workspace separation under `/users/<profile_id>/`:
   favorites, and workspace states are partitioned per user directory.
 - **Profile registry**: Profiles are recorded in `/config/profiles.json` and managed
   via `profile.Manager`. A default `guest` profile is seeded at initial environment boot.
+  If the registry exists but fails to parse, the damaged file is quarantined to
+  `profiles.json.corrupt-<timestamp>` before the default guest registry is written, so a
+  mostly-readable original is never destroyed silently.
 - **Dynamic profile switching**: Calling `Switch(profileID)` publishes transition
   events (`profile.switched`), dynamically reconfigures the layered configuration store
   (`LayeredStore.SetUserStore`), points document search, recents, and favorites to the
