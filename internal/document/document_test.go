@@ -678,6 +678,82 @@ func TestHandoffGrantIsSessionBound(t *testing.T) {
 	}
 }
 
+// #268: re-opening one document in a running app reuses the live session
+// grant instead of minting a duplicate per handoff, and session teardown
+// reaps the records so the store never accumulates them.
+func TestHandoffSessionGrantReuseAndReaping(t *testing.T) {
+	v, grants := setupTestVFS(t)
+	assoc := NewAssociationTable()
+	recents := NewRecentsStore(v, grants, "/users/guest/config/recents.json")
+	launcher := newMockLauncher()
+	handoff := NewHandoffManager(v, grants, assoc, recents, launcher, newMockDispatcher())
+
+	doc := "/users/guest/documents/reread.txt"
+	_ = v.SaveAtomic(doc, []byte("data"), 0o644)
+	op := security.OperatorPrincipal(security.User{Name: "guest"})
+
+	const opens = 200
+	var firstGrant string
+	for i := 0; i < opens; i++ {
+		res, err := handoff.Handoff(context.Background(), op, sdk.HandoffRequest{
+			Version: sdk.DocumentHandoffVersion, Path: doc, AppID: "com.gostalgia.notes"})
+		if err != nil {
+			t.Fatalf("handoff %d failed: %v", i, err)
+		}
+		if firstGrant == "" {
+			firstGrant = res.GrantID
+		} else if res.GrantID != firstGrant {
+			t.Fatalf("handoff %d minted a duplicate grant for the same document", i)
+		}
+	}
+
+	live := 0
+	for _, g := range grants.List("com.gostalgia.notes") {
+		if !g.Revoked {
+			live++
+		}
+	}
+	if live != 1 {
+		t.Fatalf("after opening one document %d times in a running app: %d live grants for the same path", opens, live)
+	}
+
+	grants.RevokeAppSession("com.gostalgia.notes")
+	live = 0
+	total := 0
+	for _, g := range grants.List("com.gostalgia.notes") {
+		total++
+		if !g.Revoked {
+			live++
+		}
+	}
+	if live != 0 {
+		t.Fatal("session-bound grant still live after app exit")
+	}
+	if total > opens/2 {
+		t.Fatalf("grants never reaped: store still holds %d records for one document", total)
+	}
+}
+
+// doc/handoff issues non-recursive single-document grants; a directory
+// handoff would mint a grant that cannot describe subtree access honestly,
+// so directories are rejected outright.
+func TestHandoffRejectsDirectory(t *testing.T) {
+	v, grants := setupTestVFS(t)
+	assoc := NewAssociationTable()
+	recents := NewRecentsStore(v, grants, "/users/guest/config/recents.json")
+	handoff := NewHandoffManager(v, grants, assoc, recents, newMockLauncher(), newMockDispatcher())
+
+	_, err := handoff.Handoff(context.Background(),
+		security.OperatorPrincipal(security.User{Name: "guest"}),
+		sdk.HandoffRequest{Version: sdk.DocumentHandoffVersion, Path: "/users/guest/documents", AppID: "com.gostalgia.files"})
+	if err == nil {
+		t.Fatal("handoff of a directory succeeded")
+	}
+	if got := len(grants.List("com.gostalgia.files")); got != 0 {
+		t.Fatalf("directory handoff minted %d grants", got)
+	}
+}
+
 func TestDocumentStoreProfileSwitch(t *testing.T) {
 	v := vfs.New(vfs.NewMem())
 	_ = v.MkdirAll("/users/guest/documents")

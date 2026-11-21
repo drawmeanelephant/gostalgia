@@ -97,66 +97,107 @@ type Grant struct {
 	RevokedAt    time.Time `json:"revoked_at,omitempty"`
 }
 
+// revokedGrantLimit bounds the retained set of revoked grant tombstones kept
+// for diagnostics — the same reaping applied to TokenStore: revocation moves
+// the record out of the live set so CheckAccess, FindMatchingGrant, and
+// byApp never grow with usage, while a bounded tombstone still lets Get and
+// List report the revocation.
+const revokedGrantLimit = 256
+
 // GrantStore manages scoped VFS grants, validation, and revocation.
 // Safe for concurrent use.
+//
+// grants and byApp hold only live, unrevoked grants. Revoked grants are
+// reaped into a bounded tombstone set so per-check scans stay proportional
+// to live authority rather than total history.
 type GrantStore struct {
-	mu     sync.RWMutex
-	grants map[string]*Grant
-	byApp  map[string][]string // appID -> []grantID
+	mu           sync.RWMutex
+	grants       map[string]*Grant   // live grants
+	byApp        map[string][]string // appID -> live grant IDs
+	revoked      map[string]*Grant   // bounded tombstones, grantID -> grant
+	revokedOrder []string            // tombstone IDs, oldest first
 }
 
 // NewGrantStore creates an empty grant store.
 func NewGrantStore() *GrantStore {
 	return &GrantStore{
-		grants: make(map[string]*Grant),
-		byApp:  make(map[string][]string),
+		grants:  make(map[string]*Grant),
+		byApp:   make(map[string][]string),
+		revoked: make(map[string]*Grant),
 	}
 }
 
 // Issue generates and records a new path-scoped grant for an application.
 func (s *GrantStore) Issue(appID, envPath string, access AccessMode, recursive bool) (*Grant, error) {
-	return s.issue(appID, envPath, access, recursive, false)
+	g, _, err := s.issue(appID, envPath, access, recursive, false)
+	return g, err
 }
 
 // IssueSession is Issue for grants bound to the application's current
 // run — a document handoff confers access only while the receiving app
 // runs. The runtime revokes session-bound grants when the app exits.
+// Re-issuing the same (app, path, mode, scope) reuses the live grant
+// instead of accumulating a duplicate per handoff.
 func (s *GrantStore) IssueSession(appID, envPath string, access AccessMode, recursive bool) (*Grant, error) {
+	g, _, err := s.issue(appID, envPath, access, recursive, true)
+	return g, err
+}
+
+// IssueSessionOnce is IssueSession but reports whether the returned grant
+// was newly minted. Re-opening a document reuses the live session grant for
+// the same (app, path, mode, scope); the caller needs to know which so that
+// a failed handoff revokes only authority it created and never pulls a
+// shared grant out from under a still-open document.
+func (s *GrantStore) IssueSessionOnce(appID, envPath string, access AccessMode, recursive bool) (*Grant, bool, error) {
 	return s.issue(appID, envPath, access, recursive, true)
 }
 
-func (s *GrantStore) issue(appID, envPath string, access AccessMode, recursive, sessionBound bool) (*Grant, error) {
+func (s *GrantStore) issue(appID, envPath string, access AccessMode, recursive, sessionBound bool) (*Grant, bool, error) {
 	if strings.TrimSpace(appID) == "" {
-		return nil, errors.New("vfs: app ID is required")
+		return nil, false, errors.New("vfs: app ID is required")
 	}
 	norm, err := Normalize(envPath)
 	if err != nil {
-		return nil, fmt.Errorf("vfs: invalid grant path: %w", err)
+		return nil, false, fmt.Errorf("vfs: invalid grant path: %w", err)
 	}
 	if norm == "." {
-		return nil, errors.New("vfs: cannot grant root")
+		return nil, false, errors.New("vfs: cannot grant root")
 	}
 	cleanPath := "/" + norm
 
 	// Cross-app isolation: cannot grant access to another app's private storage
 	if isPriv, owner := ParseAppPrivatePath(cleanPath); isPriv && owner != appID {
-		return nil, fmt.Errorf("vfs: cannot grant access to another application's private storage (%s)", owner)
+		return nil, false, fmt.Errorf("vfs: cannot grant access to another application's private storage (%s)", owner)
 	}
 	if norm == "apps/data" {
-		return nil, errors.New("vfs: cannot grant access to app private storage root")
+		return nil, false, errors.New("vfs: cannot grant access to app private storage root")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Re-opening a document reuses the live session grant for the same
+	// (app, path, mode, scope) instead of minting a duplicate per handoff.
+	// Standing grants are never deduplicated: an explicit fs/grant issue is
+	// an operator's deliberate act.
+	if sessionBound {
+		for _, id := range s.byApp[appID] {
+			if g, ok := s.grants[id]; ok && g.SessionBound &&
+				g.Path == cleanPath && g.Access == access && g.Recursive == recursive {
+				return cloneGrant(g), false, nil
+			}
+		}
 	}
 	if IsProfileTrashPath(cleanPath) {
-		return nil, errors.New("vfs: cannot grant access to profile trash")
+		return nil, false, errors.New("vfs: cannot grant access to profile trash")
 	}
 
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return nil, fmt.Errorf("vfs: generate grant id: %w", err)
+		return nil, false, fmt.Errorf("vfs: generate grant id: %w", err)
 	}
 	id := "grant-" + hex.EncodeToString(b)
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	g := &Grant{
 		ID:           id,
 		AppID:        appID,
@@ -168,29 +209,62 @@ func (s *GrantStore) issue(appID, envPath string, access AccessMode, recursive, 
 	}
 	s.grants[id] = g
 	s.byApp[appID] = append(s.byApp[appID], id)
-	return &Grant{
-		ID:           g.ID,
-		AppID:        g.AppID,
-		Path:         g.Path,
-		Access:       g.Access,
-		Recursive:    g.Recursive,
-		SessionBound: g.SessionBound,
-		CreatedAt:    g.CreatedAt,
-	}, nil
+	return cloneGrant(g), true, nil
+}
+
+func cloneGrant(g *Grant) *Grant {
+	copy := *g
+	return &copy
+}
+
+// unindexLocked drops id from appID's live-grant index, removing empty
+// entries. Callers must hold s.mu.
+func (s *GrantStore) unindexLocked(appID, id string) {
+	ids := s.byApp[appID]
+	for i, gid := range ids {
+		if gid == id {
+			s.byApp[appID] = append(ids[:i], ids[i+1:]...)
+			break
+		}
+	}
+	if len(s.byApp[appID]) == 0 {
+		delete(s.byApp, appID)
+	}
+}
+
+// reapLocked marks the grant revoked, removes it from the live set and
+// index, and retains a bounded tombstone so Get/List/CheckAccess can still
+// report the revocation. Callers must hold s.mu.
+func (s *GrantStore) reapLocked(id string, now time.Time) {
+	g, ok := s.grants[id]
+	if !ok {
+		return
+	}
+	g.Revoked = true
+	g.RevokedAt = now
+	delete(s.grants, id)
+	s.unindexLocked(g.AppID, id)
+	if _, ok := s.revoked[id]; !ok {
+		s.revokedOrder = append(s.revokedOrder, id)
+	}
+	s.revoked[id] = g
+	for len(s.revokedOrder) > revokedGrantLimit {
+		delete(s.revoked, s.revokedOrder[0])
+		s.revokedOrder = s.revokedOrder[1:]
+	}
 }
 
 // Revoke immediately invalidates a grant by its ID.
 func (s *GrantStore) Revoke(grantID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	g, ok := s.grants[grantID]
-	if !ok {
+	if _, ok := s.revoked[grantID]; ok {
+		return nil // already revoked: idempotent
+	}
+	if _, ok := s.grants[grantID]; !ok {
 		return fmt.Errorf("vfs: grant %q not found", grantID)
 	}
-	if !g.Revoked {
-		g.Revoked = true
-		g.RevokedAt = time.Now()
-	}
+	s.reapLocked(grantID, time.Now())
 	return nil
 }
 
@@ -199,11 +273,8 @@ func (s *GrantStore) RevokeApp(appID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for _, id := range s.byApp[appID] {
-		if g, ok := s.grants[id]; ok && !g.Revoked {
-			g.Revoked = true
-			g.RevokedAt = now
-		}
+	for _, id := range append([]string(nil), s.byApp[appID]...) {
+		s.reapLocked(id, now)
 	}
 }
 
@@ -215,31 +286,39 @@ func (s *GrantStore) RevokeAppSession(appID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for _, id := range s.byApp[appID] {
-		if g, ok := s.grants[id]; ok && g.SessionBound && !g.Revoked {
-			g.Revoked = true
-			g.RevokedAt = now
+	for _, id := range append([]string(nil), s.byApp[appID]...) {
+		if g, ok := s.grants[id]; ok && g.SessionBound {
+			s.reapLocked(id, now)
 		}
 	}
 }
 
-// Get returns a copy of a grant by its ID.
+// Get returns a copy of a grant by its ID, including recently revoked
+// grants retained in the bounded tombstone set.
 func (s *GrantStore) Get(grantID string) (Grant, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	g, ok := s.grants[grantID]
-	if !ok {
-		return Grant{}, false
+	if g, ok := s.grants[grantID]; ok {
+		return *g, true
 	}
-	return *g, true
+	if g, ok := s.revoked[grantID]; ok {
+		return *g, true
+	}
+	return Grant{}, false
 }
 
-// List returns all grants matching appID (or all grants if appID is empty).
+// List returns all grants matching appID (or all grants if appID is empty),
+// including recently revoked grants retained in the bounded tombstone set.
 func (s *GrantStore) List(appID string) []Grant {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []Grant
 	for _, g := range s.grants {
+		if appID == "" || g.AppID == appID {
+			out = append(out, *g)
+		}
+	}
+	for _, g := range s.revoked {
 		if appID == "" || g.AppID == appID {
 			out = append(out, *g)
 		}
@@ -299,15 +378,18 @@ func (s *GrantStore) CheckAccess(appID string, envPath string, mode AccessMode) 
 		}
 	}
 
-	// 2. Check path-scoped grants
+	// 2. Check path-scoped grants. The byApp index confines the scan to the
+	// caller's live grants; revoked tombstones are consulted only to report
+	// "grant revoked" rather than "no grant".
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var matchedRevoked bool
 	var matchedReadOnly bool
 
-	for _, g := range s.grants {
-		if g.AppID != appID {
+	for _, id := range s.byApp[appID] {
+		g, ok := s.grants[id]
+		if !ok {
 			continue
 		}
 		grantNorm, err := Normalize(g.Path)
@@ -322,11 +404,6 @@ func (s *GrantStore) CheckAccess(appID string, envPath string, mode AccessMode) 
 		}
 
 		if matches {
-			if g.Revoked {
-				matchedRevoked = true
-				continue
-			}
-
 			// Active grant matched: check access mode
 			if mode == AccessRead {
 				return nil // both read and read-write grants permit read
@@ -337,6 +414,20 @@ func (s *GrantStore) CheckAccess(appID string, envPath string, mode AccessMode) 
 				}
 				matchedReadOnly = true
 			}
+		}
+	}
+
+	for _, g := range s.revoked {
+		if g.AppID != appID {
+			continue
+		}
+		grantNorm, err := Normalize(g.Path)
+		if err != nil {
+			continue
+		}
+		if normPath == grantNorm || (g.Recursive && strings.HasPrefix(normPath, grantNorm+"/")) {
+			matchedRevoked = true
+			break
 		}
 	}
 
@@ -373,8 +464,9 @@ func (s *GrantStore) FindMatchingGrant(appID, envPath string) (*Grant, bool) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, g := range s.grants {
-		if g.AppID != appID || g.Revoked {
+	for _, id := range s.byApp[appID] {
+		g, ok := s.grants[id]
+		if !ok {
 			continue
 		}
 		grantNorm, err := Normalize(g.Path)
@@ -382,9 +474,40 @@ func (s *GrantStore) FindMatchingGrant(appID, envPath string) (*Grant, bool) {
 			continue
 		}
 		if normPath == grantNorm || (g.Recursive && strings.HasPrefix(normPath, grantNorm+"/")) {
-			copy := *g
-			return &copy, true
+			return cloneGrant(g), true
 		}
 	}
 	return nil, false
+}
+
+// CoversSubtree reports whether a live grant authorizes appID to perform
+// mode on envPath and every descendant beneath it — a recursive grant that
+// covers the path with sufficient access. Bulk operations on a directory
+// (copy, move, rename, remove, trash) read or mutate the whole subtree, so
+// a non-recursive grant on the directory itself is not enough: it confers
+// only the directory entry, never its children.
+func (s *GrantStore) CoversSubtree(appID, envPath string, mode AccessMode) bool {
+	normPath, err := Normalize(envPath)
+	if err != nil {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, id := range s.byApp[appID] {
+		g, ok := s.grants[id]
+		if !ok || !g.Recursive {
+			continue
+		}
+		grantNorm, err := Normalize(g.Path)
+		if err != nil {
+			continue
+		}
+		if normPath != grantNorm && !strings.HasPrefix(normPath, grantNorm+"/") {
+			continue
+		}
+		if mode == AccessRead || g.Access == AccessReadWrite {
+			return true
+		}
+	}
+	return false
 }

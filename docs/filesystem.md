@@ -168,6 +168,7 @@ Rather than open-ended access to the entire root, applications receive scoped vi
   - `path`: canonical environment path (e.g. `/users/guest/documents/report.txt` or `/shared/workspace`).
   - `access`: access mode (`read` or `read-write`).
   - `recursive`: whether access extends to all descendants of a directory.
+- A non-recursive grant on a directory covers the directory entry only: the app can stat and list it, but never reach its children. Bulk operations that read or mutate an entire subtree — `fs/copy`, `fs/move`, `fs/rename`, `fs/remove`, `fs/trash`, and trash `fs/restore`/`fs/trash/purge` of a directory entry — are denied on directory operands covered only by non-recursive grants. Copying, moving, or renaming a directory into a destination likewise requires recursive coverage at the destination, because descendants are created beneath it.
 - Confinement checks prevent grant expansion:
   - Path traversal (`..`) is rejected.
   - Host symlinks resolving outside the authorized root fail closed with `path_escape`.
@@ -177,7 +178,8 @@ Rather than open-ended access to the entire root, applications receive scoped vi
   - Operators revoke grants via `fs/grant/revoke`.
   - Revoked grants fail immediately on subsequent operations with `permission_denied: grant revoked`.
   - Grants are scoped to `app_id`; standing grants persist across application process restarts until explicitly revoked. Revoked grants remain revoked across restarts.
-  - Session-bound grants (`session_bound`, issued by `doc/handoff`) are bound to the receiving application's run: they are revoked when that app exits, crashes, or is stopped, and on any handoff failure after issuance.
+  - Session-bound grants (`session_bound`, issued by `doc/handoff`) are bound to the receiving application's run: they are revoked when that app exits, crashes, or is stopped, and on any handoff failure after issuance. Re-opening the same document reuses the live session grant for the same (app, path, mode) rather than minting a duplicate.
+  - Revoked grants are reaped out of the live grant set; a bounded tombstone set retains recent revocations so `fs/grant/list` can still report them without letting revoked records accumulate.
 
 ### 3. Trash Isolation
 - Trash is per profile: payloads and metadata live under the active profile's `/users/<profile_id>/.trash` and are repointed on profile switch.
