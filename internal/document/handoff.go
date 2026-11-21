@@ -78,11 +78,20 @@ func (h *HandoffManager) Handoff(ctx context.Context, caller security.Principal,
 
 	// Check if document exists on VFS
 	if h.vfs != nil {
-		if _, err := h.vfs.Stat(cleanPath); err != nil {
+		info, err := h.vfs.Stat(cleanPath)
+		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
 				return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrNotFound, Message: "document not found"}
 			}
 			return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrIO, Message: err.Error()}
+		}
+		// Handoff issues a non-recursive grant covering exactly the handed
+		// path; on a directory that shape confers only the entry itself and
+		// cannot describe subtree access honestly, so directories are not
+		// handoff targets. Directory association (browse a folder in Files)
+		// runs on the app's own standing grants instead.
+		if info.IsDir() {
+			return nil, &vfs.Error{Op: "handoff", Path: cleanPath, Code: vfs.ErrIsDir, Message: "cannot hand off a directory"}
 		}
 	}
 
@@ -153,18 +162,23 @@ func (h *HandoffManager) Handoff(ctx context.Context, caller security.Principal,
 	// Issue a scoped grant for the selected document ONLY to the target
 	// application. recursive: false ensures the target receives access to
 	// cleanPath and NOT to any parent directory, siblings, or descendants.
-	// The grant is session-bound: it is revoked when the target app's run
-	// ends, and it is revoked below if the open dispatch fails.
+	// The grant is session-bound: it is reaped when the target app's run
+	// ends. Re-opening the same document reuses the live grant rather than
+	// minting a duplicate, and a failed open dispatch revokes the grant only
+	// when this handoff issued it — revoking a reused grant would cut off a
+	// document still open in the running app.
 	var grantID string
+	var grantIssued bool
 	if h.grants != nil {
-		grant, err := h.grants.IssueSession(targetApp, cleanPath, accessMode, false)
+		grant, issued, err := h.grants.IssueSessionOnce(targetApp, cleanPath, accessMode, false)
 		if err != nil {
 			return nil, fmt.Errorf("handoff: failed to issue scoped grant: %w", err)
 		}
 		grantID = grant.ID
+		grantIssued = issued
 	}
 	revokeGrant := func() {
-		if grantID != "" && h.grants != nil {
+		if grantIssued && grantID != "" && h.grants != nil {
 			_ = h.grants.Revoke(grantID)
 		}
 	}
