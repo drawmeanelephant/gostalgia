@@ -243,6 +243,11 @@ and personal workspace separation under `/users/<profile_id>/`:
   If the registry exists but fails to parse, the damaged file is quarantined to
   `profiles.json.corrupt-<timestamp>` before the default guest registry is written, so a
   mostly-readable original is never destroyed silently.
+- **Profile deletion lifecycle**: `profile/delete` removes the registry entry and the
+  `/users/<id>/` tree, and first closes every live session owned by the profile. Its
+  shared workspace store is retired before the tree comes down, so a still-live writer
+  cannot resurrect deleted state and a profile re-created under the same id inherits
+  no workspace history.
 - **Dynamic profile switching**: Calling `Switch(profileID)` publishes transition
   events (`profile.switched`), dynamically reconfigures the layered configuration store
   (`LayeredStore.SetUserStore`), points document search, recents, and favorites to the

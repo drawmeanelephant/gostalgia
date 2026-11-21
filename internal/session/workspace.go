@@ -84,6 +84,11 @@ func SanitizeHistoryEntry(line string) (string, bool) {
 	return cleaned, true
 }
 
+// ErrWorkspaceRetired is returned by writes to a workspace store whose
+// profile was deleted: persistence stops rather than recreating the
+// removed /users/<id> tree.
+var ErrWorkspaceRetired = errors.New("session: workspace store retired")
+
 // WorkspaceStore manages atomic persistence and retrieval of workspace state.
 type WorkspaceStore struct {
 	mu         sync.RWMutex
@@ -91,6 +96,7 @@ type WorkspaceStore struct {
 	path       string
 	maxHistory int
 	state      WorkspaceState
+	retired    bool
 }
 
 // NewWorkspaceStore creates a WorkspaceStore backed by fsys at the given path.
@@ -119,6 +125,15 @@ func (s *WorkspaceStore) setFS(fsys vfs.FS) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fsys = fsys
+}
+
+// retire permanently disables persistence: once it returns, no save is
+// in flight and every later write fails with ErrWorkspaceRetired, so a
+// deleted profile's store can never recreate its /users/<id> tree.
+func (s *WorkspaceStore) retire() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.retired = true
 }
 
 func fsPath(p string) string {
@@ -205,6 +220,9 @@ func (s *WorkspaceStore) Save(state WorkspaceState) error {
 }
 
 func (s *WorkspaceStore) saveLocked() error {
+	if s.retired {
+		return ErrWorkspaceRetired
+	}
 	if s.fsys == nil {
 		return nil
 	}

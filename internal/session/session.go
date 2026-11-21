@@ -230,6 +230,41 @@ func (m *Manager) Close(id string) error {
 	return nil
 }
 
+// CloseForUser closes every live session owned by userName — profile
+// deletion calls it so the departed profile leaves no running session —
+// and retires the user's shared workspace store. Retiring happens before
+// the caller removes the /users/<name> tree, so writers still holding the
+// store fail with ErrWorkspaceRetired instead of recreating deleted data.
+// Returns the number of sessions closed.
+func (m *Manager) CloseForUser(userName string) int {
+	key := userName
+	if key == "" {
+		key = "guest"
+	}
+
+	m.mu.Lock()
+	var closing []*Session
+	for id, s := range m.sessions {
+		if workspaceKey(s) == key {
+			closing = append(closing, s)
+			delete(m.sessions, id)
+		}
+	}
+	retired := m.workspaces[key]
+	delete(m.workspaces, key)
+	m.mu.Unlock()
+
+	if retired != nil {
+		retired.retire()
+	}
+	for _, s := range closing {
+		s.close()
+		m.bus.Publish("session", Event{ID: s.ID, User: s.User.Name, State: "stopped"})
+		m.log.Info("session stopped", "session", s.ID, "user", s.User.Name)
+	}
+	return len(closing)
+}
+
 // Attach registers a client attachment to a session.
 func (m *Manager) Attach(sessionID, clientType, clientID string) (Attachment, error) {
 	m.mu.Lock()
