@@ -75,6 +75,9 @@ func checkFrame(t *testing.T, m *Model) map[frameSlot]image.Rectangle {
 	for _, id := range []frameSlot{slotTabs, slotBadge, slotBody, slotPrompt} {
 		r, ok := f.Rect(id)
 		if !ok {
+			if m.compactWindowFrame() && (id == slotBadge || id == slotPrompt) {
+				continue
+			}
 			t.Fatalf("slot %d missing", id)
 		}
 		if r.Dx() != inner.Dx() || !r.In(inner) || r.Dy() <= 0 {
@@ -162,9 +165,8 @@ func TestFrameGeometryEveryScreenThemeAndSize(t *testing.T) {
 							t.Fatalf("%q not on screen where expected:\n%s", want, screen)
 						}
 					}
-					prompt := lines[rects[slotPrompt].Min.Y]
 					if s.name == "prompt" != (v.Cursor != nil) {
-						t.Fatalf("cursor = %+v on %s; prompt row %q", v.Cursor, s.name, prompt)
+						t.Fatalf("cursor = %+v on %s", v.Cursor, s.name)
 					}
 				})
 			}

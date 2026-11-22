@@ -16,7 +16,7 @@
 | |[Adopt]                                                                   | |
 | |Pad                                                                       | |
 | |[NW] > [NE]                                                               | |
-| |waiting                                                                   | |
+| |Tab 3/3 | Up1 Down1 | waiting                                             | |
 | +--------------------------------------------------------------------------+ |
 |                                                                              |
 | C:\users\guest> Window owns focus. Esc goes back, Ctrl-W closes.             |

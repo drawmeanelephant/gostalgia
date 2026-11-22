@@ -40,15 +40,23 @@ const (
 	layerDialog
 )
 
-// prioFrameSpacer is the collapse priority of the frame's blank spacer rows,
-// the only rows that give way when the panel cannot fit every row, so tabs,
-// badge, minBodyRows of body and the prompt always stay on screen.
-const prioFrameSpacer = 1
+// Collapse priorities for frame rows that yield when the panel cannot fit
+// every row. Blank spacers give way first on every screen; when an app window
+// owns a short frame without the command palette, the non-editable prompt and
+// status badge give way next so the window keeps minWindowBodyRows.
+const (
+	prioFrameSpacer = 1
+	prioFramePrompt = 2
+	prioFrameBadge  = 3
+)
 
 // minBodyRows is the body height the spacers give way to: enough for a
 // screen's heading and the item its keys act on. The smallest frame, 30×10,
-// leaves exactly this much.
-const minBodyRows = 3
+// leaves this much on built-in screens and minWindowBodyRows on app windows.
+const (
+	minBodyRows       = 3
+	minWindowBodyRows = 5
+)
 
 // toastWidth is the widest the toast stack gets; a narrower body bounds it.
 const toastWidth = 48
@@ -69,6 +77,12 @@ const (
 // "Esc PROMPT · Enter RUN · F3 STOP" (32 cells). Narrower frames keep the
 // shelf's three primary hints whole by using the shorter PROMPT label.
 const launcherCompactHintsWidth = 32
+
+// windowCompactHintsWidth is the narrowest frame that can show the full
+// window hints through Tab FOCUS ("Esc CANCEL/BACK · Ctrl-W CLOSE · Tab FOCUS",
+// 42 cells). Narrower frames switch to shorter labels so back, focus cycling,
+// and action activation fit whole at 30 columns.
+const windowCompactHintsWidth = 42
 
 // rootKey is everything a bloom root is built from. A kit change that keeps
 // it equal keeps the root.
@@ -259,16 +273,30 @@ func (m *Model) frame(home homeView) bloom.Child {
 	return m.frameNode(m.tabsNode(), m.badgeNode(), body, m.promptNode(), m.kit.HelpBarLeaf(m.bindings(home)))
 }
 
+// compactWindowFrame reports whether an app window owns the frame without the
+// command palette needing the prompt row.
+func (m *Model) compactWindowFrame() bool {
+	return m.onWindows() && !m.paletteOpen
+}
+
 // frameNode places the frame's rows: a kit Panel around tabs, badge, body
 // and prompt, with the help bar below it.
 func (m *Model) frameNode(tabs, badge, body, prompt, help bloom.Child) bloom.Child {
+	badgeRow := bloom.Fixed(1, badge).ID(slotBadge)
+	promptRow := bloom.Fixed(1, prompt).ID(slotPrompt)
+	bodyMin := minBodyRows
+	if m.compactWindowFrame() {
+		badgeRow = badgeRow.Collapsible(prioFrameBadge)
+		promptRow = promptRow.Collapsible(prioFramePrompt)
+		bodyMin = minWindowBodyRows
+	}
 	rows := []bloom.Child{
 		bloom.Fixed(1, tabs).ID(slotTabs),
-		bloom.Fixed(1, badge).ID(slotBadge),
+		badgeRow,
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
-		bloom.Fill(body).Min(minBodyRows).ID(slotBody),
+		bloom.Fill(body).Min(bodyMin).ID(slotBody),
 		bloom.Fixed(1, nil).Collapsible(prioFrameSpacer),
-		bloom.Fixed(1, prompt).ID(slotPrompt),
+		promptRow,
 	}
 	panel := m.kit.PanelNode(ui.Panel{Title: frameTitle}, bloom.Column(rows...))
 	return bloom.Column(
@@ -285,21 +313,23 @@ func (m *Model) bodySize() image.Point {
 	if m.width < minFrameWidth || m.height < minFrameHeight {
 		return image.Point{}
 	}
-	if c := m.bodyKnown; c.known && c.width == m.width && c.height == m.height {
+	compact := m.compactWindowFrame()
+	if c := m.bodyKnown; c.known && c.width == m.width && c.height == m.height && c.compact == compact {
 		return c.size
 	}
 	var size image.Point
 	if r, ok := bloom.Solve(m.width, m.height, m.frameNode(nil, nil, nil, nil, nil)).Rect(slotBody); ok {
 		size = r.Size()
 	}
-	m.bodyKnown = bodyMemo{width: m.width, height: m.height, size: size, known: true}
+	m.bodyKnown = bodyMemo{width: m.width, height: m.height, compact: compact, size: size, known: true}
 	return size
 }
 
 // bodyMemo is the body size solved for a terminal size under the current
-// kit.
+// kit and frame mode.
 type bodyMemo struct {
 	width, height int
+	compact       bool
 	size          image.Point
 	known         bool
 }
@@ -621,19 +651,56 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 	case m.onWindows():
 		v := m.focusedView()
 		blocked := v.busy || v.instance == "" || v.data.State == sdk.ViewLoading
+		fieldFocused := v.focus < len(v.data.Fields)
+		multilineFocused := fieldFocused && v.data.Fields[v.focus].Multiline
 		action := max(0, v.focus-len(v.data.Fields))
 		actionBlocked := blocked || action >= len(v.data.Actions) || v.data.Actions[action].Disabled
-		// The window keys lead the presentation's own; Ctrl-C, which
-		// every screen shares, gives way first.
-		bindings := []ui.Binding{
-			{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-W", Help: "CLOSE"},
-			{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
-			{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
+		var bindings []ui.Binding
+		if m.width < windowCompactHintsWidth {
+			escHelp := "BACK"
+			if v.busy {
+				escHelp = "CANCEL"
+			}
+			compactActionBlocked := actionBlocked
+			if v.gridFocused() {
+				c := v.grid().Cells[v.cell]
+				compactActionBlocked = blocked || c.Disabled || c.Action == "" || v.topActionDisabled(c.Action)
+			}
+			bindings = []ui.Binding{
+				{Key: "Esc", Help: escHelp},
+				{Key: "Tab", Help: "NEXT", Disabled: blocked},
+			}
+			if multilineFocused {
+				if len(v.data.Items) > 0 {
+					bindings = append(bindings, ui.Binding{Key: "↑↓", Help: "ITEM", Disabled: blocked})
+				}
+				bindings = append(bindings,
+					ui.Binding{Key: "Ctrl-Enter", Help: "RUN", Disabled: actionBlocked},
+					ui.Binding{Key: "Ctrl-W", Help: "CLOSE"},
+					ui.Binding{Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
+				)
+			} else {
+				bindings = append(bindings,
+					ui.Binding{Key: "Enter", Help: "GO", Disabled: compactActionBlocked},
+					ui.Binding{Key: "Ctrl-W", Help: "CLOSE"},
+					ui.Binding{Key: "↑↓", Help: "ITEM", Disabled: blocked},
+					ui.Binding{Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
+				)
+			}
+			bindings = append(bindings, ui.Binding{Key: "F2", Help: "APPS"}, ui.Binding{Key: "Ctrl-C", Help: exitHelp})
+		} else {
+			// The window keys lead the presentation's own; Ctrl-C, which
+			// every screen shares, gives way first.
+			bindings = []ui.Binding{
+				{Key: "Esc", Help: "CANCEL/BACK"}, {Key: "Ctrl-W", Help: "CLOSE"},
+				{Key: "Tab", Help: "FOCUS", Disabled: blocked}, {Key: "Enter", Help: "ACTION", Disabled: actionBlocked},
+				{Key: "↑↓", Help: "ITEM", Disabled: blocked}, {Key: "F8", Help: "NEXT", Disabled: m.windows.Len() < 2},
+			}
+			if m.floatingWindows() {
+				bindings = append(bindings, ui.Binding{Key: "Alt-←→↑↓", Help: "MOVE"})
+			}
+			bindings = append(bindings, ui.Binding{Key: "F2", Help: "APPS"}, ui.Binding{Key: "Ctrl-C", Help: exitHelp})
 		}
-		if m.floatingWindows() {
-			bindings = append(bindings, ui.Binding{Key: "Alt-←→↑↓", Help: "MOVE"})
-		}
-		bindings = append(bindings, ui.Binding{Key: "F2", Help: "APPS"}, ui.Binding{Key: "Ctrl-C", Help: exitHelp})
 		if v.focalBlock() != nil {
 			// A hinted block's inspection route leads so a 30-cell help bar
 			// keeps it whole rather than dropping it behind longer hints.

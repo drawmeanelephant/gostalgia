@@ -204,6 +204,32 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		waitSteepWindow(t, h, steepBody(t, h), steepNotesTitle, 2, 1, true)
 	})
 
+	t.Run("compendium_minimum_size", func(t *testing.T) {
+		h, _ := newSteepWindowsRuntime(t, theme.Nostalgia())
+		h.Type("launch com.gostalgia.compendium").Key("enter").Wait("Launched com.gostalgia.compendium")
+		h.Key("ctrl+p").Wait("COMMAND PALETTE")
+		h.Type("switch to compendium").Key("enter").Wait([]string{"Windows (1)", "Compendium"})
+
+		// Create and open a real Compendium note.
+		h.Type("new Field Guide").Key("enter").Wait("Compendium — Field Guide")
+		h.Type("Alpha line").Key("enter").Type("Beta draft").Wait("Beta draft")
+
+		// Resize to the 30x10 minimum: editing context, navigation cues, and
+		// whole compact help bindings must stay usable together.
+		h.Resize(30, 10).Wait([]string{"[Windows (1)]", "Compendium — Field Guide", "Markdown:", "Beta draft", "[Save]", "Esc BACK"})
+		h.RequireNot("Tab focus")
+
+		// Tab reaches Rename and Save; Save commits the note at 30x10.
+		h.Key("tab").Wait("Rename to:")
+		h.Key("tab").Wait([]string{"[Save]", "Enter GO"})
+		h.Key("enter").Wait("Compendium — Field Guide")
+
+		// Below 30x10 keeps the graceful fallback; growing back restores the
+		// floating window with the saved note content intact.
+		h.Resize(29, 10).Wait("Resize to 30×10")
+		h.Resize(80, 24).Wait([]string{closeLabel, "Compendium — Field Guide", "Beta draft"})
+	})
+
 	t.Run("reduced_motion", func(t *testing.T) {
 		h, _ := newSteepWindowsRuntime(t, theme.Nostalgia().WithReducedMotion(true))
 		h.Type("motion on").Key("enter").Wait("Reduced motion is now enabled")
