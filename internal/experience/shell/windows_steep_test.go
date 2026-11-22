@@ -256,6 +256,9 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		waitSteepWindow(t, h, body, "Dogcalc", 0, 0, false)
 		waitSteepWindow(t, h, body, "Compendium", 0, 1, true)
 		h.Wait("F8 next: Dogcalc")
+		// The window chrome lands before the app's first view; wait for the
+		// loaded compendium content so the snapshot cannot race "Loading…".
+		h.Wait("No notes yet")
 		steepSnapshot(h, "dogcalc-compendium-100x32")
 		h.Key("f8")
 		waitSteepWindow(t, h, body, "Dogcalc", 0, 0, true)
