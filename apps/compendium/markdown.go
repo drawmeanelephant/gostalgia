@@ -39,7 +39,10 @@ func validTitle(title string) error {
 // It maps every rune to one representative of its Unicode simple case
 // folding orbit, so it agrees with strings.EqualFold: final and medial
 // sigma, long s, and the Kelvin sign all fold together, which plain
-// strings.ToLower does not do.
+// strings.ToLower does not do. When the orbit representative drops a mark
+// the rune's canonical decomposition carries — the dot in İ, spelled out
+// as "İ" — the folded decomposition is emitted instead so the mark is
+// not silently lost.
 func fold(title string) string {
 	ascii := true
 	for i := 0; i < len(title); i++ {
@@ -51,7 +54,26 @@ func fold(title string) string {
 	if ascii {
 		return strings.ToLower(title)
 	}
-	return strings.Map(foldRune, title)
+	var b strings.Builder
+	b.Grow(len(title))
+	for _, r := range title {
+		rep := foldRune(r)
+		if d := decompositions[r]; d != "" && decompositions[rep] == "" && hasMark(d) {
+			b.WriteString(strings.Map(foldRune, d))
+		} else {
+			b.WriteRune(rep)
+		}
+	}
+	return b.String()
+}
+
+func hasMark(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func foldRune(r rune) rune {
