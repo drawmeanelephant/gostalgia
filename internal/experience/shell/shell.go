@@ -1847,8 +1847,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.currentMode() == modeLauncher {
-			m.launcherQuery += strings.ReplaceAll(text, "\n", " ")
-			m.selected = 0
+			m.setLauncherQuery(m.launcherQuery + strings.ReplaceAll(text, "\n", " "))
 			return m, nil
 		}
 		m.setMode(modePrompt)

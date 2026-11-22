@@ -1,7 +1,9 @@
 package shell
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,15 +16,65 @@ func (m *Model) filteredApps() []appStatus {
 	if q == "" {
 		return m.apps
 	}
-	var out []appStatus
+	type rankedApp struct {
+		app  appStatus
+		rank int
+	}
+	var matches []rankedApp
 	for _, a := range m.apps {
-		if strings.Contains(strings.ToLower(a.Manifest.Name), q) ||
-			strings.Contains(strings.ToLower(a.Manifest.ID), q) ||
-			strings.Contains(strings.ToLower(a.Manifest.Description), q) {
-			out = append(out, a)
+		if rank := launcherMatchRank(a, q); rank > 0 {
+			matches = append(matches, rankedApp{app: a, rank: rank})
 		}
 	}
+	if len(matches) == 0 {
+		return nil
+	}
+	slices.SortStableFunc(matches, func(a, b rankedApp) int {
+		return cmp.Compare(a.rank, b.rank)
+	})
+	out := make([]appStatus, len(matches))
+	for i, match := range matches {
+		out[i] = match.app
+	}
 	return out
+}
+
+func launcherMatchRank(a appStatus, q string) int {
+	name := strings.ToLower(a.Manifest.Name)
+	if name == q {
+		return 1
+	}
+	if strings.HasPrefix(name, q) {
+		return 2
+	}
+	if strings.Contains(name, q) {
+		return 3
+	}
+	id := strings.ToLower(a.Manifest.ID)
+	shortID := id
+	if dot := strings.LastIndexByte(id, '.'); dot >= 0 {
+		shortID = id[dot+1:]
+	}
+	if id == q || shortID == q {
+		return 4
+	}
+	if strings.HasPrefix(id, q) || strings.HasPrefix(shortID, q) {
+		return 5
+	}
+	if strings.Contains(id, q) {
+		return 6
+	}
+	if strings.Contains(strings.ToLower(a.Manifest.Description), q) {
+		return 7
+	}
+	return 0
+}
+
+func (m *Model) setLauncherQuery(q string) {
+	m.launcherQuery = q
+	m.selected = 0
+	m.launcherTop = 0
+	m.clearHoverKind(hoverLauncherCard)
 }
 
 // launcherSearch is the launcher's search line.
@@ -183,8 +235,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// fields (Ctrl+Backspace included).
 		r := []rune(m.launcherQuery)
 		if len(r) > 0 {
-			m.launcherQuery = string(r[:len(r)-1])
-			m.selected = 0
+			m.setLauncherQuery(string(r[:len(r)-1]))
 		}
 		return m, nil
 	}
@@ -222,8 +273,7 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "esc":
 		if m.launcherQuery != "" {
-			m.launcherQuery = ""
-			m.selected = 0
+			m.setLauncherQuery("")
 			return m, nil
 		}
 		m.setMode(modePrompt)
@@ -231,14 +281,12 @@ func (m *Model) handleLauncherKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+h":
 		r := []rune(m.launcherQuery)
 		if len(r) > 0 {
-			m.launcherQuery = string(r[:len(r)-1])
-			m.selected = 0
+			m.setLauncherQuery(string(r[:len(r)-1]))
 		}
 		return m, nil
 	}
 	if text := safe(msg.Text); text != "" {
-		m.launcherQuery += text
-		m.selected = 0
+		m.setLauncherQuery(m.launcherQuery + text)
 		return m, nil
 	}
 	return m, nil
