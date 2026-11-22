@@ -132,11 +132,14 @@ func (c *Compendium) dispatch(ctx context.Context, p sdk.ActionRequest) error {
 		title := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(p.Values[u.qField()]), "new "))
 		return c.newNote(ctx, title)
 	case "today":
-		n, _, err := c.v.today(ctx)
+		n, created, err := c.v.today(ctx)
 		if err != nil {
 			return err
 		}
 		c.openNote(n.title)
+		if created {
+			u.status = "Created today's note. Type in Markdown, then Save."
+		}
 	case "graph":
 		u.mode = modeGraph
 	case "tags":
@@ -278,14 +281,14 @@ func (c *Compendium) openNote(title string) {
 
 func (c *Compendium) newNote(ctx context.Context, title string) error {
 	if title == "" {
-		return fmt.Errorf("type a title in the search field, then New")
+		return fmt.Errorf("type a title in the search field, then New note")
 	}
 	n, err := c.v.create(ctx, title, "")
 	if err != nil {
 		return err
 	}
 	c.openNote(n.title)
-	c.ui.status = fmt.Sprintf("Created %q.", n.title)
+	c.ui.status = fmt.Sprintf("Created %q. Type in Markdown, then Save.", n.title)
 	return nil
 }
 
@@ -304,7 +307,7 @@ func (c *Compendium) runCommand(ctx context.Context, cmd string) error {
 		}
 		c.openNote(n.title)
 		if created {
-			u.status = "Created today's note."
+			u.status = "Created today's note. Type in Markdown, then Save."
 		}
 	case "new", "create":
 		return c.newNote(ctx, arg)
@@ -357,7 +360,7 @@ func (c *Compendium) follow(ctx context.Context, p sdk.ActionRequest) error {
 		if err := c.newNote(ctx, target); err != nil {
 			return err
 		}
-		c.ui.status = fmt.Sprintf("Created %q from a broken link.", target)
+		c.ui.status = fmt.Sprintf("Created %q from a broken link. Type in Markdown, then Save.", target)
 	case strings.HasPrefix(id, "t-"):
 		for _, t := range c.v.tags() {
 			if hid("t", t.Tag) == id {
@@ -459,7 +462,7 @@ func (c *Compendium) render(version int) sdk.View {
 	case modeHelp:
 		v = c.helpView()
 	default:
-		v = c.homeView()
+		v = c.homeView(version)
 	}
 	v.State = sdk.ViewReady
 	if u.status != "" {
@@ -483,11 +486,11 @@ func (c *Compendium) noteSummary(n *note) string {
 	return strings.Join(parts, " · ")
 }
 
-func (c *Compendium) homeView() sdk.View {
+func (c *Compendium) homeView(version int) sdk.View {
 	u := &c.ui
 	v := sdk.View{
 		Title:  "Compendium",
-		Fields: []sdk.Field{{ID: u.qField(), Label: "Search or command (today, new <title>, open <title>, graph, tags, trash, help)", Value: u.query}},
+		Fields: []sdk.Field{{ID: u.qField(), Label: "Search or command", Value: u.query}},
 		Status: fmt.Sprintf("%d notes · %d tags · %d in trash · %d drafts", len(c.v.notes), len(c.v.tagIdx), len(c.v.trash), len(c.v.drafts)),
 	}
 	if w := c.v.stats.Warnings; len(w) > 0 {
@@ -519,12 +522,35 @@ func (c *Compendium) homeView() sdk.View {
 			v.Items = append(v.Items, sdk.Item{ID: "empty", Label: "No notes yet", Detail: "Type `today` for a daily note or `new My First Note`, then Go."})
 		}
 	}
-	v.Actions = []sdk.Action{
-		{ID: "run", Label: "Go"}, {ID: "open", Label: "Open"}, {ID: "new", Label: "New note"},
-		{ID: "today", Label: "Today"}, {ID: "graph", Label: "Graph"}, {ID: "tags", Label: "Tags"},
-		{ID: "trash_bin", Label: "Trash"}, {ID: "recovery", Label: "Drafts", Disabled: len(c.v.drafts) == 0},
-		{ID: "export_vault", Label: "Export vault", Disabled: len(c.v.notes) == 0},
-		{ID: "rebuild_index", Label: "Rebuild index"}, {ID: "help", Label: "Help"}, {ID: "home", Label: "Refresh"},
+	if version >= 2 {
+		v.Actions = []sdk.Action{
+			{ID: "run", Label: "Go"},
+			{ID: "open", Label: "Open"},
+			{ID: "new", Label: "New note"},
+			{ID: "today", Label: "Today"},
+		}
+		v.Grid = &sdk.Grid{
+			Label:   "More",
+			Columns: 4,
+			Cells: []sdk.Cell{
+				{ID: "graph", Label: "Graph", Action: "graph"},
+				{ID: "tags", Label: "Tags", Action: "tags"},
+				{ID: "trash_bin", Label: "Trash", Action: "trash_bin"},
+				{ID: "recovery", Label: "Drafts", Action: "recovery", Disabled: len(c.v.drafts) == 0},
+				{ID: "export_vault", Label: "Export vault", Action: "export_vault", Disabled: len(c.v.notes) == 0},
+				{ID: "rebuild_index", Label: "Rebuild index", Action: "rebuild_index"},
+				{ID: "help", Label: "Help", Action: "help"},
+				{ID: "home", Label: "Refresh", Action: "home"},
+			},
+		}
+	} else {
+		v.Actions = []sdk.Action{
+			{ID: "run", Label: "Go"}, {ID: "open", Label: "Open"}, {ID: "new", Label: "New note"},
+			{ID: "today", Label: "Today"}, {ID: "graph", Label: "Graph"}, {ID: "tags", Label: "Tags"},
+			{ID: "trash_bin", Label: "Trash"}, {ID: "recovery", Label: "Drafts", Disabled: len(c.v.drafts) == 0},
+			{ID: "export_vault", Label: "Export vault", Disabled: len(c.v.notes) == 0},
+			{ID: "rebuild_index", Label: "Rebuild index"}, {ID: "help", Label: "Help"}, {ID: "home", Label: "Refresh"},
+		}
 	}
 	return v
 }
@@ -548,14 +574,17 @@ func (c *Compendium) noteView(version int) sdk.View {
 		title += "*"
 	}
 	rendered := render(u.buffer, c.v.resolve)
-	if strings.TrimSpace(rendered) == "" {
+	empty := strings.TrimSpace(rendered) == ""
+	if empty {
 		rendered = "(empty note)"
 	}
 	v := sdk.View{Title: title}
 	if version >= 3 {
 		// The rendered preview is long output: the version-3 scroll region
 		// replaces the single item detail it used to be clipped into.
-		v.Region = &sdk.Region{ID: "rendered", Label: "Rendered", Text: regionText(rendered)}
+		if !empty {
+			v.Region = &sdk.Region{ID: "rendered", Label: "Rendered", Text: regionText(rendered)}
+		}
 	} else {
 		v.Items = append(v.Items, sdk.Item{ID: "rendered", Label: "Rendered", Detail: detail(rendered)})
 	}
@@ -595,17 +624,41 @@ func (c *Compendium) noteView(version int) sdk.View {
 		v.Fields = append(v.Fields, sdk.Field{ID: u.bodyField(), Label: "Markdown", Value: u.buffer})
 	}
 	v.Fields = append(v.Fields, sdk.Field{ID: u.renameField(), Label: "Rename to"})
-	v.Actions = []sdk.Action{
-		{ID: "save", Label: "Save"}, {ID: "follow", Label: "Follow / create link"},
-		{ID: "reload", Label: "Reload saved version"},
-		{ID: "rename", Label: "Rename"}, {ID: "trash", Label: "Move to trash", Disabled: n == nil},
-		{ID: "export_note", Label: "Export", Disabled: n == nil}, {ID: "today", Label: "Today"},
-		{ID: "home", Label: "Back"},
+	if version >= 2 {
+		if u.conflict {
+			v.Actions = append(v.Actions,
+				sdk.Action{ID: "overwrite", Label: "Overwrite with mine"},
+				sdk.Action{ID: "reload", Label: "Reload saved version"},
+			)
+		}
+		v.Actions = append(v.Actions, sdk.Action{ID: "save", Label: "Save"})
+		if len(p.Links) > 0 || len(back) > 0 || len(p.Tags) > 0 {
+			v.Actions = append(v.Actions, sdk.Action{ID: "follow", Label: "Follow / create link"})
+		}
+		v.Actions = append(v.Actions, sdk.Action{ID: "home", Label: "Back"})
+		cells := []sdk.Cell{{ID: "rename", Label: "Rename", Action: "rename"}}
+		if !u.conflict {
+			cells = append(cells, sdk.Cell{ID: "reload", Label: "Reload saved", Action: "reload"})
+		}
+		cells = append(cells,
+			sdk.Cell{ID: "today", Label: "Today", Action: "today"},
+			sdk.Cell{ID: "export_note", Label: "Export", Action: "export_note", Disabled: n == nil},
+			sdk.Cell{ID: "trash", Label: "Move to trash", Action: "trash", Disabled: n == nil},
+		)
+		v.Grid = &sdk.Grid{Label: "More", Columns: 3, Cells: cells}
+	} else {
+		v.Actions = []sdk.Action{
+			{ID: "save", Label: "Save"}, {ID: "follow", Label: "Follow / create link"},
+			{ID: "reload", Label: "Reload saved version"},
+			{ID: "rename", Label: "Rename"}, {ID: "trash", Label: "Move to trash", Disabled: n == nil},
+			{ID: "export_note", Label: "Export", Disabled: n == nil}, {ID: "today", Label: "Today"},
+			{ID: "home", Label: "Back"},
+		}
+		if u.conflict {
+			v.Actions = append([]sdk.Action{{ID: "overwrite", Label: "Overwrite with mine"}}, v.Actions...)
+		}
 	}
 	stale := n != nil && n.sha != u.baseSHA || n == nil && u.baseSHA != ""
-	if u.conflict {
-		v.Actions = append([]sdk.Action{{ID: "overwrite", Label: "Overwrite with mine"}}, v.Actions...)
-	}
 	switch {
 	case u.conflict:
 		v.Status = "Conflict: the note changed since you started editing. Overwrite saves your version; Reload shows the saved one (your edits stay in Drafts)."
@@ -619,6 +672,8 @@ func (c *Compendium) noteView(version int) sdk.View {
 		v.Status = "Unsaved changes (staged as a recovery draft). Save to commit."
 	case stale:
 		v.Status = "This note was changed elsewhere. Reload (or Save) shows the saved version."
+	case empty:
+		v.Status = "Empty note — type in Markdown, then Save."
 	default:
 		v.Status = fmt.Sprintf("Saved · %d links (%d missing) · %d backlinks", len(p.Links), missing, len(back))
 	}

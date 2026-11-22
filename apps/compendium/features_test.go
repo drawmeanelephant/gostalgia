@@ -282,6 +282,92 @@ func TestPresentationEditSaveRenameTrashFlow(t *testing.T) {
 	h.must(t, "open", map[string]string{"title": "Garden 2027"}, &n)
 }
 
+func TestPresentationV3NewNoteFlowAndSecondaryActions(t *testing.T) {
+	h := openHarness(t, newMockFS())
+	v := h.viewV(t, sdk.PresentationVersion)
+
+	if len(v.Actions) != 4 {
+		t.Fatalf("home v3 primary actions = %+v, want 4 compact primary actions", v.Actions)
+	}
+	if v.Grid == nil || len(v.Grid.Cells) != 8 {
+		t.Fatalf("home v3 secondary actions grid = %+v, want 8 cells", v.Grid)
+	}
+	for _, cell := range []struct {
+		id    string
+		title string
+	}{
+		{"graph", "Graph"},
+		{"tags", "Tags"},
+		{"trash_bin", "Trash"},
+		{"help", "Help"},
+	} {
+		gv := h.actCellV(t, sdk.PresentationVersion, cell.id, cell.id, nil)
+		if !strings.Contains(gv.Title, cell.title) {
+			t.Fatalf("secondary cell %q view title = %q, want %q", cell.id, gv.Title, cell.title)
+		}
+		v = h.actV(t, sdk.PresentationVersion, "home", "", nil)
+	}
+
+	v = h.actV(t, sdk.PresentationVersion, "run", "", map[string]string{queryField(t, v): "new Visual Test"})
+	if v.Title != "Compendium — Visual Test" {
+		t.Fatalf("new note title = %q", v.Title)
+	}
+	if v.Region != nil {
+		t.Fatalf("new empty note should omit empty rendered region, got %+v", v.Region)
+	}
+	if len(v.Fields) < 2 || !strings.HasPrefix(v.Fields[0].ID, "body") || !v.Fields[0].Multiline {
+		t.Fatalf("new note fields = %+v, want multiline Markdown editor first", v.Fields)
+	}
+	if len(v.Actions) != 2 || v.Actions[0].ID != "save" || v.Actions[1].ID != "home" {
+		t.Fatalf("new empty note primary actions = %+v, want [save, home]", v.Actions)
+	}
+	if v.Grid == nil || len(v.Grid.Cells) != 5 {
+		t.Fatalf("new note secondary grid = %+v, want 5 cells", v.Grid)
+	}
+	if !strings.Contains(v.Status, "Created \"Visual Test\"") || !strings.Contains(v.Status, "Save") {
+		t.Fatalf("new note status = %q, want clear next-step guidance", v.Status)
+	}
+
+	bodyID := v.Fields[0].ID
+	renameID := v.Fields[1].ID
+	v = h.actV(t, sdk.PresentationVersion, "save", "", map[string]string{bodyID: "# Visual Test\n\nSee [[Next Note]].\n"})
+	if v.Region == nil || v.Region.ID != "rendered" || !strings.Contains(v.Region.Text, "Visual Test") {
+		t.Fatalf("saved non-empty note missing rendered region: %+v", v.Region)
+	}
+	if len(v.Actions) != 3 || v.Actions[0].ID != "save" || v.Actions[1].ID != "follow" || v.Actions[2].ID != "home" {
+		t.Fatalf("linked note primary actions = %+v, want [save, follow, home]", v.Actions)
+	}
+
+	v = h.actCellV(t, sdk.PresentationVersion, "rename", "rename", map[string]string{renameID: "Visual Renamed"})
+	if v.Title != "Compendium — Visual Renamed" {
+		t.Fatalf("renamed note title = %q", v.Title)
+	}
+
+	// Conflict surfaces both overwrite and reload in primary actions without duplicating reload in the grid.
+	h.must(t, "save", map[string]string{"title": "Visual Renamed", "content": "external edit\n"}, nil)
+	v = h.actV(t, sdk.PresentationVersion, "save", "", map[string]string{v.Fields[0].ID: "local edit\n"})
+	if len(v.Actions) < 2 || v.Actions[0].ID != "overwrite" || v.Actions[1].ID != "reload" {
+		t.Fatalf("conflict primary actions = %+v, want overwrite and reload first", v.Actions)
+	}
+	for _, c := range v.Grid.Cells {
+		if c.ID == "reload" {
+			t.Fatalf("conflict view duplicated reload in secondary grid: %+v", v.Grid.Cells)
+		}
+	}
+
+	// Version 2 keeps the grid without version-3 multiline/region elements.
+	v2 := h.viewV(t, 2)
+	if v2.Grid == nil || v2.Region != nil {
+		t.Fatalf("v2 note view grid=%v region=%v", v2.Grid != nil, v2.Region != nil)
+	}
+
+	// Today action from note grid creates today's daily note with clear guidance.
+	v = h.actCellV(t, sdk.PresentationVersion, "today", "today", nil)
+	if !strings.Contains(v.Title, "2026-10-06") || !strings.Contains(v.Status, "Save") {
+		t.Fatalf("today action from grid = title:%q status:%q", v.Title, v.Status)
+	}
+}
+
 func TestTitleValidation(t *testing.T) {
 	h := openHarness(t, newMockFS())
 	for _, bad := range []string{"", "   ", "a[b", "x]]", "a|b", "has#hash", "slash/name", "new\nline", " padded", strings.Repeat("x", 201)} {
