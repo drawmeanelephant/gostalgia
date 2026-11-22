@@ -404,8 +404,8 @@ const (
 // launcherNode is the launcher: the search line, the cards of the apps
 // around the selection, and the selected app's description and grants,
 // which show their full text as a tooltip where they are cut. A click on a
-// card selects its app, as the arrow keys do, a double click launches it,
-// as Enter does, and the wheel moves the selection.
+// card selects its app, as the arrow keys do, a double click opens or launches
+// it, as Enter does, and the wheel moves the selection.
 func (m *Model) launcherNode() bloom.Child {
 	node := ui.SizedNode(func(ctx bloom.Context) bloom.Child {
 		w, h := ctx.Width, ctx.Height

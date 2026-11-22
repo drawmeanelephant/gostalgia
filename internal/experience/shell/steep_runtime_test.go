@@ -284,9 +284,39 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		// Cancel has focus by default; Tab selects the destructive action.
 		h.Key("tab").Key("enter").Wait("Enter launches Echo")
 		steepAppRunning(t, client, "com.gostalgia.echo", false)
-		h.Key("enter").Wait("LIVE / PID")
+		// Enter on the stopped app launches it and opens its window.
+		h.Key("enter").Wait([]string{"Windows (1)", "Echo", "Ctrl-W CLOSE"})
 		steepAppRunning(t, client, "com.gostalgia.echo", true)
+		// Esc returns to the Apps shelf with Echo marked LIVE; Enter focuses
+		// its window again without attempting a single-instance relaunch.
+		h.KeyEsc().Wait([]string{"SEARCH: echo", "LIVE / PID"})
+		h.Key("enter").Wait([]string{"Windows (1)", "Echo", "Ctrl-W CLOSE"})
+		h.AssertNot("LAUNCH FAILED")
+		h.KeyEsc().Wait([]string{"SEARCH: echo", "LIVE / PID"})
 		steepStopSelectedEcho(t, h, client)
+	})
+
+	t.Run("launcher_dogcalc_launch_and_focus", func(t *testing.T) {
+		h, client := newSteepRuntime(t)
+		h.Key("f2").Wait("SEARCH: type to filter apps...")
+		h.Type("dog").Wait("com.gostalgia.dogcalc")
+		// "dog" matches Calculator's description first; Down selects Dogcalc.
+		h.Key("down").Wait("Enter launches Dogcalc")
+		steepAppRunning(t, client, "com.gostalgia.dogcalc", false)
+		// First Enter launches Dogcalc and makes its window visible.
+		h.Key("enter").Wait([]string{"Windows (1)", "Dogcalc", "BOOP ="})
+		steepAppRunning(t, client, "com.gostalgia.dogcalc", true)
+		// Esc returns to the filtered Apps shelf where Dogcalc is now LIVE.
+		h.KeyEsc().Wait([]string{"SEARCH: dog", "Dogcalc is LIVE", "Enter OPEN"})
+		// Second Enter focuses Dogcalc's window without an invalid relaunch.
+		h.Key("enter").Wait([]string{"Windows (1)", "Dogcalc", "BOOP ="})
+		h.AssertNot("already running or initializing")
+		h.AssertNot("LAUNCH FAILED")
+		// Explicit F3 stop from the shelf remains preserved.
+		h.KeyEsc().Wait([]string{"SEARCH: dog", "Dogcalc is LIVE"})
+		h.Key("f3").Wait([]string{"Stop Dogcalc?", "Unsaved work may be lost."})
+		h.Key("tab").Key("enter").Wait("Enter launches Dogcalc")
+		steepAppRunning(t, client, "com.gostalgia.dogcalc", false)
 	})
 
 	t.Run("launcher_external_lifecycle_refresh", func(t *testing.T) {

@@ -389,23 +389,32 @@ func TestMouseLauncherCardsSelectOnClickAndLaunchOnDoubleClick(t *testing.T) {
 								t.Fatalf("clicking %s at %v selected %d and sent %v", id, corner(r), m.selected, rec.all())
 							}
 						}
-						// A double click launches it once, from wherever
-						// the selection was: the card stays under the
-						// pointer between the clicks.
+						// A double click opens a running app's window or
+						// launches a ready app once, from wherever the
+						// selection was: the card stays under the pointer
+						// between the clicks.
+						app := probe.filteredApps()[i]
 						m, rec, r, _ := launcherFrom(t, size, query, i, j)
 						clickAt(t, m, r.Min)
 						clickAt(t, m, r.Min)
 						got := calls(rec, "app/launch")
-						if len(got) != 1 || got[0].params != fmt.Sprintf(`{"id":%q}`, id) {
+						if app.Running {
+							if len(got) != 0 || !m.onWindows() || m.FocusedWindow() != id {
+								t.Fatalf("double click on running %s: launched %v, onWindows=%v, focused=%q", id, got, m.onWindows(), m.FocusedWindow())
+							}
+						} else if len(got) != 1 || got[0].params != fmt.Sprintf(`{"id":%q}`, id) {
 							t.Fatalf("double click launched %v, want %s once", got, id)
 						}
-						// Enter launches the same.
+						// Enter acts the same.
 						byKey, keyRec := mouseModel(t, size[0], size[1])
 						byKey.setMode(modeLauncher)
 						byKey.launcherQuery, byKey.selected = query, i
 						act(t, byKey, enterKey)
 						if got, want := fmt.Sprint(calls(rec, "app/launch")), fmt.Sprint(calls(keyRec, "app/launch")); got != want {
 							t.Fatalf("double click launched %s, Enter %s", got, want)
+						}
+						if m.onWindows() != byKey.onWindows() || m.FocusedWindow() != byKey.FocusedWindow() {
+							t.Fatalf("double click window=(%v,%q), Enter window=(%v,%q)", m.onWindows(), m.FocusedWindow(), byKey.onWindows(), byKey.FocusedWindow())
 						}
 					})
 				}

@@ -219,19 +219,39 @@ func TestMinimumLauncherKeyboardControls(t *testing.T) {
 		t.Fatalf("second Esc left the shelf in mode %v, want prompt", m.currentMode())
 	}
 
-	// Growing restores the full 80x24 card and its complete guidance.
+	// Growing restores the full 80x24 card and its complete guidance. Echo was
+	// just stopped above, so it shows READY; Clock remains LIVE.
 	m.setMode(modeLauncher)
 	sized(m, 80, 24)
 	body := bodyText(t, m)
-	for _, want := range []string{"Echo", "LIVE / PID 7", "com.gostalgia.echo", "GRANT"} {
+	for _, want := range []string{"Echo", "READY", "com.gostalgia.echo", "GRANT"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("80x24 shelf lost %q:\n%s", want, body)
 		}
 	}
+	m.selected = 2 // Clock, still LIVE
+	body = bodyText(t, m)
+	for _, want := range []string{"Clock", "LIVE / PID 31", "com.gostalgia.clock", "GRANT"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("80x24 live shelf lost %q:\n%s", want, body)
+		}
+	}
 	help := compactHelp(t, m)
-	for _, want := range []string{"F3 STOP", "F4 VIEW", "F5 TASKS"} {
+	for _, want := range []string{"Enter OPEN", "F3 STOP", "F4 VIEW", "F5 TASKS"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("80x24 help lost %q: %q", want, help)
 		}
+	}
+
+	// Widths 31-32 keep Enter OPEN and F3 STOP whole with Esc BACK; width 33+
+	// restores Esc PROMPT beside Enter OPEN and F3 STOP.
+	sep := m.kit.Separator()
+	sized(m, 31, minFrameHeight)
+	if got, want := compactHelp(t, m), "Esc BACK"+sep+"Enter OPEN"+sep+"F3 STOP"; got != want {
+		t.Fatalf("31x10 live help = %q, want %q", got, want)
+	}
+	sized(m, 33, minFrameHeight)
+	if got, want := compactHelp(t, m), "Esc PROMPT"+sep+"Enter OPEN"+sep+"F3 STOP"; got != want {
+		t.Fatalf("33x10 live help = %q, want %q", got, want)
 	}
 }

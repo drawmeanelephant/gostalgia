@@ -61,10 +61,12 @@ selection, and scroll position. `switchScreen` stops calling `dismissView`.
 
 Every path that opens a presentation today opens that app's window instead, or
 focuses and raises the window if it is already open, and then shows the Windows
-screen. Those paths are Enter on a running app in the launcher or on Home, F4,
-the palette's **Switch to** items, the `settings` command, and F7. The last two
-start Settings first if it is not running. F7 keeps its toggle: pressed while
-the Settings window is focused, it leaves the Windows screen, as Esc does.
+screen. Those paths are Enter on an app in the launcher (launching it first if
+it is not running, and leaving headless apps on the shelf), Enter on a running
+app on Home, F4, the palette's **Switch to** items, the `settings` command, and
+F7. The last two start Settings first if it is not running. F7 keeps its toggle:
+pressed while the Settings window is focused, it leaves the Windows screen, as
+Esc does.
 
 The alternative was to draw windows over every screen. A window could then float
 over Home, but it would also hide part of whichever screen is active, and every
