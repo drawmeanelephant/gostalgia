@@ -1057,6 +1057,12 @@ func (m *Model) submitFrom(line string, origin resultOrigin, seq uint64, appID s
 		msg := execute(ctx, m.client, cwd, line, hint)
 		msg.origin, msg.originMode = origin, mode
 		msg.originSeq, msg.originApp, msg.originEpoch = seq, appID, epoch
+		if origin == originShelfLaunch && msg.err == nil && appID != "" {
+			if launched, found, hasView := resolveShelfLaunchedApp(ctx, m.client, appID); found {
+				msg.shelfLaunchApp = &launched
+				msg.shelfLaunchOpen = hasView
+			}
+		}
 		return msg
 	}
 }
@@ -1541,9 +1547,37 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if msg.err == nil && msg.switchView != "shelf" && msg.switchView != "launcher" && commandChangesApps(msg.executedLine) {
+			if id := stoppedAppID(msg.executedLine); id != "" {
+				for i := range m.apps {
+					if m.apps[i].Manifest.ID == id {
+						m.apps[i].Running, m.apps[i].PID = false, 0
+						break
+					}
+				}
+				if m.procApps != nil {
+					m.procApps[id] = procAppState{}
+				}
+			}
 			// The command changed which apps run or exist (or may have);
 			// refresh the registry without tying it to this result.
 			cmd = tea.Batch(cmd, m.refreshAppsCmd())
+		}
+		if msg.err == nil && msg.origin == originShelfLaunch && msg.shelfLaunchApp != nil {
+			for i := range m.apps {
+				if m.apps[i].Manifest.ID == msg.shelfLaunchApp.Manifest.ID {
+					m.apps[i].Running, m.apps[i].PID = msg.shelfLaunchApp.Running, msg.shelfLaunchApp.PID
+					break
+				}
+			}
+			if m.procApps != nil {
+				m.procApps[msg.shelfLaunchApp.Manifest.ID] = procAppState{
+					running: msg.shelfLaunchApp.Running,
+					pid:     msg.shelfLaunchApp.PID,
+				}
+			}
+			if msg.shelfLaunchOpen && m.canOpenShelfLaunch(msg.originSeq, msg.originEpoch) {
+				cmd = tea.Batch(cmd, m.openWindow(*msg.shelfLaunchApp))
+			}
 		}
 		return m, cmd
 	case themeSavedMsg:

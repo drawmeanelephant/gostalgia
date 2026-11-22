@@ -53,7 +53,8 @@ an app by itself; Monochrome renders the shell-owned hint text in ASCII.
 ## Keyboard
 
 - **F2**: switch between prompt and app shelf. **↑/↓** selects an app;
-  **Enter** launches it; **F3** stops it after a confirmation; **Esc** returns
+  **Enter** launches a ready app and opens its window (or focuses a running
+  app's window); **F3** stops it after a confirmation; **Esc** returns
   to the prompt. The
   shelf displays description and manifest permissions. Opening the shelf by
   F2, its tab, the `apps` command or the palette reads `app/list` again in the

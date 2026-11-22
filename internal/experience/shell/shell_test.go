@@ -327,8 +327,13 @@ func TestBubbleTeaSocketAppLifecycle(t *testing.T) {
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
 	await("shelf stop") // stop through the app shelf, once confirmed
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEnter})
-	await("shelf relaunch") // relaunch through the app shelf
-	// The first Esc clears the shelf filter; the second returns to the prompt.
+	await("shelf relaunch") // relaunch through the app shelf, which opens Echo's window
+	if v := awaitView("shelf launch opens Echo view"); v.data.Title != "Echo" || v.data.State != sdk.ViewReady {
+		t.Fatalf("shelf launch did not open Echo window: %+v", v.data)
+	}
+	// First Esc leaves the Windows screen back to the shelf; second clears the
+	// shelf filter; third returns to the prompt.
+	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	p.Send(tea.KeyPressMsg{Code: tea.KeyEsc})
 	submit("exit", "exit")
@@ -819,10 +824,13 @@ func TestKeypadKeysReachMainKeyboardPaths(t *testing.T) {
 		t.Fatalf("submitted %q", m.history[len(m.history)-1])
 	}
 
-	// The launcher's keystroke paths see the same twins.
+	// The launcher's keystroke paths see the same twins: Keypad Enter opens a
+	// running app's window and launches a ready app.
 	l := New(context.Background(), noopCaller{}, nil)
 	l.setMode(modeLauncher)
-	l.apps = []appStatus{screenStatus(), screenStatus()}
+	readyScreen := screenStatus()
+	readyScreen.Running, readyScreen.PID = false, 0
+	l.apps = []appStatus{screenStatus(), readyScreen}
 	l.Update(tea.KeyPressMsg{Code: tea.KeyKpDown})
 	if l.selected != 1 {
 		t.Fatalf("launcher kp down = %d", l.selected)
@@ -830,6 +838,12 @@ func TestKeypadKeysReachMainKeyboardPaths(t *testing.T) {
 	l.Update(tea.KeyPressMsg{Code: tea.KeyKpEnter})
 	if got := l.transcript[len(l.transcript)-1].text; !strings.HasSuffix(got, "> launch com.test.screen") {
 		t.Fatalf("launcher kp enter = %q", got)
+	}
+	l.busy = false
+	l.Update(tea.KeyPressMsg{Code: tea.KeyKpUp})
+	l.Update(tea.KeyPressMsg{Code: tea.KeyKpEnter})
+	if !l.onWindows() || l.FocusedWindow() != "com.test.screen" {
+		t.Fatalf("launcher kp enter on running app: onWindows=%v focused=%q", l.onWindows(), l.FocusedWindow())
 	}
 }
 

@@ -2,6 +2,7 @@ package shell
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -9,6 +10,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/ipc"
+	"gostalgia/sdk"
 )
 
 func (m *Model) filteredApps() []appStatus {
@@ -179,18 +182,52 @@ func (m *Model) selectApp(id string) bool {
 	return false
 }
 
-// launchSelected launches the selected app, as Enter does in the launcher.
-// It is a shelf launch: a rejection belongs in the shelf, not on the command
-// line, and only its newest answer, from this visit to the shelf, may show.
+// launchSelected activates the selected app, as Enter and double-click do in
+// the launcher. A running app opens or focuses its window directly instead of
+// attempting a single-instance relaunch. A ready app is launched from the
+// shelf: on success its window opens while the user is still on this visit to
+// the shelf, and a rejection belongs in the shelf rather than the command line.
 func (m *Model) launchSelected() tea.Cmd {
 	filtered := m.filteredApps()
 	if len(filtered) == 0 || m.selected < 0 || m.selected >= len(filtered) {
 		return nil
 	}
 	a := filtered[m.selected]
+	if a.Running {
+		return m.openWindow(a)
+	}
 	m.launchSent++
 	m.launchNotice, m.launchNoticeApp = "", ""
 	return m.submitFrom("launch "+a.Manifest.ID, originShelfLaunch, m.launchSent, a.Manifest.ID, m.shelfEpoch)
+}
+
+// canOpenShelfLaunch reports whether a completed shelf launch may open its
+// window: only the newest launch from the current visit to the shelf, while
+// the shelf still owns focus and no modal layer is open.
+func (m *Model) canOpenShelfLaunch(seq, epoch uint64) bool {
+	return seq == m.launchSent && epoch == m.shelfEpoch &&
+		m.currentMode() == modeLauncher && !m.onWindows() && !m.modalOpen()
+}
+
+// resolveShelfLaunchedApp looks up the freshly launched app's live status and
+// reports whether it is running and whether it exposes a presentation window.
+// Headless apps without an app/<id>/view route stay on the shelf rather than
+// opening an error window.
+func resolveShelfLaunchedApp(ctx context.Context, client Caller, id string) (app appStatus, found, hasView bool) {
+	if client == nil || id == "" {
+		return appStatus{}, false, false
+	}
+	var apps []appStatus
+	if err := client.Call(ctx, "app/list", nil, &apps); err != nil {
+		return appStatus{}, false, false
+	}
+	for _, a := range apps {
+		if a.Manifest.ID == id && a.Running {
+			_, _, err := fetchView(ctx, client, id, sdk.PresentationVersion)
+			return a, true, ipc.ErrorCode(err) != ipc.CodeUnknownMethod
+		}
+	}
+	return appStatus{}, false, false
 }
 
 // launcherNoticeLine is the shelf's launch rejection, w cells wide. The

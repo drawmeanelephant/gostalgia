@@ -76,7 +76,12 @@ const (
 // launcherCompactHintsWidth is the narrowest frame that can show
 // "Esc PROMPT · Enter RUN · F3 STOP" (32 cells). Narrower frames keep the
 // shelf's three primary hints whole by using the shorter PROMPT label.
-const launcherCompactHintsWidth = 32
+// launcherCompactOpenHintsWidth is the corresponding threshold for
+// "Esc PROMPT · Enter OPEN · F3 STOP" (33 cells).
+const (
+	launcherCompactHintsWidth     = 32
+	launcherCompactOpenHintsWidth = 33
+)
 
 // windowCompactHintsWidth is the narrowest frame that can show the full
 // window hints through Tab FOCUS ("Esc CANCEL/BACK · Ctrl-W CLOSE · Tab FOCUS",
@@ -540,7 +545,7 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)
 		if sel >= 0 && filtered[sel].Running {
-			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter relaunch, F3 stop, F4 view.", viewText(filtered[sel].Manifest.Name), filtered[sel].PID), theme.Success)
+			prompt += m.kit.StatusText(fmt.Sprintf("%s is LIVE (PID %d). Enter open, F3 stop, F4 view.", viewText(filtered[sel].Manifest.Name), filtered[sel].PID), theme.Success)
 		} else if sel >= 0 {
 			prompt += m.kit.Muted(fmt.Sprintf("Enter launches %s. F3 stop%sF4 view%sEsc prompt.", viewText(filtered[sel].Manifest.Name), m.kit.Separator(), m.kit.Separator()))
 		} else {
@@ -714,18 +719,28 @@ func (m *Model) bindings(home homeView) []ui.Binding {
 	case m.currentMode() == modeLauncher:
 		filtered := m.filteredApps()
 		sel := min(m.selected, len(filtered)-1)
+		running := sel >= 0 && filtered[sel].Running
+		enterHelp := "RUN"
+		compactWidth := launcherCompactHintsWidth
+		if running && m.width > minFrameWidth {
+			// "Esc BACK · Enter OPEN · F3 STOP" needs 31 cells; at the
+			// 30-cell floor keep the three-letter RUN label so F3 STOP still
+			// fits as a complete hint.
+			enterHelp = "OPEN"
+			compactWidth = launcherCompactOpenHintsWidth
+		}
 		back := "PROMPT"
-		if m.width < launcherCompactHintsWidth {
-			// "Esc PROMPT · Enter RUN · F3 STOP" needs 32 cells. The 30-cell
-			// frame shows all three primaries with the shorter label, and the
-			// help bar drops any binding that would not fit whole.
+		if m.width < compactWidth {
+			// "Esc PROMPT · Enter RUN · F3 STOP" needs 32 cells (33 with OPEN).
+			// Narrower frames show all three primaries with the shorter label,
+			// and the help bar drops any binding that would not fit whole.
 			back = "BACK"
 		}
 		return []ui.Binding{
 			{Key: "Esc", Help: back},
-			{Key: "Enter", Help: "RUN", Disabled: m.busy || len(filtered) == 0},
-			{Key: "F3", Help: "STOP", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
-			{Key: "F4", Help: "VIEW", Disabled: m.busy || sel < 0 || !filtered[sel].Running},
+			{Key: "Enter", Help: enterHelp, Disabled: m.busy || len(filtered) == 0},
+			{Key: "F3", Help: "STOP", Disabled: m.busy || !running},
+			{Key: "F4", Help: "VIEW", Disabled: m.busy || !running},
 			{Key: "F5", Help: "TASKS"},
 			{Key: "↑↓", Help: "SELECT", Disabled: m.busy || len(filtered) == 0},
 			{Key: "Ctrl-P", Help: "PALETTE"},

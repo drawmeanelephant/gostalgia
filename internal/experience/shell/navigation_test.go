@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"gostalgia/internal/ipc"
 )
 
 func mockApps() []appStatus {
@@ -198,14 +199,21 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 		t.Fatalf("expected selected 0 after up arrow, got %d", m.selected)
 	}
 
-	// Enter on selected app returns launch cmd.
+	// Enter on a running app opens/focuses its window without launching.
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if cmd == nil {
-		t.Fatal("expected launch command on Enter")
+		t.Fatal("expected open-window command on Enter for running app")
 	}
+	if m.Focus() != FocusWindow || m.FocusedWindow() != "com.gostalgia.echo" {
+		t.Fatalf("Enter on running app: focus=%v window=%q, want window com.gostalgia.echo", m.Focus(), m.FocusedWindow())
+	}
+	settleFiniteMotion(m)
 
-	// Reset busy state to simulate command completion.
-	m.busy = false
+	// Esc returns to the launcher with Echo still selected.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.Focus() != FocusLauncher {
+		t.Fatalf("expected FocusLauncher after Esc from window, got %v", m.Focus())
+	}
 
 	// F3 on the selected running app asks first, then Tab and Enter
 	// confirm the stop. (Before #209, F3 returned the stop command itself.)
@@ -219,6 +227,17 @@ func TestLauncherKeyboardNavigationAndActions(t *testing.T) {
 	_, stopCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if stopCmd == nil {
 		t.Fatal("expected stop command on confirming F3")
+	}
+	m.busy = false
+
+	// Enter on a ready (non-running) app returns a launch command.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.selected != 1 {
+		t.Fatalf("expected selected 1 (Clock), got %d", m.selected)
+	}
+	_, launchCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if launchCmd == nil || !m.busy {
+		t.Fatal("expected launch command on Enter for ready app")
 	}
 }
 
@@ -370,40 +389,46 @@ func TestPromptCommandNavigation(t *testing.T) {
 	}
 }
 
-// launchCaller answers app/launch with launchErr and app/list with apps, so
-// the shelf's asynchronous launch and refresh can be observed separately.
+// launchCaller answers app/launch with launchErr, app/list with apps, and
+// optional app/<id>/view with viewErr, so the shelf's asynchronous launch and
+// refresh can be observed separately.
 type launchCaller struct {
-	launchErr error
-	apps      []appStatus
+	launchErr   error
+	viewErr     error
+	launchCalls int
+	apps        []appStatus
 }
 
 func (c *launchCaller) Call(_ context.Context, method string, _ any, out any) error {
-	switch method {
-	case "app/launch":
+	switch {
+	case method == "app/launch":
+		c.launchCalls++
 		return c.launchErr
-	case "app/list":
+	case method == "app/list":
 		data, err := json.Marshal(c.apps)
 		if err != nil {
 			return err
 		}
 		return json.Unmarshal(data, out)
+	case strings.HasSuffix(method, "/view"):
+		return c.viewErr
 	}
 	return nil
 }
 
 // A rejected launch from the shelf is feedback in the shelf: the user keeps
-// the filter, the selected card and the live instance, and the tab stays put.
+// the filter, the selected card and any live instance, and the tab stays put.
 func TestRejectedLauncherLaunchRetainsContext(t *testing.T) {
-	errorText := "app: com.gostalgia.echo is already running or initializing (pid 7)"
+	errorText := "app: com.gostalgia.clock is already running or initializing (pid 7)"
 	apps := []appStatus{
-		runningApp("com.gostalgia.echo", "Echo", 7),
 		readyApp("com.gostalgia.clock", "Clock"),
+		runningApp("com.gostalgia.echo", "Echo", 7),
 	}
 	caller := &launchCaller{launchErr: errors.New(errorText), apps: apps}
 	m := New(context.Background(), caller, nil)
 	m.apps = apps
 	m.setMode(modeLauncher)
-	m.launcherQuery = "Echo"
+	m.launcherQuery = "Clock"
 	m.selected = 0
 
 	cmd := m.launchSelected()
@@ -418,21 +443,18 @@ func TestRejectedLauncherLaunchRetainsContext(t *testing.T) {
 	if got := m.Focus(); got != FocusLauncher {
 		t.Fatalf("focus after rejected launch = %v, want launcher", got)
 	}
-	if m.launcherQuery != "Echo" {
-		t.Fatalf("filter after rejection = %q, want Echo", m.launcherQuery)
+	if m.launcherQuery != "Clock" {
+		t.Fatalf("filter after rejection = %q, want Clock", m.launcherQuery)
 	}
-	if got := selectedAppID(m); got != "com.gostalgia.echo" {
+	if got := selectedAppID(m); got != "com.gostalgia.clock" {
 		t.Fatalf("selected app after rejection = %q", got)
 	}
-	if len(m.apps) != len(apps) || !m.apps[0].Running || m.apps[0].PID != 7 {
+	if len(m.apps) != len(apps) || !m.apps[1].Running || m.apps[1].PID != 7 {
 		t.Fatalf("rejection replaced the live instance: %+v", m.apps)
 	}
 	body := strings.Join(m.renderLauncher(80, 12), "\n")
 	if !strings.Contains(body, "LAUNCH FAILED") || !strings.Contains(body, "already running or initializing") {
 		t.Fatalf("shelf shows no readable rejection:\n%s", body)
-	}
-	if view := m.View().Content; !strings.Contains(view, "LIVE / PID 7") {
-		t.Fatalf("live instance missing from the shelf:\n%s", view)
 	}
 	// The feedback also fits the shell's smallest frame.
 	m.Update(tea.WindowSizeMsg{Width: 30, Height: 10})
@@ -465,7 +487,7 @@ func TestRejectedLauncherLaunchRetainsContext(t *testing.T) {
 // back, rewrite the current filter, or appear as late shelf feedback.
 func TestLateLauncherRejectionDoesNotStealNavigation(t *testing.T) {
 	apps := []appStatus{
-		runningApp("com.gostalgia.echo", "Echo", 7),
+		readyApp("com.gostalgia.echo", "Echo"),
 		readyApp("com.gostalgia.clock", "Clock"),
 	}
 	caller := &launchCaller{
@@ -501,7 +523,7 @@ func TestLateLauncherRejectionDoesNotStealNavigation(t *testing.T) {
 // rejection a successful launch cleared.
 func TestShelfLaunchRejectionsKeepNewestOutcome(t *testing.T) {
 	apps := []appStatus{
-		runningApp("com.gostalgia.echo", "Echo", 7),
+		readyApp("com.gostalgia.echo", "Echo"),
 		readyApp("com.gostalgia.clock", "Clock"),
 	}
 	caller := &launchCaller{apps: apps}
@@ -576,37 +598,130 @@ func TestLatePromptLaunchResultDoesNotStealFocus(t *testing.T) {
 	}
 }
 
-// A successful shelf launch keeps the shelf as the successful path did and
-// its accepted registry refresh shows the new live instance.
-func TestLauncherLaunchSuccessKeepsShelf(t *testing.T) {
-	live := runningApp("com.gostalgia.echo", "Echo", 8)
+// A successful shelf launch of an app with a presentation opens its window,
+// updates the shelf's live status, and Esc returns to the shelf where Enter
+// focuses the existing window without relaunching.
+func TestLauncherLaunchSuccessOpensWindowAndReEnterFocuses(t *testing.T) {
+	live := runningApp("com.gostalgia.dogcalc", "Dogcalc", 8)
 	caller := &launchCaller{apps: []appStatus{live}}
 	m := New(context.Background(), caller, nil)
-	m.apps = []appStatus{readyApp("com.gostalgia.echo", "Echo")}
+	m.apps = []appStatus{readyApp("com.gostalgia.dogcalc", "Dogcalc")}
 	m.setMode(modeLauncher)
+	m.launcherQuery = "dog"
 	m.selected = 0
 
-	if cmd := m.launchSelected(); cmd == nil {
+	cmd := m.launchSelected()
+	if cmd == nil {
 		t.Fatal("launch of the selected app returned no command")
-	} else {
-		m.Update(cmd())
 	}
-	if got := m.Focus(); got != FocusLauncher {
-		t.Fatalf("focus after successful launch = %v, want launcher", got)
+	m.Update(cmd())
+	if caller.launchCalls != 1 {
+		t.Fatalf("launch calls = %d, want 1", caller.launchCalls)
+	}
+	if got := m.Focus(); got != FocusWindow {
+		t.Fatalf("focus after successful launch = %v, want window", got)
+	}
+	if got := m.FocusedWindow(); got != "com.gostalgia.dogcalc" {
+		t.Fatalf("focused window = %q, want com.gostalgia.dogcalc", got)
+	}
+	if m.views["com.gostalgia.dogcalc"] == nil || m.views["com.gostalgia.dogcalc"].pid != 8 {
+		t.Fatalf("opened window did not bind live PID 8: %+v", m.views["com.gostalgia.dogcalc"])
 	}
 	if m.launchNotice != "" {
 		t.Fatalf("successful launch left rejection feedback: %q", m.launchNotice)
 	}
-
-	// The result's registry refresh is what turns the card LIVE.
-	for _, msg := range commandMessages(t, m.refreshAppsCmd()) {
-		if appMsg, ok := msg.(appListMsg); ok {
-			m.Update(appMsg)
-		}
-	}
 	if len(m.apps) != 1 || !m.apps[0].Running || m.apps[0].PID != 8 {
-		t.Fatalf("successful launch did not reach the shelf: %+v", m.apps)
+		t.Fatalf("successful launch did not update shelf status: %+v", m.apps)
 	}
+
+	// Esc leaves the Windows screen back to the Apps shelf, keeping the filter
+	// and the open window.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if m.Focus() != FocusLauncher || m.launcherQuery != "dog" {
+		t.Fatalf("Esc from window: focus=%v query=%q", m.Focus(), m.launcherQuery)
+	}
+
+	// Pressing Enter again on the LIVE app focuses its window without another launch.
+	_, refocusCmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if refocusCmd != nil {
+		t.Fatal("refocusing an already-open window should not refetch or relaunch")
+	}
+	if caller.launchCalls != 1 {
+		t.Fatalf("second Enter on LIVE app called app/launch (%d times), want 1", caller.launchCalls)
+	}
+	if m.Focus() != FocusWindow || m.FocusedWindow() != "com.gostalgia.dogcalc" {
+		t.Fatalf("second Enter on LIVE app did not focus window: focus=%v window=%q", m.Focus(), m.FocusedWindow())
+	}
+	if m.launchNotice != "" {
+		t.Fatalf("second Enter on LIVE app set launchNotice %q", m.launchNotice)
+	}
+}
+
+// Launching a headless app (no app/<id>/view route) from the shelf keeps the
+// user on the shelf instead of opening an error window.
+func TestLauncherLaunchHeadlessAppStaysOnShelf(t *testing.T) {
+	live := runningApp("com.test.headless", "Headless", 11)
+	caller := &launchCaller{
+		apps:    []appStatus{live},
+		viewErr: &ipc.Error{Code: ipc.CodeUnknownMethod, Message: `unknown method "app/com.test.headless/view"`},
+	}
+	m := New(context.Background(), caller, nil)
+	m.apps = []appStatus{readyApp("com.test.headless", "Headless")}
+	m.setMode(modeLauncher)
+	m.selected = 0
+
+	cmd := m.launchSelected()
+	if cmd == nil {
+		t.Fatal("launch returned no command")
+	}
+	m.Update(cmd())
+	if m.Focus() != FocusLauncher || m.onWindows() {
+		t.Fatalf("headless app launch changed screen: focus=%v onWindows=%v", m.Focus(), m.onWindows())
+	}
+	if !m.apps[0].Running || m.apps[0].PID != 11 {
+		t.Fatalf("headless app status not updated: %+v", m.apps[0])
+	}
+}
+
+// Leaving the shelf (or opening a modal) before a shelf launch answers must
+// not yank the user into the launched app's window.
+func TestLateShelfLaunchSuccessDoesNotStealNavigation(t *testing.T) {
+	t.Run("navigated away", func(t *testing.T) {
+		live := runningApp("com.gostalgia.dogcalc", "Dogcalc", 14)
+		caller := &launchCaller{apps: []appStatus{live}}
+		m := New(context.Background(), caller, nil)
+		m.apps = []appStatus{readyApp("com.gostalgia.dogcalc", "Dogcalc")}
+		m.setMode(modeLauncher)
+		pending := m.launchSelected()
+
+		m.setMode(modeHome)
+		m.Update(pending())
+		if m.Focus() != FocusHome || m.onWindows() {
+			t.Fatalf("late shelf launch stole focus: focus=%v onWindows=%v", m.Focus(), m.onWindows())
+		}
+		// Returning to the shelf later also starts a new epoch; a still-older
+		// reply must not open a window either.
+		m.setMode(modeLauncher)
+		m.Update(pending())
+		if m.Focus() != FocusLauncher || m.onWindows() {
+			t.Fatalf("late shelf launch from earlier visit stole focus: focus=%v onWindows=%v", m.Focus(), m.onWindows())
+		}
+	})
+
+	t.Run("modal open", func(t *testing.T) {
+		live := runningApp("com.gostalgia.dogcalc", "Dogcalc", 15)
+		caller := &launchCaller{apps: []appStatus{live}}
+		m := New(context.Background(), caller, nil)
+		m.apps = []appStatus{readyApp("com.gostalgia.dogcalc", "Dogcalc")}
+		m.setMode(modeLauncher)
+		pending := m.launchSelected()
+
+		m.openPalette()
+		m.Update(pending())
+		if m.Focus() != FocusPalette || m.onWindows() {
+			t.Fatalf("shelf launch disrupted open palette: focus=%v onWindows=%v", m.Focus(), m.onWindows())
+		}
+	})
 }
 
 type errCaller struct {

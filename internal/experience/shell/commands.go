@@ -75,6 +75,8 @@ type resultMsg struct {
 	originSeq        uint64
 	originApp        string
 	originEpoch      uint64
+	shelfLaunchApp   *appStatus
+	shelfLaunchOpen  bool
 	cwd              string
 	status           sysStatusData
 	documents        []docShortcut
@@ -306,6 +308,17 @@ func execute(ctx context.Context, c Caller, cwd, line string, chrome ...func(str
 		}
 	}
 	return result
+}
+
+// stoppedAppID extracts the app ID from a "stop <id>" command so the shelf can
+// drop stale LIVE state immediately before the background app/list refresh
+// returns.
+func stoppedAppID(line string) string {
+	args, err := words(line)
+	if err != nil || len(args) != 2 || !strings.EqualFold(args[0], "stop") {
+		return ""
+	}
+	return args[1]
 }
 
 // commandChangesApps reports whether line names a command that can change
