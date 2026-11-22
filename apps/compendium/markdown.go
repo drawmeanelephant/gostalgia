@@ -382,7 +382,10 @@ func (sc *scanner) line(start, end int) int {
 			trimmedLeft := strings.TrimLeftFunc(raw, unicode.IsSpace)
 			lead := len(raw) - len(trimmedLeft)
 			name := strings.TrimRightFunc(trimmedLeft, unicode.IsSpace)
-			if name != "" && sc.onLink != nil {
+			// A name carrying a backtick is not a link: it would hold the
+			// line open as a fence info string only as long as the name is
+			// there, so renaming it away could drop the link into a fence.
+			if name != "" && !strings.ContainsRune(name, '`') && sc.onLink != nil {
 				sc.onLink(span{Start: i, End: i + 2 + closeAt + 2,
 					NameStart: i + 2 + lead, NameEnd: i + 2 + lead + len(name), Name: name})
 			}
