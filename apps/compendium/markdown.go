@@ -39,7 +39,10 @@ func validTitle(title string) error {
 // It maps every rune to one representative of its Unicode simple case
 // folding orbit, so it agrees with strings.EqualFold: final and medial
 // sigma, long s, and the Kelvin sign all fold together, which plain
-// strings.ToLower does not do.
+// strings.ToLower does not do. When the orbit representative drops a mark
+// the rune's canonical decomposition carries — the dot in İ, spelled out
+// as "İ" — the folded decomposition is emitted instead so the mark is
+// not silently lost.
 func fold(title string) string {
 	ascii := true
 	for i := 0; i < len(title); i++ {
@@ -51,7 +54,26 @@ func fold(title string) string {
 	if ascii {
 		return strings.ToLower(title)
 	}
-	return strings.Map(foldRune, title)
+	var b strings.Builder
+	b.Grow(len(title))
+	for _, r := range title {
+		rep := foldRune(r)
+		if d := decompositions[r]; d != "" && decompositions[rep] == "" && hasMark(d) {
+			b.WriteString(strings.Map(foldRune, d))
+		} else {
+			b.WriteRune(rep)
+		}
+	}
+	return b.String()
+}
+
+func hasMark(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			return true
+		}
+	}
+	return false
 }
 
 func foldRune(r rune) rune {
@@ -360,7 +382,10 @@ func (sc *scanner) line(start, end int) int {
 			trimmedLeft := strings.TrimLeftFunc(raw, unicode.IsSpace)
 			lead := len(raw) - len(trimmedLeft)
 			name := strings.TrimRightFunc(trimmedLeft, unicode.IsSpace)
-			if name != "" && sc.onLink != nil {
+			// A name carrying a backtick is not a link: it would hold the
+			// line open as a fence info string only as long as the name is
+			// there, so renaming it away could drop the link into a fence.
+			if name != "" && !strings.ContainsRune(name, '`') && sc.onLink != nil {
 				sc.onLink(span{Start: i, End: i + 2 + closeAt + 2,
 					NameStart: i + 2 + lead, NameEnd: i + 2 + lead + len(name), Name: name})
 			}

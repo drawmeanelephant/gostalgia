@@ -554,7 +554,7 @@ func TestDraftOfEscapingContentFitsFrame(t *testing.T) {
 // normKey is a fold: idempotent, coarser than fold, and blind to whether
 // a table letter is precomposed or spelled as base plus marks.
 func FuzzNormKey(f *testing.F) {
-	for _, s := range []string{"Caf\u00e9", "Cafe\u0301", "\u212b", "\u1e69", "\ud55c\uae00", "\u1112\u1161\u11ab", "ΆΈ", "plain"} {
+	for _, s := range []string{"Caf\u00e9", "Cafe\u0301", "\u212b", "\u1e69", "\ud55c\uae00", "\u1112\u1161\u11ab", "ΆΈ", "\u0130", "\u13a9", "\uab79", "plain"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
