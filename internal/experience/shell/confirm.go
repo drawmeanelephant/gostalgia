@@ -7,6 +7,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
+	"gostalgia/internal/experience/windows"
+	"gostalgia/internal/vfs"
+	"gostalgia/sdk"
 )
 
 // confirmKind is a destructive action that waits for confirmation.
@@ -17,6 +20,7 @@ const (
 	confirmStopApp
 	confirmStopProcess
 	confirmReap
+	confirmGrantPath
 )
 
 // The dialog's actions, in order. Cancel comes first and is focused when
@@ -41,8 +45,15 @@ type confirmation struct {
 	polls int
 	// typed reaps through the shell command, so its result lands in the
 	// transcript as a typed reap always has.
-	typed  bool
-	active int
+	typed bool
+	// grant fields freeze a single-path VFS grant request at dialog open time.
+	grantPath        string
+	grantAccess      string
+	grantActionLabel string
+	grantWindow      windows.ID
+	grantEpoch       uint64
+	grantReq         sdk.ActionRequest
+	active           int
 }
 
 // destructiveLine reports the confirmation a typed shell line asks for.
@@ -98,6 +109,66 @@ func (m *Model) openConfirm(c confirmation) tea.Cmd {
 	return m.startOverlayEntrance()
 }
 
+// openGrantConfirm validates an app's declarative single-path grant request
+// and opens an operator confirmation dialog frozen to that exact target.
+// Ungrantable paths (root, profile trash, other apps' private storage) are
+// rejected before any dialog opens.
+func (m *Model) openGrantConfirm(v *appView, prevReq sdk.ActionRequest, req sdk.PathGrantRequest) tea.Cmd {
+	if m.confirm != nil || !m.onWindows() || m.focusedView() != v {
+		return nil
+	}
+	norm, err := vfs.Normalize(req.Path)
+	if err != nil || norm == "." || norm == "apps/data" {
+		return nil
+	}
+	cleanPath := "/" + norm
+	if isPriv, owner := vfs.ParseAppPrivatePath(cleanPath); isPriv && owner != v.id {
+		return nil
+	}
+	if vfs.IsProfileTrashPath(cleanPath) {
+		return nil
+	}
+	if req.Access != string(vfs.AccessRead) && req.Access != string(vfs.AccessReadWrite) {
+		return nil
+	}
+	actionLabel := ""
+	for _, a := range v.data.Actions {
+		if a.ID == req.Action && !a.Disabled {
+			actionLabel = a.Label
+			break
+		}
+	}
+	if actionLabel == "" {
+		return nil
+	}
+	name := v.id
+	for _, a := range m.apps {
+		if a.Manifest.ID == v.id && strings.TrimSpace(a.Manifest.Name) != "" {
+			name = a.Manifest.Name
+			break
+		}
+	}
+	retryReq := prevReq
+	retryReq.Action = req.Action
+	retryReq.Instance = v.instance
+	retryReq.Values = make(map[string]string, len(prevReq.Values))
+	for k, val := range prevReq.Values {
+		retryReq.Values[k] = val
+	}
+	return m.openConfirm(confirmation{
+		kind:             confirmGrantPath,
+		appID:            v.id,
+		name:             name,
+		pid:              v.pid,
+		grantPath:        cleanPath,
+		grantAccess:      req.Access,
+		grantActionLabel: actionLabel,
+		grantWindow:      windows.ID(v.id),
+		grantEpoch:       v.epoch,
+		grantReq:         retryReq,
+	})
+}
+
 // stoppable reports whether a process in state can still be stopped: it
 // has not ended and is not already stopping.
 func stoppable(state string) bool {
@@ -138,6 +209,21 @@ func (m *Model) confirmBlocked(c confirmation) string {
 		}
 		if !alive {
 			return fmt.Sprintf("PID %d is no longer running.", c.pid)
+		}
+	case confirmGrantPath:
+		v := m.views[c.grantWindow]
+		if v == nil || v.epoch != c.grantEpoch || v.instance != c.grantReq.Instance {
+			return "App window closed or restarted."
+		}
+		if v.busy {
+			return "Another app action is still running."
+		}
+		if c.pid > 0 && m.tasks != nil {
+			for _, p := range m.tasks.Processes() {
+				if p.ID == c.pid && !stoppable(p.State) {
+					return fmt.Sprintf("%s is no longer running as PID %d.", viewText(c.name), c.pid)
+				}
+			}
 		}
 	}
 	return ""
@@ -180,6 +266,7 @@ func (m *Model) confirmDialog() ui.Dialog {
 	c := *m.confirm
 	blocked := m.confirmBlocked(c)
 	var title, body, verb string
+	state := theme.Error
 	switch c.kind {
 	case confirmShutdown:
 		title, verb = "Shut down Gostalgia?", "Shut down"
@@ -198,13 +285,18 @@ func (m *Model) confirmDialog() ui.Dialog {
 	case confirmReap:
 		title, verb = "Reap ended processes?", "Reap all"
 		body = "Clears every terminated process in the environment, not only this row."
+	case confirmGrantPath:
+		state = theme.Normal
+		title, verb = "Allow "+viewText(c.name)+" file access?", "Allow"
+		body = fmt.Sprintf("Grant %s (%s) %s access for this session?\n%s\nOnly this path is granted.",
+			viewText(c.name), viewText(c.appID), viewText(c.grantAccess), viewText(c.grantPath))
 	}
 	// A reason comes first so a small screen still shows it.
 	if blocked != "" {
 		body = blocked + " " + body
 	}
 	return ui.Dialog{
-		Title: title, Body: body, State: theme.Error, Active: c.active,
+		Title: title, Body: body, State: state, Active: c.active,
 		Actions: []ui.Action{{Label: "Cancel"}, {Label: verb, Disabled: blocked != ""}},
 	}
 }
@@ -215,7 +307,9 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	actions := m.confirmDialog().Actions
 	switch msg.String() {
 	case "esc":
+		c := *m.confirm
 		m.confirm = nil
+		m.confirmCanceled(c)
 	case "tab", "right":
 		m.moveConfirm(actions, 1)
 	case "shift+tab", "left":
@@ -234,6 +328,7 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		c := *m.confirm
 		if active == confirmCancel {
 			m.confirm = nil
+			m.confirmCanceled(c)
 			return m, nil
 		}
 		if m.confirmBlocked(c) != "" {
@@ -243,6 +338,20 @@ func (m *Model) handleConfirmKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.confirmed(c)
 	}
 	return m, nil
+}
+
+func (m *Model) confirmCanceled(c confirmation) {
+	if c.kind != confirmGrantPath {
+		return
+	}
+	v := m.views[c.grantWindow]
+	if v == nil || v.epoch != c.grantEpoch {
+		return
+	}
+	if strings.TrimSpace(v.data.Error) == "" {
+		v.banner = fmt.Sprintf("Permission denied: %s was not granted %s access to %s. Select %s again to request access, or save under /apps/data/%s/.",
+			viewText(c.name), viewText(c.grantAccess), viewText(c.grantPath), viewText(c.grantActionLabel), viewText(c.appID))
+	}
 }
 
 // moveConfirm moves the dialog's focus by step to the next enabled action.
@@ -274,6 +383,8 @@ func (m *Model) confirmed(c confirmation) tea.Cmd {
 		}
 		m.procPending = true
 		return m.reapProcessesCmd()
+	case confirmGrantPath:
+		return m.grantPathAndRetry(c)
 	}
 	return nil
 }

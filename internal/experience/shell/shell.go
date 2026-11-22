@@ -1324,7 +1324,7 @@ func (m *Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tasks.UpdateReceipt(&r)
 		}
 		return m, nil
-	case viewMsg, viewTickMsg, viewCheckMsg, viewCancelMsg, viewSubscribedMsg, viewEventMsg:
+	case viewMsg, viewTickMsg, viewCheckMsg, viewCancelMsg, viewSubscribedMsg, viewEventMsg, grantPathMsg:
 		return m, m.updatePresentation(msg)
 	case closedMsg:
 		// The connection is gone, so no cancel request can reach an app;

@@ -733,10 +733,11 @@ func (s *FSService) grant(ctx context.Context, req ipc.Request) (any, error) {
 		return nil, err
 	}
 	var p struct {
-		AppID     string `json:"app_id"`
-		Path      string `json:"path"`
-		Access    string `json:"access"`
-		Recursive bool   `json:"recursive"`
+		AppID        string `json:"app_id"`
+		Path         string `json:"path"`
+		Access       string `json:"access"`
+		Recursive    bool   `json:"recursive"`
+		SessionBound bool   `json:"session_bound"`
 	}
 	if err := ipc.DecodeParams(req.Params, &p); err != nil {
 		return nil, err
@@ -751,7 +752,12 @@ func (s *FSService) grant(ctx context.Context, req ipc.Request) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	g, err := gs.Issue(p.AppID, p.Path, mode, p.Recursive)
+	var g *vfs.Grant
+	if p.SessionBound {
+		g, err = gs.IssueSession(p.AppID, p.Path, mode, p.Recursive)
+	} else {
+		g, err = gs.Issue(p.AppID, p.Path, mode, p.Recursive)
+	}
 	if err != nil {
 		return nil, err
 	}

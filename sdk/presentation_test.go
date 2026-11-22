@@ -619,3 +619,43 @@ func TestPresentationV2ElementsAndCellActions(t *testing.T) {
 		t.Fatal("version-1 action accepted against version-2 snapshot")
 	}
 }
+
+func TestPresentationGrantRequestValidation(t *testing.T) {
+	base := testView()
+	base.Version, base.Instance = PresentationVersion, "launch"
+	base.GrantRequest = &PathGrantRequest{
+		Path:   "/users/guest/documents/test-note.txt",
+		Access: "read-write",
+		Action: "submit",
+		Reason: "Save document",
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid grant request rejected: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*View){
+		"version 2":        func(v *View) { v.Version = 2 },
+		"root path":        func(v *View) { v.GrantRequest.Path = "/" },
+		"relative path":    func(v *View) { v.GrantRequest.Path = "users/guest/documents/a.txt" },
+		"trailing slash":   func(v *View) { v.GrantRequest.Path = "/users/guest/documents/" },
+		"dotdot segment":   func(v *View) { v.GrantRequest.Path = "/users/guest/../a.txt" },
+		"backslash":        func(v *View) { v.GrantRequest.Path = `/users/guest\a.txt` },
+		"double slash":     func(v *View) { v.GrantRequest.Path = "/users//guest/a.txt" },
+		"nul byte":         func(v *View) { v.GrantRequest.Path = "/users/guest/a\x00.txt" },
+		"oversized path":   func(v *View) { v.GrantRequest.Path = "/" + strings.Repeat("a", 1024) },
+		"invalid access":   func(v *View) { v.GrantRequest.Access = "admin" },
+		"disabled action":  func(v *View) { v.GrantRequest.Action = "off" },
+		"unknown action":   func(v *View) { v.GrantRequest.Action = "missing" },
+		"oversized reason": func(v *View) { v.GrantRequest.Reason = strings.Repeat("x", 513) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := base
+			req := *base.GrantRequest
+			v.GrantRequest = &req
+			mutate(&v)
+			if err := v.Validate(); err == nil {
+				t.Fatalf("accepted invalid grant request (%s): %+v", name, v.GrantRequest)
+			}
+		})
+	}
+}
