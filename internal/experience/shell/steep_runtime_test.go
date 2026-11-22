@@ -669,12 +669,11 @@ func TestSteepNotesScopedSaveFlow(t *testing.T) {
 	const docBody = "hello steep note"
 
 	// Reproduce Issue #292 step-by-step in a real 100x32 terminal:
-	// Open Apps, filter for notes, launch it, then F4 to view it.
+	// Open Apps, filter for notes, launch it: the shelf opens its window.
 	h.Key("f2").Wait("SEARCH: type to filter apps...")
 	h.Type("com.gostalgia.notes").Wait("Enter launches Notes")
-	h.Key("enter").Wait("Notes is LIVE")
+	h.Key("enter").Wait("Notes - [Untitled]")
 	steepAppRunning(t, client, "com.gostalgia.notes", true)
-	h.Key("f4").Wait("Notes - [Untitled]")
 
 	// Enter path, tab to content, type content, tab to Save, press Enter.
 	h.Type(docPath).Key("tab").Type(docBody).Key("tab").Key("enter")
