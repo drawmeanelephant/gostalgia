@@ -187,10 +187,13 @@ func (m *Model) closeAllWindows() []tea.Cmd {
 const (
 	minWindowWidth  = 32
 	minWindowHeight = 12
-	// A window opened while others are open is the body less this margin,
-	// and opens this far right of and below the window opened before it.
-	windowMarginX, windowMarginY   = 4, 2
-	windowCascadeX, windowCascadeY = 2, 1
+	// Cascaded windows align flush-left with the body so no clipped text or
+	// border slivers peek out along the left edge, and step down one row per
+	// window so each lower window's title bar stays visible. windowMarginX
+	// leaves two columns on the right for the static shadow and horizontal
+	// movement; windowShadowY leaves one row below when height permits.
+	windowMarginX, windowShadowY = 2, 1
+	windowCascadeY               = 1
 )
 
 // Window chrome, ported from the experimental bloom adapter.
@@ -253,14 +256,15 @@ func clampWindow(b windows.Bounds, body image.Point) windows.Bounds {
 
 // placeWindow is where a new window opens. The first fills the body, so one
 // window has the room the presentation had before windows, which an 80×24
-// focal-block split needs. Each later one is the body less a margin, a step
-// right of and below the window opened before it, clamped inside the body.
+// focal-block split needs. Each later one aligns flush-left one row below the
+// window opened before it, inset by windowMarginX on the right and
+// windowShadowY on the bottom when height permits, clamped inside the body.
 func (m *Model) placeWindow() windows.Bounds {
 	body := m.bodySize()
 	if m.windows.Len() == 0 {
 		return clampWindow(windows.Bounds{Width: body.X, Height: body.Y}, body)
 	}
-	b := windows.Bounds{Width: body.X - windowMarginX, Height: body.Y - windowMarginY}
+	y := windowCascadeY
 	var last *appView
 	for _, v := range m.views {
 		if last == nil || v.epoch > last.epoch {
@@ -269,10 +273,63 @@ func (m *Model) placeWindow() windows.Bounds {
 	}
 	if last != nil {
 		if w, ok := m.windows.Get(windows.ID(last.id)); ok {
-			b.X, b.Y = w.Bounds.X+windowCascadeX, w.Bounds.Y+windowCascadeY
+			y = w.Bounds.Y + windowCascadeY
 		}
 	}
+	b := windows.Bounds{
+		X:      0,
+		Y:      y,
+		Width:  body.X - windowMarginX,
+		Height: body.Y - y - windowShadowY,
+	}
 	return clampWindow(b, body)
+}
+
+// windowRect is b clamped inside body as a rectangle in body cells.
+func windowRect(b windows.Bounds, body image.Point) image.Rectangle {
+	b = clampWindow(b, body)
+	return image.Rect(b.X, b.Y, b.X+b.Width, b.Y+b.Height)
+}
+
+// windowObscured reports whether any higher window in above overlaps w's
+// interior content area. Obscured unfocused windows render a quiet blank
+// surface inside their chrome so clipped text fragments never compete with
+// the active window.
+func windowObscured(b windows.Bounds, body image.Point, above []image.Rectangle) bool {
+	content := windowRect(b, body).Inset(1)
+	if content.Empty() {
+		return false
+	}
+	for _, r := range above {
+		if !content.Intersect(r).Empty() {
+			return true
+		}
+	}
+	return false
+}
+
+// windowsPromptHint is the prompt-row annotation on the Windows screen.
+// With one window or below the floating floor it keeps the compact default
+// hint; with multiple floating windows it lists the other open windows in
+// F8 cycle order so every open window stays discoverable even when the
+// focused window covers the rest of the body.
+func (m *Model) windowsPromptHint() string {
+	if m.windows == nil || m.windows.Len() <= 1 || !m.floatingWindows() {
+		return "Window owns focus. Esc goes back, Ctrl-W closes."
+	}
+	order := m.windows.Order()
+	sep := m.kit.Separator()
+	others := make([]string, 0, len(order)-1)
+	for _, id := range order[:len(order)-1] {
+		if w, ok := m.windows.Get(id); ok {
+			title := viewText(w.Title)
+			if title == "" {
+				title = string(id)
+			}
+			others = append(others, title)
+		}
+	}
+	return "F8 next: " + strings.Join(others, sep)
 }
 
 // clampWindows keeps every window inside a resized body. A body below the
@@ -445,9 +502,13 @@ func (m *Model) windowsNode() bloom.Child {
 			return m.windowContent(m.focusedView(), true)
 		}
 		ws := m.windows.Windows()
+		rects := make([]image.Rectangle, len(ws))
+		for i, w := range ws {
+			rects[i] = windowRect(w.Bounds, body)
+		}
 		layers := make([]bloom.LayerNode, 0, len(ws))
-		for _, w := range ws {
-			layers = append(layers, m.windowLayer(w, body))
+		for i, w := range ws {
+			layers = append(layers, m.windowLayer(w, body, windowObscured(w.Bounds, body, rects[i+1:])))
 		}
 		return bloom.Overlay(bloom.Text("").Style(m.kit.TextStyle()), layers...)
 	})
@@ -472,7 +533,7 @@ func (m *Model) windowContent(v *appView, focused bool) bloom.Child {
 
 // windowLayer is one window over the desktop: an opaque box with its title
 // and close control on the top border, at its bounds clamped inside body.
-func (m *Model) windowLayer(w windows.Window, body image.Point) bloom.LayerNode {
+func (m *Model) windowLayer(w windows.Window, body image.Point, obscured bool) bloom.LayerNode {
 	id := w.ID
 	b := clampWindow(w.Bounds, body)
 	current, _ := m.windows.Focused()
@@ -495,13 +556,16 @@ func (m *Model) windowLayer(w windows.Window, body image.Point) bloom.LayerNode 
 		cue = ui.HoverMarker
 	}
 	titleText := m.kit.Truncate(lead+cue+ui.Sanitize(w.Title), titleWidth)
+	var closeStyled string
 	if focused {
 		titleText = m.kit.Selection(titleText)
+		closeStyled = m.kit.Text(closeText)
 	} else {
-		titleText = m.kit.Muted(titleText)
+		titleText = m.kit.WindowMuted(titleText)
+		closeStyled = m.kit.WindowMuted(closeText)
 	}
 	title := bloom.Text(titleText).ID(windowPart{id, windowTitle}).Truncate()
-	closeButton := bloom.Text(m.kit.Text(closeText)).ID(windowPart{id, windowClose}).Truncate()
+	closeButton := bloom.Text(closeStyled).ID(windowPart{id, windowClose}).Truncate()
 	if !m.mouseOff {
 		title = title.On(
 			on.Drag(func(e on.Event) tea.Cmd {
@@ -517,9 +581,16 @@ func (m *Model) windowLayer(w windows.Window, body image.Point) bloom.LayerNode 
 			m.windowHover(hoverWindowClose, id),
 		)
 	}
-	var content bloom.Child = m.kit.Leaf(func(ui.Bounds) string { return "" })
-	if v := m.views[id]; v != nil {
-		content = m.windowContent(v, focused)
+	var content bloom.Child
+	switch {
+	case !focused && obscured:
+		content = m.kit.WindowMutedLeaf(func(ui.Bounds) string { return "" })
+	case m.views[id] != nil:
+		content = m.windowContent(m.views[id], focused)
+	case !focused:
+		content = m.kit.WindowMutedLeaf(func(ui.Bounds) string { return "" })
+	default:
+		content = m.kit.Leaf(func(ui.Bounds) string { return "" })
 	}
 	box := bloom.Box(m.kit.WindowStyle(focused), content).
 		Edge(bloom.Top, bloom.End, closeButton).
@@ -527,8 +598,10 @@ func (m *Model) windowLayer(w windows.Window, body image.Point) bloom.LayerNode 
 	layer := bloom.Layer(box).ID(windowLayerID(id)).
 		Anchor(bloom.Start, bloom.Start).
 		Offset(b.X, b.Y).
-		Size(b.Width, b.Height).
-		Shadow(2, 1, m.windowShadow()...)
+		Size(b.Width, b.Height)
+	if focused {
+		layer = layer.Shadow(2, 1, m.windowShadow()...)
+	}
 	if progress, ok := m.windowProgress(id); ok {
 		layer = layer.Transition(progress, fx.Iris{})
 	}

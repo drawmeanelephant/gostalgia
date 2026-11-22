@@ -185,3 +185,27 @@ func TestWindowsReopenFocusesOrReplaces(t *testing.T) {
 		t.Fatal("a restarted app's window kept the old instance's state")
 	}
 }
+
+func TestWindowsPromptHintListsBackgroundWindowsInF8Order(t *testing.T) {
+	m := newWindowsModel()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 32})
+	openTitled(m, "com.test.a", "Dogcalc", screenData())
+	if got := m.windowsPromptHint(); got != "Window owns focus. Esc goes back, Ctrl-W closes." {
+		t.Fatalf("single-window prompt hint = %q", got)
+	}
+	openTitled(m, "com.test.b", "Compendium\nInjected\x1b[31m", screenData())
+	if got := m.windowsPromptHint(); !strings.Contains(got, "F8 next: Dogcalc") {
+		t.Fatalf("two-window prompt hint = %q", got)
+	}
+	// F8 focuses Dogcalc; Compendium is now next in F8 order and sanitized.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyF8})
+	got := m.windowsPromptHint()
+	if strings.ContainsAny(got, "\n\x1b") || !strings.Contains(got, "F8 next: Compendium Injected") {
+		t.Fatalf("post-F8 prompt hint = %q", got)
+	}
+	// Opening a third window lists both background windows in F8 order.
+	openTitled(m, "com.test.c", "Notes", screenData())
+	if got := m.windowsPromptHint(); !strings.Contains(got, "F8 next: Compendium Injected · Dogcalc") {
+		t.Fatalf("three-window prompt hint = %q", got)
+	}
+}

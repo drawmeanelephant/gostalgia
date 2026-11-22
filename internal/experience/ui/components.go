@@ -39,20 +39,39 @@ func (k Kit) Panel(p Panel, bounds Bounds) string {
 	return k.panel(p, bounds, k.theme.Borders.Panel)
 }
 
-// WindowStyle is the frame of a floating window: the panel border, in the
-// focus border color while the window is focused, with every cell, border
-// glyphs included, on the theme's surface, so nothing beneath shows through.
-// Plain keeps the border glyphs alone.
+func (k Kit) windowBorder(focused bool) lipgloss.Border {
+	if focused || k.ASCIIChrome() || k.theme.Borders.Panel == theme.ASCIIBorder() {
+		return k.theme.Borders.Panel
+	}
+	return lipgloss.NormalBorder()
+}
+
+// WindowStyle is the frame of a floating window: focused windows keep the
+// panel border in the focus border color on Surface, while unfocused windows
+// step down to a light border (preserving ASCII borders in Monochrome and
+// ASCII themes) in Muted on Canvas so background windows recede. Plain keeps
+// the border glyphs alone.
 func (k Kit) WindowStyle(focused bool) lipgloss.Style {
-	style := k.TextStyle().Border(k.theme.Borders.Panel)
+	border := k.windowBorder(focused)
 	if k.mode == Plain {
-		return style
+		return lipgloss.NewStyle().Border(border)
 	}
-	border := k.theme.Palette.Border
 	if focused {
-		border = k.theme.Focus.Border
+		return k.TextStyle().Border(border).
+			BorderForeground(k.resolve(k.theme.Focus.Border)).
+			BorderBackground(k.resolve(k.theme.Palette.Surface))
 	}
-	return style.BorderForeground(k.resolve(border)).BorderBackground(k.resolve(k.theme.Palette.Surface))
+	p := k.theme.Palette
+	return k.style(p.Muted, p.Canvas, false).Border(border).
+		BorderForeground(k.resolve(p.Muted)).
+		BorderBackground(k.resolve(p.Canvas))
+}
+
+// WindowMuted paints chrome and quiet backing for an unfocused floating
+// window in Muted on Canvas, matching WindowStyle(false).
+func (k Kit) WindowMuted(text string) string {
+	p := k.theme.Palette
+	return k.paint(text, p.Muted, p.Canvas, false)
 }
 
 func (k Kit) panel(p Panel, bounds Bounds, border lipgloss.Border) string {

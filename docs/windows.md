@@ -180,12 +180,33 @@ shows a "Too many windows" warning toast and opens nothing.
 ### Window geometry stays simple
 
 The first window fills the body, so one window has the room that the single
-presentation had, which an 80×24 focal-block split needs. Each later window is
-the body less a margin of 4 columns and 2 rows, and it opens 2 columns right of
-and 1 row below the window opened before it. The shell then clamps the window
-inside the body. A window is never smaller than 32×12 cells.
-That floor leaves a content area of at least 10 rows, which is the renderer's
-`primaryMinRows`, and room for the `[X]` control and a short title.
+presentation had, which an 80×24 focal-block split needs. Each later window
+aligns flush-left (`X = 0`) and opens 1 row below the window opened before it,
+sized to the body less a 2-column right margin (room for the static shadow and
+horizontal movement) and leaving 1 row below for the bottom shadow when height
+permits. The shell then clamps the window inside the body. A window is never
+smaller than 32×12 cells. That floor leaves a content area of at least 10 rows,
+which is the renderer's `primaryMinRows`, and room for the `[X]` control and a
+short title.
+
+To keep overlapping windows readable without hiding open apps (#296):
+
+- **Focused vs. unfocused chrome:** The focused window uses the theme's panel
+  border in the focus border color on `Surface` and casts the static 2×1 shadow
+  (in ANSI256 and TrueColor non-Monochrome themes). Unfocused windows step down
+  to a light single-line border (`┌─┐│└─┘` in Unicode themes; Monochrome and
+  ASCII themes keep their ASCII border) with muted title and `[X]` chrome on
+  `Canvas`, and cast no shadow so stacked cards never double-tint.
+- **Obscured background windows:** When any higher window overlaps an unfocused
+  window's interior content box, the obscured window draws a quiet blank
+  `Canvas` backing inside its border instead of clipped text fragments along
+  the edges, while its exposed top border, title, and `[X]` control remain
+  visible and interactive. Unfocused windows with no interior overlap still
+  render their content.
+- **Discoverability when covered:** While more than one floating window is open,
+  the prompt row lists the other open windows in F8 cycle order (`F8 next: …`),
+  so every open window stays discoverable even when raising a full-body window
+  covers the windows beneath it.
 
 When the terminal resizes, the shell moves and shrinks windows as needed to keep
 each one inside the body, without going below the floor.

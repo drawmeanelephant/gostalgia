@@ -27,7 +27,8 @@ func openTitled(m *Model, id windows.ID, title string, data sdk.View) *appView {
 }
 
 // twoWindows opens Alpha's pad, then Beta's screen over it: Alpha fills the
-// body and Beta is the body less 4×2, two columns right and a row down.
+// body and Beta aligns flush-left one row down, inset on the right and bottom
+// for the shadow and movement.
 func twoWindows(m *Model) *Model {
 	openTitled(m, alphaID, "Alpha", padData())
 	openTitled(m, betaID, "Beta", screenData())
@@ -72,30 +73,38 @@ func row(m *Model, y, x0, x1 int) string {
 }
 
 func TestWindowsOpenFillingTheBodyThenCascade(t *testing.T) {
-	m, _ := mouseModel(t, 80, 24)
-	body := rectOf(t, m, slotBody)
-	for i := range maxWindows {
-		id := windows.ID(fmt.Sprintf("com.test.w%d", i))
-		openTitled(m, id, fmt.Sprintf("W%d", i), screenData())
-		want := body
-		if i > 0 {
-			// The body less 4×2, two columns right of and a row below
-			// the window opened before, held inside the body.
-			want = image.Rect(0, 0, body.Dx()-4, body.Dy()-2).Add(body.Min).Add(image.Pt(min(2*i, 4), min(i, 2)))
-		}
-		if got := rectOf(t, m, windowLayerID(id)); got != want {
-			t.Fatalf("window %d opened at %v, want %v", i, got, want)
-		}
+	for _, size := range [][2]int{{80, 24}, {100, 32}} {
+		t.Run(sizeName(size), func(t *testing.T) {
+			m, _ := mouseModel(t, size[0], size[1])
+			body := rectOf(t, m, slotBody)
+			for i := range maxWindows {
+				id := windows.ID(fmt.Sprintf("com.test.w%d", i))
+				openTitled(m, id, fmt.Sprintf("W%d", i), screenData())
+				want := body
+				if i > 0 {
+					// Flush-left vertical cascade: step down one row per
+					// window, inset by windowMarginX on the right and
+					// windowShadowY below while keeping the minimum floor.
+					y := min(i, body.Dy()-minWindowHeight)
+					h := max(minWindowHeight, body.Dy()-y-windowShadowY)
+					want = image.Rect(0, 0, body.Dx()-windowMarginX, h).Add(body.Min).Add(image.Pt(0, y))
+				}
+				if got := rectOf(t, m, windowLayerID(id)); got != want {
+					t.Fatalf("window %d opened at %v, want %v", i, got, want)
+				}
+			}
+		})
 	}
 
-	// The cascade steps from where the window before it is now.
-	m, _ = floating(t, theme.Nostalgia(), ui.Plain, 80, 24)
-	for _, k := range []tea.KeyPressMsg{alt(tea.KeyLeft), alt(tea.KeyLeft), alt(tea.KeyUp)} {
+	// The cascade steps vertically from where the window before it is now,
+	// while keeping flush-left alignment.
+	m, _ := floating(t, theme.Nostalgia(), ui.Plain, 80, 24)
+	for _, k := range []tea.KeyPressMsg{alt(tea.KeyRight), alt(tea.KeyUp)} {
 		act(t, m, k)
 	}
 	openTitled(m, "com.test.gamma", "Gamma", screenData())
-	if b := boundsOf(t, m, "com.test.gamma"); b.X != 2 || b.Y != 1 {
-		t.Fatalf("Gamma opened at %d,%d, want 2,1 from Beta at 0,0", b.X, b.Y)
+	if b := boundsOf(t, m, "com.test.gamma"); b.X != 0 || b.Y != 1 {
+		t.Fatalf("Gamma opened at %d,%d, want 0,1 from Beta at 1,0", b.X, b.Y)
 	}
 }
 
@@ -284,17 +293,17 @@ func TestWindowsDragByTheirTitle(t *testing.T) {
 		}
 	}
 	mouse(t, m, tea.MouseClickMsg{X: press.X, Y: press.Y, Button: tea.MouseLeft})
-	to(press.Add(image.Pt(-1, 1)))
+	to(press.Add(image.Pt(1, 1)))
 	want(1, 2)
 	// Past the body's edges the window stops at them.
 	to(press.Add(image.Pt(30, 30)))
-	want(4, 2)
+	want(2, 2)
 	to(press.Add(image.Pt(-30, -30)))
 	want(0, 0)
 	mouse(t, m, tea.MouseReleaseMsg{X: press.X - 30, Y: press.Y - 30, Button: tea.MouseLeft})
 	mouse(t, m, tea.MouseMotionMsg{X: press.X + 5, Y: press.Y + 5})
 	want(0, 0)
-	if b := boundsOf(t, m, betaID); b.Width != 72 || b.Height != boundsOf(t, m, alphaID).Height-2 {
+	if b := boundsOf(t, m, betaID); b.Width != 74 || b.Height != boundsOf(t, m, alphaID).Height-2 {
 		t.Fatalf("dragging resized Beta to %d×%d", b.Width, b.Height)
 	}
 
@@ -321,16 +330,32 @@ func TestWindowsRaiseOnAClickAndCloseOnTheirX(t *testing.T) {
 	}
 	m.focusedView().busy, m.focusedView().cancel = false, nil
 
-	// A click on a lower window raises it and does nothing else, even on
-	// one of its controls.
+	// An obscured lower window shows no clipped control fragments, and
+	// clicking its exposed chrome raises it without invoking any action.
 	m, rec = mouseModel(t, 80, 24)
 	openTitled(m, alphaID, "Alpha", screenData())
 	openTitled(m, betaID, "Beta", padData())
-	// The first cell of Alpha's [Send] shows beside Beta.
 	alpha := rectOf(t, m, windowLayerID(alphaID))
-	clickAt(t, m, mustFind(t, m, image.Rect(alpha.Min.X+1, alpha.Min.Y+1, alpha.Min.X+2, alpha.Max.Y), "["))
+	beta = rectOf(t, m, windowLayerID(betaID))
+	if _, found := findText(m, image.Rect(beta.Max.X, beta.Min.Y, alpha.Max.X, alpha.Max.Y), "["); found {
+		t.Fatal("obscured Alpha leaked control fragments into the margin beside Beta")
+	}
+	clickAt(t, m, image.Pt(alpha.Max.X-1, beta.Min.Y+2))
 	if m.FocusedWindow() != string(alphaID) || topWindow(m) != alphaID || len(rec.all()) != 0 {
 		t.Fatalf("the click did not just raise Alpha: focused %q, sent %v", m.FocusedWindow(), rec.all())
+	}
+
+	// When two windows sit side by side without overlapping, clicking a
+	// visible control in the unfocused window still only raises it.
+	m, rec = mouseModel(t, 100, 32)
+	openTitled(m, alphaID, "Alpha", screenData())
+	openTitled(m, betaID, "Beta", padData())
+	m.windows.Move(alphaID, windows.Bounds{X: 0, Y: 0, Width: 44, Height: 16})
+	m.windows.Move(betaID, windows.Bounds{X: 48, Y: 0, Width: 44, Height: 16})
+	alpha = rectOf(t, m, windowLayerID(alphaID))
+	clickAt(t, m, mustFind(t, m, alpha, "[Send]"))
+	if m.FocusedWindow() != string(alphaID) || topWindow(m) != alphaID || len(rec.all()) != 0 {
+		t.Fatalf("clicking unobscured Alpha's [Send] did not just raise it: focused %q, sent %v", m.FocusedWindow(), rec.all())
 	}
 
 	// [X] closes its window, raised or not, as Ctrl-W closes the focused one.
@@ -361,7 +386,7 @@ func TestWindowsMoveWithAltArrowsAndMoveMode(t *testing.T) {
 	for _, step := range []struct {
 		key  rune
 		x, y int
-	}{{tea.KeyLeft, 1, 1}, {tea.KeyLeft, 0, 1}, {tea.KeyLeft, 0, 1}, {tea.KeyDown, 0, 2}, {tea.KeyDown, 0, 2}, {tea.KeyRight, 1, 2}, {tea.KeyUp, 1, 1}} {
+	}{{tea.KeyRight, 1, 1}, {tea.KeyRight, 2, 1}, {tea.KeyRight, 2, 1}, {tea.KeyDown, 2, 2}, {tea.KeyDown, 2, 2}, {tea.KeyLeft, 1, 2}, {tea.KeyUp, 1, 1}} {
 		act(t, m, alt(step.key))
 		want(step.x, step.y)
 	}
@@ -468,8 +493,9 @@ func TestWindowsWithTheMouseOffTakeOnlyKeys(t *testing.T) {
 	m.setMouse(false)
 	before := fmt.Sprint(m.FocusedWindow(), m.windows.Order(), boundsOf(t, m, betaID))
 	clickAt(t, m, closeAlpha)
-	clickAt(t, m, rectOf(t, m, windowLayerID(alphaID)).Min.Add(image.Pt(1, 4)))
-	dragBetween(t, m, titleBeta, titleBeta.Add(image.Pt(-2, 1)))
+	alpha := rectOf(t, m, windowLayerID(alphaID))
+	clickAt(t, m, image.Pt(alpha.Max.X-1, alpha.Min.Y+4))
+	dragBetween(t, m, titleBeta, titleBeta.Add(image.Pt(2, 1)))
 	mouse(t, m, tea.MouseMotionMsg{X: closeAlpha.X, Y: closeAlpha.Y})
 	if got := fmt.Sprint(m.FocusedWindow(), m.windows.Order(), boundsOf(t, m, betaID)); got != before || len(rec.all()) != 0 {
 		t.Fatalf("the mouse acted while off: %s, want %s", got, before)
@@ -478,7 +504,7 @@ func TestWindowsWithTheMouseOffTakeOnlyKeys(t *testing.T) {
 		t.Fatal("a hover cue showed with the mouse off")
 	}
 	// Every window operation still has its key.
-	act(t, m, alt(tea.KeyLeft))
+	act(t, m, alt(tea.KeyRight))
 	act(t, m, key(tea.KeyF8))
 	if boundsOf(t, m, betaID).X != 1 || m.FocusedWindow() != string(alphaID) {
 		t.Fatal("Alt-arrows or F8 did nothing with the mouse off")
@@ -518,5 +544,142 @@ func TestWindowsBelowTheFloorShowOnlyTheFocusedOne(t *testing.T) {
 				t.Fatalf("Ctrl-W below the floor:\n%s", screen())
 			}
 		})
+	}
+}
+
+func TestOverlappingWindowsEliminateEdgeFragmentsAndKeepDiscoverability(t *testing.T) {
+	firstData := sdk.View{
+		Title:  "Dogcalc",
+		State:  sdk.ViewReady,
+		Status: "DOGCALC_STATUS_TAIL",
+		Items: []sdk.Item{
+			{ID: "i1", Label: "QQQ_LEFT_EDGE", Detail: strings.Repeat("Z", 120) + "ZZZ_RIGHT_EDGE"},
+			{ID: "i2", Label: "WWW_LEFT_EDGE", Detail: strings.Repeat("Y", 120) + "YYY_RIGHT_EDGE"},
+		},
+		Actions: []sdk.Action{{ID: "eq", Label: "BOOP ="}},
+	}
+	secondData := sdk.View{
+		Title:  "Compendium",
+		State:  sdk.ViewReady,
+		Status: "Active vault ready",
+		Items:  []sdk.Item{{ID: "n1", Label: "Field Notes", Detail: "Clean readable body"}},
+	}
+
+	themes := []struct {
+		name      string
+		th        theme.Theme
+		mode      ui.ColorMode
+		focusedTL string
+		unfocusTL string
+		ascii     bool
+	}{
+		{"nostalgia truecolor", theme.Nostalgia(), ui.TrueColor, "┏", "┌", false},
+		{"nostalgia ansi256", theme.Nostalgia(), ui.ANSI256, "┏", "┌", false},
+		{"nostalgia ansi16", theme.Nostalgia(), ui.ANSI16, "┏", "┌", false},
+		{"nostalgia plain", theme.Nostalgia(), ui.Plain, "┏", "┌", false},
+		{"midnight truecolor", theme.Midnight(), ui.TrueColor, "┏", "┌", false},
+		{"high-contrast ansi256", theme.HighContrast(), ui.ANSI256, "┏", "┌", false},
+		{"high-contrast-light ansi256", theme.HighContrastLight(), ui.ANSI256, "┏", "┌", false},
+		{"monochrome ansi256", theme.Monochrome(), ui.ANSI256, "+", "+", true},
+		{"monochrome plain", theme.Monochrome(), ui.Plain, "+", "+", true},
+	}
+
+	for _, size := range [][2]int{{80, 24}, {100, 32}} {
+		for _, tc := range themes {
+			t.Run(fmt.Sprintf("%s/%s", sizeName(size), tc.name), func(t *testing.T) {
+				m := sized(fixtureModel(tc.th, tc.mode), size[0], size[1])
+				openTitled(m, alphaID, "Dogcalc", firstData)
+				openTitled(m, betaID, "Compendium", secondData)
+
+				content := m.View().Content
+				if tc.mode == ui.Plain && strings.Contains(content, "\x1b") {
+					t.Fatal("Plain windows emitted ANSI escapes")
+				}
+				lines := screenText(m.View())
+				if tc.ascii {
+					requireMonochromeChromeASCII(t, strings.Join(lines, "\n"))
+				}
+
+				body := rectOf(t, m, slotBody)
+				alpha := rectOf(t, m, windowLayerID(alphaID))
+				beta := rectOf(t, m, windowLayerID(betaID))
+				if beta.Min.X != body.Min.X {
+					t.Fatalf("focused window left edge %d != body left edge %d", beta.Min.X, body.Min.X)
+				}
+				if got := row(m, alpha.Min.Y, alpha.Min.X, alpha.Min.X+1); got != tc.unfocusTL {
+					t.Fatalf("unfocused window corner = %q, want %q", got, tc.unfocusTL)
+				}
+				if got := row(m, beta.Min.Y, beta.Min.X, beta.Min.X+1); got != tc.focusedTL {
+					t.Fatalf("focused window corner = %q, want %q", got, tc.focusedTL)
+				}
+				// Unfocused Dogcalc's title and [X] stay visible above Compendium.
+				if top := row(m, alpha.Min.Y, alpha.Min.X, alpha.Max.X); !strings.Contains(top, "Dogcalc") || !strings.Contains(top, closeLabel) {
+					t.Fatalf("background title bar missing title or close: %q", top)
+				}
+				// Every interior row of obscured Dogcalc exposed beside Compendium
+				// must be blank (no clipped text fragments), even after moving
+				// Compendium right and down.
+				checkNoFragments := func(stage string) {
+					t.Helper()
+					b := rectOf(t, m, windowLayerID(betaID))
+					for y := alpha.Min.Y + 1; y < alpha.Max.Y-1; y++ {
+						if b.Min.X > alpha.Min.X+1 {
+							left := row(m, y, alpha.Min.X+1, b.Min.X)
+							if strings.TrimSpace(left) != "" {
+								t.Fatalf("%s: left edge leaked %q on row %d", stage, left, y)
+							}
+						}
+						if b.Max.X < alpha.Max.X-1 {
+							right := row(m, y, b.Max.X, alpha.Max.X-1)
+							if strings.TrimSpace(right) != "" {
+								t.Fatalf("%s: right edge leaked %q on row %d", stage, right, y)
+							}
+						}
+						if y < b.Min.Y || y >= b.Max.Y {
+							strip := row(m, y, alpha.Min.X+1, alpha.Max.X-1)
+							if strings.TrimSpace(strip) != "" {
+								t.Fatalf("%s: vertical strip leaked %q on row %d", stage, strip, y)
+							}
+						}
+					}
+				}
+				checkNoFragments("default")
+				act(t, m, alt(tea.KeyRight))
+				act(t, m, alt(tea.KeyRight))
+				act(t, m, alt(tea.KeyDown))
+				checkNoFragments("moved")
+
+				// Raising Dogcalc covers Compendium in the body, yet the prompt
+				// row and Windows (2) tab keep Compendium discoverable.
+				act(t, m, key(tea.KeyF8))
+				if m.FocusedWindow() != string(alphaID) {
+					t.Fatalf("F8 did not focus Dogcalc: %q", m.FocusedWindow())
+				}
+				promptRect := rectOf(t, m, slotPrompt)
+				promptRow := row(m, promptRect.Min.Y, promptRect.Min.X, promptRect.Max.X)
+				if !strings.Contains(promptRow, "F8 next: Compendium") {
+					t.Fatalf("prompt row did not surface background window: %q", promptRow)
+				}
+				if !strings.Contains(strings.Join(screenText(m.View()), "\n"), "Windows (2)") {
+					t.Fatal("Windows (2) tab missing after F8 raise")
+				}
+			})
+		}
+	}
+}
+
+func TestUnobscuredUnfocusedWindowRendersContent(t *testing.T) {
+	m, _ := mouseModel(t, 100, 32)
+	openTitled(m, alphaID, "Alpha", screenData())
+	openTitled(m, betaID, "Beta", padData())
+	m.windows.Move(alphaID, windows.Bounds{X: 0, Y: 0, Width: 44, Height: 16})
+	m.windows.Move(betaID, windows.Bounds{X: 48, Y: 0, Width: 44, Height: 16})
+
+	alpha := rectOf(t, m, windowLayerID(alphaID))
+	if got := row(m, alpha.Min.Y, alpha.Min.X, alpha.Min.X+1); got != "┌" {
+		t.Fatalf("unfocused side-by-side window corner = %q, want light border", got)
+	}
+	if _, ok := findText(m, alpha, "One: first"); !ok {
+		t.Fatalf("unobscured unfocused window did not render its content:\n%s", strings.Join(screenText(m.View()), "\n"))
 	}
 }

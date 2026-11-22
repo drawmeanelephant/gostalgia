@@ -31,6 +31,13 @@ func (k Kit) Leaf(render func(Bounds) string) Leaf {
 	return Leaf{render: render, style: k.Text}
 }
 
+// WindowMutedLeaf places render's output painted in WindowMuted (Muted on
+// Canvas), for unfocused window backing so its background matches
+// WindowStyle(false).
+func (k Kit) WindowMutedLeaf(render func(Bounds) string) Leaf {
+	return Leaf{render: render, style: k.WindowMuted}
+}
+
 // Natural sets the size the leaf asks for in an Auto slot.
 func (l Leaf) Natural(width, height int) Leaf {
 	l.natural = bloom.Size{W: max(0, width), H: max(0, height)}
