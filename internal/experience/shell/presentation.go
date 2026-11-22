@@ -122,14 +122,24 @@ type viewCheckMsg struct {
 type viewCancelMsg struct{ err error }
 
 // primaryMinRows is the smallest content budget that can show a hinted focal
-// block beside usable secondary controls. Below it — 30x10 leaves one content
-// row — the shell keeps controls on screen and exposes the block through the
-// explicit inspection route instead.
+// block beside usable secondary controls. Below it the shell keeps controls
+// on screen and exposes the block through the explicit inspection route
+// instead.
 const primaryMinRows = 10
 
 // secondaryControlRows is the part of the split body reserved for the focused
 // control itself; the rest is focus-windowed content.
 const secondaryControlRows = 2
+
+// compactViewHeight is the tallest window content box that omits the inline
+// key-hint row from viewHeader. At 30×10 the compact window frame gives the
+// body 5 rows; dropping the truncated inline hint row leaves 3 content rows
+// beside the title and footer while the shell HelpBar carries the key cues.
+const compactViewHeight = 6
+
+// minFieldValueWidth is the display-cell budget reserved for an editable
+// single-line field's value before a long field label truncates.
+const minFieldValueWidth = 8
 
 // presentationPanes is an app body's vertical budget. primary is the bounded
 // focal-block viewport, meters are pinned vitals under it, and secondary is
@@ -624,6 +634,29 @@ func (v *appView) regionIndex() int {
 
 func (v *appView) regionFocused() bool {
 	return v.region() != nil && v.focus == v.regionIndex()
+}
+
+func (v *appView) focusStopCount() int {
+	total := len(v.data.Fields) + len(v.data.Actions)
+	if v.grid() != nil {
+		total++
+	}
+	if v.region() != nil {
+		total++
+	}
+	return total
+}
+
+func (v *appView) primaryActionLabel() string {
+	if v.busy || v.data.State == sdk.ViewLoading {
+		return ""
+	}
+	for _, a := range v.data.Actions {
+		if !a.Disabled {
+			return viewText(a.Label)
+		}
+	}
+	return ""
 }
 
 // focalBlock returns the first block carrying optional focus metadata. Only a
@@ -1221,34 +1254,40 @@ func (m *Model) wrapErrorLines(text string, width, maxLines int) []string {
 	return out
 }
 
-// viewHeader is v's title, key hints and state lines, width cells wide.
+// viewHeader is v's title, key hints and state lines in width×height cells.
+// Compact boxes (height <= compactViewHeight) omit the inline hint row so
+// focused controls and their context keep those rows while the shell HelpBar
+// carries the key cues.
 func (m *Model) viewHeader(v *appView, width, height int) []string {
-	hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
-	switch {
-	case v.grid() != nil && v.region() != nil:
-		hints = "Tab focus · Enter action · ↑↓ item/region · ←→↑↓ grid · Esc cancel/back"
-	case v.grid() != nil:
-		hints = "Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back"
-	case v.region() != nil:
-		hints = "Tab focus · Enter action · ↑↓ item/region · Esc cancel/back"
-	}
-	for _, f := range v.data.Fields {
-		if f.Multiline {
-			// A multiline field turns Enter into a newline, so the action
-			// hint names the Ctrl-Enter submit chord instead.
-			hints = strings.Replace(hints, "Enter action", "Enter/Shift-Enter newline · Ctrl-Enter action", 1)
-			break
+	lines := []string{m.kit.Heading(viewText(v.data.Title))}
+	if height > compactViewHeight {
+		hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
+		switch {
+		case v.grid() != nil && v.region() != nil:
+			hints = "Tab focus · Enter action · ↑↓ item/region · ←→↑↓ grid · Esc cancel/back"
+		case v.grid() != nil:
+			hints = "Tab focus · Enter action · ↑↓ item · ←→↑↓ grid · Esc cancel/back"
+		case v.region() != nil:
+			hints = "Tab focus · Enter action · ↑↓ item/region · Esc cancel/back"
 		}
-	}
-	if v.focalBlock() != nil {
-		// The inspection hint leads so a narrow header keeps it whole.
-		state := "m map"
-		if v.inspect {
-			state = "m controls"
+		for _, f := range v.data.Fields {
+			if f.Multiline {
+				// A multiline field turns Enter into a newline, so the action
+				// hint names the Ctrl-Enter submit chord instead.
+				hints = strings.Replace(hints, "Enter action", "Enter/Shift-Enter newline · Ctrl-Enter action", 1)
+				break
+			}
 		}
-		hints = state + " · " + hints
+		if v.focalBlock() != nil {
+			// The inspection hint leads so a narrow header keeps it whole.
+			state := "m map"
+			if v.inspect {
+				state = "m controls"
+			}
+			hints = state + " · " + hints
+		}
+		lines = append(lines, m.kit.Muted(m.kit.Hint(hints)))
 	}
-	lines := []string{m.kit.Heading(viewText(v.data.Title)), m.kit.Muted(m.kit.Hint(hints))}
 	if v.busy || v.data.State == sdk.ViewLoading {
 		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, width)))
 	}
@@ -1271,7 +1310,8 @@ func (m *Model) viewHeader(v *appView, width, height int) []string {
 // GotoBottom is the pin.
 func (m *Model) regionWindow(v *appView, width, height int) (window, top int) {
 	visible := max(1, height-len(m.viewHeader(v, width, height))-1)
-	window = min(20, max(4, visible/2))
+	maxWindow := max(1, visible-1)
+	window = min(maxWindow, min(20, max(4, visible/2)))
 	if p := m.viewPanes(v, width, height); p.primary > 0 {
 		// Beside a focal block the region lives in the independently
 		// focus-windowed flow, so its own window must fit there.
@@ -1333,15 +1373,91 @@ func (m *Model) surfaceLayout(v *appView, width, height int) []string {
 		lines = append(lines, m.kit.Muted(label))
 		contentRows--
 	}
+	top, total := 0, 0
 	if contentRows > 0 {
 		all := textLines(v.region().Text)
-		top := min(max(0, v.regionTop), max(0, len(all)-contentRows))
-		for _, line := range all[top:min(len(all), top+contentRows)] {
+		total = len(all)
+		top = min(max(0, v.regionTop), max(0, total-contentRows))
+		for _, line := range all[top:min(total, top+contentRows)] {
 			lines = append(lines, m.kit.Text(line))
 		}
 	}
-	lines = append(lines, m.kit.Muted(viewText(v.data.Status)))
+	if len(lines) < height {
+		lines = append(lines, m.surfaceFooter(v, width, top, contentRows, total))
+	}
 	return lines
+}
+
+func (m *Model) overflowCue(width, above, below int) string {
+	switch {
+	case above > 0 && below > 0:
+		return m.kit.Hint(fmt.Sprintf("↑%d ↓%d", above, below))
+	case below > 0:
+		if width > 32 {
+			return m.kit.Hint(fmt.Sprintf("↓%d more", below))
+		}
+		return m.kit.Hint(fmt.Sprintf("↓%d", below))
+	case above > 0:
+		if width > 32 {
+			return m.kit.Hint(fmt.Sprintf("↑%d more", above))
+		}
+		return m.kit.Hint(fmt.Sprintf("↑%d", above))
+	}
+	return ""
+}
+
+func (m *Model) surfaceFooter(v *appView, width, top, contentRows, total int) string {
+	status := viewText(v.data.Status)
+	above := top
+	below := max(0, total-(top+contentRows))
+	cue := m.overflowCue(width, above, below)
+	if cue == "" {
+		return m.kit.Muted(status)
+	}
+	sep := m.kit.Separator()
+	line := m.kit.Hint("Tab controls") + sep + cue
+	if status != "" && width-lipgloss.Width(line)-lipgloss.Width(sep) >= 3 {
+		line += sep + status
+	}
+	return m.kit.Muted(line)
+}
+
+// viewFooter draws the status row. When content extends beyond the viewport
+// it prefixes concise navigation, off-screen action, and overflow cues so the
+// user can see how to reach hidden controls and content without losing status.
+func (m *Model) viewFooter(v *appView, width, start, visible, totalRows int, actionVisible bool) string {
+	status := viewText(v.data.Status)
+	above := start
+	below := max(0, totalRows-(start+visible))
+	if above == 0 && below == 0 {
+		return m.kit.Muted(status)
+	}
+	var parts []string
+	total := v.focusStopCount()
+	if v.itemFocus && len(v.data.Items) > 0 {
+		parts = append(parts, m.kit.Hint(fmt.Sprintf("↑↓ %d/%d", v.item+1, len(v.data.Items))))
+		if total > 0 {
+			parts = append(parts, m.kit.Hint("Tab"))
+		}
+	} else if total > 1 {
+		parts = append(parts, m.kit.Hint(fmt.Sprintf("Tab %d/%d", min(v.focus+1, total), total)))
+	} else if len(v.data.Items) > 1 {
+		parts = append(parts, m.kit.Hint(fmt.Sprintf("↑↓ %d/%d", v.item+1, len(v.data.Items))))
+	}
+	if !actionVisible {
+		if label := v.primaryActionLabel(); label != "" && lipgloss.Width(label)+2 <= max(10, width/2) {
+			parts = append(parts, "["+label+"]")
+		}
+	}
+	if cue := m.overflowCue(width, above, below); cue != "" {
+		parts = append(parts, cue)
+	}
+	sep := m.kit.Separator()
+	line := strings.Join(parts, sep)
+	if status != "" && width-lipgloss.Width(line)-lipgloss.Width(sep) >= 3 {
+		line += sep + status
+	}
+	return m.kit.Muted(line)
 }
 
 // viewLayout is v's lines in a content box of width×height cells, and where
@@ -1355,6 +1471,7 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 		return m.surfaceLayout(v, width, height), nil
 	}
 	lines := m.viewHeader(v, width, height)
+	visible := max(1, panes.secondary)
 	var rows []string
 	// rowTargets holds the targets on each row, by its index in rows.
 	rowTargets := map[int][]viewTarget{}
@@ -1391,46 +1508,68 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 		}
 		rows = append(rows, text)
 	}
-	formBase := len(rows)
-	focusRow := formBase
+	stopStart := make([]int, len(v.data.Fields)+len(v.data.Actions))
+	stopEnd := make([]int, len(v.data.Fields)+len(v.data.Actions))
+	focusPrefix := lipgloss.Width(m.kit.Theme().Focus.Marker) + 1
 	for i, field := range v.data.Fields {
-		label := viewText(field.Label) + ": "
+		stopStart[i] = len(rows)
+		name := viewText(field.Label)
 		if field.Multiline {
-			// Version-3 multiline field: label row then each value line
-			// verbatim. Focus marks the label; shell still owns the draft.
+			// Version-3 multiline field: label row then bounded value lines so
+			// the active tail stays visible with its label and never pushes
+			// later controls out of reach.
+			fieldLines := textLines(v.values[field.ID])
+			label := name + ": "
+			shown := fieldLines
 			if i == v.focus {
+				maxLines := max(1, visible-1)
+				if visible > 3 {
+					maxLines = max(2, visible-2)
+				}
+				if len(fieldLines) > maxLines {
+					from := len(fieldLines) - maxLines
+					shown = fieldLines[from:]
+					label = fmt.Sprintf("%s (%d-%d/%d): ", name, from+1, len(fieldLines), len(fieldLines))
+				}
 				rows = append(rows, m.kit.FocusText(label+" "))
 			} else {
+				if len(fieldLines) > 3 {
+					shown = fieldLines[:2]
+					label = fmt.Sprintf("%s (%d lines): ", name, len(fieldLines))
+				}
 				rows = append(rows, m.kit.Text(label))
 			}
-			for _, line := range textLines(v.values[field.ID]) {
+			for _, line := range shown {
 				rows = append(rows, m.kit.Text("  "+line))
 			}
-			if i == v.focus {
-				focusRow = len(rows) - 1
-			}
+			stopEnd[i] = len(rows) - 1
 			continue
 		}
+		avail := max(1, width-focusPrefix-1)
+		label := name + ": "
+		if lipgloss.Width(label) > max(4, avail-minFieldValueWidth) && avail > minFieldValueWidth+2 {
+			label = m.kit.Truncate(name, max(2, avail-minFieldValueWidth-2)) + ": "
+		}
 		value := viewText(v.values[field.ID])
-		room := max(1, width-4-lipgloss.Width(label))
+		room := max(1, avail-lipgloss.Width(label))
 		text := label + ui.Tail(value, room)
 		if i == v.focus {
-			focusRow = len(rows)
 			text = m.kit.FocusText(text + " ")
 		} else {
 			text = m.kit.Text(text)
 		}
 		rows = append(rows, text)
+		stopEnd[i] = stopStart[i]
 	}
 	for i, action := range v.data.Actions {
+		idx := len(v.data.Fields) + i
+		stopStart[idx] = len(rows)
+		stopEnd[idx] = len(rows)
 		text := "[" + viewText(action.Label) + "]"
-		if len(v.data.Fields)+i == v.focus {
-			focusRow = len(rows)
-		}
 		if action.Disabled || v.busy || v.data.State == sdk.ViewLoading {
 			text += " (disabled)"
 			text = m.kit.StatusText(text, theme.Disabled)
-		} else if len(v.data.Fields)+i == v.focus {
+		} else if idx == v.focus {
 			text = m.kit.FocusText(text)
 		} else {
 			text = m.kit.Text(text)
@@ -1492,7 +1631,6 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 			rows = append(rows, strings.Join(cells, " "))
 		}
 	}
-	visible := max(1, panes.secondary)
 	regionBase := -1
 	if r := v.region(); r != nil {
 		all := textLines(r.Text)
@@ -1511,16 +1649,37 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 			rows = append(rows, m.kit.Text(line))
 		}
 	}
-	focus := focusRow
+	focusStart, focusEnd := 0, 0
 	switch {
-	case v.itemFocus:
-		focus = itemBase + v.item
+	case v.itemFocus && len(v.data.Items) > 0:
+		focusStart = itemBase + v.item
+		focusEnd = focusStart
 	case regionBase >= 0 && v.regionFocused():
-		focus = len(rows) - 1
+		focusStart = regionBase - 1
+		focusEnd = len(rows) - 1
 	case gridBase >= 0 && v.gridFocused():
-		focus = gridBase + gridRow
+		focusStart = gridBase + gridRow
+		focusEnd = focusStart
+	case v.focus >= 0 && v.focus < len(stopStart):
+		focusStart = stopStart[v.focus]
+		focusEnd = stopEnd[v.focus]
 	}
-	start := max(0, min(focus-visible+1, max(0, len(rows)-visible))-v.scroll)
+	start := 0
+	if len(rows) > visible {
+		maxStart := len(rows) - visible
+		if visible <= 5 {
+			start = min(focusStart, maxStart)
+			if focusEnd >= start+visible {
+				start = min(maxStart, focusEnd-visible+1)
+			}
+		} else if focusEnd >= visible {
+			start = min(maxStart, focusEnd-visible+1)
+			if start > focusStart {
+				start = focusStart
+			}
+		}
+		start = max(0, start-v.scroll)
+	}
 	// The primary viewport and pinned meters never scroll away with the
 	// focused control; the secondary flow gets its own window around focus.
 	primaryRows := m.primaryBlockRows(v, v.focalBlock(), width, panes.primary, false)
@@ -1531,14 +1690,20 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 		}
 	}
 	var targets []viewTarget
+	actionVisible := false
 	for r := start; r < min(len(rows), start+visible); r++ {
 		for _, t := range rowTargets[r] {
+			if t.kind == viewTargetAction && !v.data.Actions[t.index].Disabled {
+				actionVisible = true
+			}
 			t.line = len(lines) + r - start
 			targets = append(targets, t)
 		}
 	}
 	lines = append(lines, rows[start:min(len(rows), start+visible)]...)
-	lines = append(lines, m.kit.Muted(viewText(v.data.Status)))
+	if len(lines) < height {
+		lines = append(lines, m.viewFooter(v, width, start, visible, len(rows), actionVisible))
+	}
 	return lines, targets
 }
 

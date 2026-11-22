@@ -199,8 +199,16 @@ service.
 When the body is smaller than 32×12, the Windows screen draws only the focused
 window. It fills the body without window chrome, the way today's single
 presentation does. F8, Ctrl-W, Esc, and the palette items still work, and the
-tab still shows the window count. A 30×10 terminal therefore behaves as it does
-now (#228), with other apps still open behind the focused one.
+tab still shows the window count. In short terminals like 30×10 (issue #298),
+the shell also collapses the non-editable prompt and status badge rows when
+the palette is closed, giving the window five body rows, omits the redundant
+inline hint row inside the window, uses compact whole hints in the help bar
+(`Esc BACK`, `Tab NEXT`, `Enter GO` or `↑↓ ITEM`), prioritizes the focused
+control and active multiline editing tail, and shows a footer cue (`Tab i/n`,
+off-screen primary action, and `↑`/`↓` hidden-row counts) whenever content or
+controls continue beyond the viewport (at both 30×10 and larger sizes like
+80×24). Other apps stay open behind the focused one, and below 30×10 the
+existing `sizeNote` fallback applies.
 
 ### Motion stays finite
 

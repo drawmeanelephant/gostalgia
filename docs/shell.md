@@ -367,9 +367,14 @@ event-type request on the returned `tea.View`.
   refresh), and their width is part of each tab's normal measured span, so
   mouse geometry stays aligned.
 - **Responsive priorities.** When the frame is short, the blank spacer rows
-  give way. Tabs, badge, prompt
+  give way. On built-in screens, tabs, badge, prompt
   and at least three body rows always stay, which is exactly what the
-  smallest frame, 30×10, leaves. On Home, a document list longer than the
+  smallest frame, 30×10, leaves. On the Windows screen (when the command
+  palette is closed), the non-editable prompt row and then the status badge
+  also yield in short terminals so the focused app window keeps at least
+  five body rows at 30×10 while keeping the `Windows (n)` tab and help bar.
+  Opening the palette restores the prompt row for `PALETTE>`, and growing
+  the terminal restores the full frame chrome. On Home, a document list longer than the
   space first shrinks to a window that follows the selection. When even its
   heading and one document do not fit beside the other sections, *system
   activity* collapses first, then *document shortcuts*, so system activity

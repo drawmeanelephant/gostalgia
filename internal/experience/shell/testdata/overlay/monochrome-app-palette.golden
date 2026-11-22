@@ -16,7 +16,7 @@
 | |[Ado|   [WINDOW] Close window  Close the Pad window (Ctrl-W)         |    | |
 | |Pad |   [WINDOW] Move window  Move the Pad window with the...        |    | |
 | |[NW]+----------------------------------------------------------------+    | |
-| |waiting                                                                   | |
+| |Tab 3/3 | Up1 Down1 | waiting                                             | |
 | +--------------------------------------------------------------------------+ |
 |                                                                              |
 | PALETTE> Type to filter | Up/Down navigate | Enter execute | Esc close       |

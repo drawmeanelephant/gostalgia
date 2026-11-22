@@ -150,9 +150,9 @@ func TestFocalBlockInspectionRetainsSelection(t *testing.T) {
 		t.Fatalf("inspection did not expose the map:\n%s", view)
 	}
 	// The compact window shows vertical context rather than a single cell:
-	// two map rows remain beside the one-line inspection hint.
-	if v.blockWindow != 2 {
-		t.Fatalf("compact inspection window = %d rows, want 2:\n%s", v.blockWindow, view)
+	// four map rows remain beside the one-line inspection hint.
+	if v.blockWindow != 4 {
+		t.Fatalf("compact inspection window = %d rows, want 4:\n%s", v.blockWindow, view)
 	}
 	if v.focus != before.focus || v.item != before.item || v.cell != before.cell {
 		t.Fatalf("inspection changed selection: focus=%d item=%d cell=%d", v.focus, v.item, v.cell)
