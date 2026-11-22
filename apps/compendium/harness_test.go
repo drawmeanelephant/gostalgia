@@ -461,14 +461,27 @@ func (h *harness) actV(t testing.TB, version int, action, item string, values ma
 	return v
 }
 
+func (h *harness) actCellV(t testing.TB, version int, action, cell string, values map[string]string) sdk.View {
+	t.Helper()
+	v, err := h.tryActCellV(version, action, "", cell, values)
+	if err != nil {
+		t.Fatalf("action %s (cell %s): %v", action, cell, err)
+	}
+	return v
+}
+
 func (h *harness) tryActV(version int, action, item string, values map[string]string) (sdk.View, error) {
+	return h.tryActCellV(version, action, item, "", values)
+}
+
+func (h *harness) tryActCellV(version int, action, item, cell string, values map[string]string) (sdk.View, error) {
 	cur, err := h.handlers["view"](context.Background(), json.RawMessage(fmt.Sprintf(`{"version":%d}`, version)))
 	if err != nil {
 		return sdk.View{}, err
 	}
 	req := sdk.ActionRequest{
 		Version: version, Instance: cur.(sdk.View).Instance,
-		RequestID: fmt.Sprintf("req_%d", h.seq.Add(1)), Action: action, ItemID: item, Values: values,
+		RequestID: fmt.Sprintf("req_%d", h.seq.Add(1)), Action: action, ItemID: item, CellID: cell, Values: values,
 	}
 	raw, _ := json.Marshal(req)
 	res, err := h.handlers["action"](context.Background(), raw)

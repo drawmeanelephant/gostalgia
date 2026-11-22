@@ -974,3 +974,81 @@ func TestPresentationV3LiveFieldRefreshAndCoalescing(t *testing.T) {
 		t.Fatalf("clearing draft did not revert view: title=%q status=%q items=%+v", v.data.Title, v.data.Status, v.data.Items)
 	}
 }
+
+func TestPresentationV3ActionAddingRegionKeepsEditorAndActionsVisible(t *testing.T) {
+	home := sdk.View{
+		Version:  3,
+		Instance: "launch",
+		Title:    "Compendium",
+		State:    sdk.ViewReady,
+		Fields:   []sdk.Field{{ID: "q1", Label: "Search or command"}},
+		Actions:  []sdk.Action{{ID: "run", Label: "Go"}},
+		Status:   "0 notes",
+	}
+	note := sdk.View{
+		Version:  3,
+		Instance: "launch",
+		Title:    "Compendium — Visual Test",
+		State:    sdk.ViewReady,
+		Fields: []sdk.Field{
+			{ID: "body2", Label: "Markdown", Value: "", Multiline: true},
+			{ID: "rename2", Label: "Rename to"},
+		},
+		Actions: []sdk.Action{
+			{ID: "save", Label: "Save"},
+			{ID: "home", Label: "Back"},
+		},
+		Region: &sdk.Region{ID: "rendered", Label: "Rendered", Text: "Preview line"},
+		Status: `Created "Visual Test". Type in Markdown, then Save.`,
+	}
+
+	for _, size := range [][2]int{{100, 32}, {80, 24}} {
+		m := New(context.Background(), noopCaller{}, nil)
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.openWindow(screenStatus())
+		settleFiniteMotion(m)
+		v := m.focusedView()
+		v.apply(home, false)
+
+		// Action navigates from a region-less home screen into a note view carrying
+		// both a multiline editor and a region. The shell must keep the editor and
+		// Save action immediately visible instead of surfacing the region alone.
+		v.apply(note, true)
+		if v.surface != "" {
+			t.Fatalf("%dx%d: surface = %q, want empty", size[0], size[1], v.surface)
+		}
+		if v.focus != 0 {
+			t.Fatalf("%dx%d: focus = %d, want 0 (Markdown field)", size[0], size[1], v.focus)
+		}
+		rendered := ansi.Strip(m.View().Content)
+		for _, want := range []string{"Markdown:", "[Save]", "Preview line", `Created "Visual Test"`} {
+			if !strings.Contains(rendered, want) {
+				t.Fatalf("%dx%d: note view missing %q without pressing Tab:\n%s", size[0], size[1], want, rendered)
+			}
+		}
+
+		// Typing immediately edits the focused Markdown field.
+		m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "Hello"})
+		if v.values["body2"] != "Hello" {
+			t.Fatalf("%dx%d: typing into newly opened note did not reach Markdown field: %q", size[0], size[1], v.values["body2"])
+		}
+	}
+
+	// A tall multiline field must still scroll the focused Save action into view.
+	m := New(context.Background(), noopCaller{}, nil)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
+	v := m.focusedView()
+	longNote := note
+	longNote.Fields = []sdk.Field{
+		{ID: "body3", Label: "Markdown", Value: strings.Repeat("line\n", 20) + "tail", Multiline: true},
+		{ID: "rename3", Label: "Rename to"},
+	}
+	v.apply(longNote, false)
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "[Save]") {
+		t.Fatalf("focused Save action below tall multiline field scrolled out of view:\n%s", view)
+	}
+}

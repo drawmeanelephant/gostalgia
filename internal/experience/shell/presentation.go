@@ -421,7 +421,7 @@ func (v *appView) apply(data sdk.View, fromAction bool) bool {
 		switch {
 		case v.region() == nil:
 			v.surface = ""
-		case regionChanged && v.region().ID != v.baseRegion:
+		case regionChanged && v.baseRegion != "" && v.region().ID != v.baseRegion && v.focus >= len(data.Fields):
 			// A newly revealed panel is the action's result: show it from its
 			// first line rather than the tail, without moving focus away from
 			// the action that can toggle it again.
@@ -1392,6 +1392,7 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 		rows = append(rows, text)
 	}
 	formBase := len(rows)
+	focusRow := formBase
 	for i, field := range v.data.Fields {
 		label := viewText(field.Label) + ": "
 		if field.Multiline {
@@ -1405,12 +1406,16 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 			for _, line := range textLines(v.values[field.ID]) {
 				rows = append(rows, m.kit.Text("  "+line))
 			}
+			if i == v.focus {
+				focusRow = len(rows) - 1
+			}
 			continue
 		}
 		value := viewText(v.values[field.ID])
 		room := max(1, width-4-lipgloss.Width(label))
 		text := label + ui.Tail(value, room)
 		if i == v.focus {
+			focusRow = len(rows)
 			text = m.kit.FocusText(text + " ")
 		} else {
 			text = m.kit.Text(text)
@@ -1419,6 +1424,9 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 	}
 	for i, action := range v.data.Actions {
 		text := "[" + viewText(action.Label) + "]"
+		if len(v.data.Fields)+i == v.focus {
+			focusRow = len(rows)
+		}
 		if action.Disabled || v.busy || v.data.State == sdk.ViewLoading {
 			text += " (disabled)"
 			text = m.kit.StatusText(text, theme.Disabled)
@@ -1503,7 +1511,7 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 			rows = append(rows, m.kit.Text(line))
 		}
 	}
-	focus := formBase + v.focus
+	focus := focusRow
 	switch {
 	case v.itemFocus:
 		focus = itemBase + v.item
