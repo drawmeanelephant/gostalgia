@@ -24,7 +24,7 @@ func TestSteepCompendiumNewNoteFlow(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { rt.Shutdown("steep compendium cleanup") })
-			t.Cleanup(func() { client.Close() })
+			t.Cleanup(func() { _ = client.Close() })
 
 			m := NewWithThemeAndNotifs(context.Background(), client, rt.Done(), theme.Nostalgia(), ui.ANSI256, notifications.NewManager(100, 3, 8))
 			m.motion.startupPhase = startupConsumed
