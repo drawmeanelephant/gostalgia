@@ -125,11 +125,19 @@ type notesTestHarness struct {
 }
 
 func (h *notesTestHarness) view(ctx context.Context) (sdk.View, error) {
+	return h.viewReq(ctx, sdk.ViewRequest{Version: 1})
+}
+
+func (h *notesTestHarness) viewReq(ctx context.Context, req sdk.ViewRequest) (sdk.View, error) {
 	vHandler, ok := h.handlers["view"]
 	if !ok {
 		return sdk.View{}, errors.New("view handler not registered")
 	}
-	res, err := vHandler(ctx, json.RawMessage(`{"version":1}`))
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return sdk.View{}, err
+	}
+	res, err := vHandler(ctx, raw)
 	if err != nil {
 		return sdk.View{}, err
 	}
@@ -656,5 +664,209 @@ func TestSaveFailurePreservesDirtyState(t *testing.T) {
 	}
 	if h.notes.lastError == "" {
 		t.Fatal("expected lastError to contain save failure details")
+	}
+}
+
+func itemDetail(t *testing.T, v sdk.View, id string) string {
+	t.Helper()
+	for _, it := range v.Items {
+		if it.ID == id {
+			return it.Detail
+		}
+	}
+	t.Fatalf("item %q not found in view %+v", id, v.Items)
+	return ""
+}
+
+func TestLiveDraftPreviewReflectsUnsavedStatusAndSize(t *testing.T) {
+	h := setupNotesTest(t)
+	ctx := context.Background()
+
+	// Initial v3 view exposes a live multiline Content field and clean state.
+	v, err := h.viewReq(ctx, sdk.ViewRequest{Version: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Fields) != 2 || v.Fields[0].Live || !v.Fields[1].Multiline || !v.Fields[1].Live {
+		t.Fatalf("unexpected v3 fields: %+v", v.Fields)
+	}
+
+	// Typing into the Content draft marks the view modified and updates size
+	// without mutating committed Notes state.
+	draftText := "Hello\ncafé 🚀"
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): draftText},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - [Untitled]*" {
+		t.Fatalf("draft title = %q, want %q", v.Title, "Notes - [Untitled]*")
+	}
+	if got := itemDetail(t, v, "doc_info"); got != "[Untitled] [modified]" {
+		t.Fatalf("draft doc_info = %q, want %q", got, "[Untitled] [modified]")
+	}
+	if got := itemDetail(t, v, "char_count"); got != "12 runes · 16 bytes" {
+		t.Fatalf("draft size = %q, want %q", got, "12 runes · 16 bytes")
+	}
+	if v.Status != "Modified (unsaved changes)" {
+		t.Fatalf("draft status = %q, want %q", v.Status, "Modified (unsaved changes)")
+	}
+	if h.notes.dirty || h.notes.content != "" {
+		t.Fatalf("read-only draft view mutated notes state: dirty=%v content=%q", h.notes.dirty, h.notes.content)
+	}
+
+	// Editing back to empty reverts cleanly.
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - [Untitled]" || itemDetail(t, v, "doc_info") != "[Untitled] [saved]" ||
+		itemDetail(t, v, "char_count") != "0 runes · 0 bytes" || v.Status != "Saved (up to date)" {
+		t.Fatalf("reverted untitled view = title:%q doc:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// Opened and saved files also reflect live edits and clear stale Saved/Opened footers.
+	docPath := "/users/guest/documents/live.txt"
+	h.vfs.files[docPath] = []byte("Base")
+	h.vfs.mods[docPath] = time.Now().Add(-time.Minute)
+
+	_, err = h.act(ctx, "open", map[string]string{h.notes.pathFieldID(): docPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): "Base edited"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - live.txt*" || itemDetail(t, v, "doc_info") != docPath+" [modified]" ||
+		itemDetail(t, v, "char_count") != "11 runes · 11 bytes" || v.Status != "Modified (unsaved changes)" {
+		t.Fatalf("edited opened doc view = title:%q doc:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// Editing back to the saved content restores clean status and size.
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): "Base"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - live.txt" || itemDetail(t, v, "doc_info") != docPath+" [saved]" ||
+		itemDetail(t, v, "char_count") != "4 runes · 4 bytes" || !strings.HasPrefix(v.Status, "Opened ") {
+		t.Fatalf("reverted opened doc view = title:%q doc:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// After a successful save, further edits replace the "Saved ..." footer with modified status.
+	_, err = h.act(ctx, "save", map[string]string{h.notes.contentFieldID(): "Base saved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): "Base saved!"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - live.txt*" || itemDetail(t, v, "doc_info") != docPath+" [modified]" ||
+		itemDetail(t, v, "char_count") != "11 runes · 11 bytes" || v.Status != "Modified (unsaved changes)" {
+		t.Fatalf("post-save edited view = title:%q doc:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// Clearing the buffer completely still marks a non-empty file modified with 0 size.
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - live.txt*" || itemDetail(t, v, "char_count") != "0 runes · 0 bytes" ||
+		v.Status != "Modified (unsaved changes)" {
+		t.Fatalf("cleared buffer view = title:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// A failed save clears stale "Saved ..." status, and editing the draft back
+	// to disk content clears the modified state in the live preview.
+	h.vfs.saveFail = errors.New("vfs: permission denied")
+	v, err = h.act(ctx, "save", map[string]string{h.notes.contentFieldID(): "Base fail"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Status != "Modified (unsaved changes)" {
+		t.Fatalf("failed save status = %q, want %q", v.Status, "Modified (unsaved changes)")
+	}
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): "Base saved"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - live.txt" || itemDetail(t, v, "doc_info") != docPath+" [saved]" ||
+		itemDetail(t, v, "char_count") != "10 runes · 10 bytes" || v.Status != "Saved (up to date)" {
+		t.Fatalf("reverted-after-failed-save view = title:%q doc:%q size:%q status:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"), v.Status)
+	}
+
+	// Stale field IDs from an earlier docRev are cleanly ignored after New.
+	oldFieldID := h.notes.contentFieldID()
+	h.vfs.saveFail = nil
+	_, err = h.act(ctx, "new", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.act(ctx, "discard_and_proceed", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{oldFieldID: "stale draft"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Title != "Notes - [Untitled]" || itemDetail(t, v, "doc_info") != "[Untitled] [saved]" ||
+		itemDetail(t, v, "char_count") != "0 runes · 0 bytes" {
+		t.Fatalf("stale field ID leaked into new doc view: title:%q doc:%q size:%q",
+			v.Title, itemDetail(t, v, "doc_info"), itemDetail(t, v, "char_count"))
+	}
+
+	// Oversized read-only documents ignore manual draft overrides.
+	h.notes.content = strings.Repeat("x", MaxAreaLength+10)
+	h.notes.diskContent = h.notes.content
+	h.notes.dirty = false
+	v, err = h.viewReq(ctx, sdk.ViewRequest{
+		Version: 3,
+		Values:  map[string]string{h.notes.contentFieldID(): "short"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSize := fmt.Sprintf("%d runes · %d bytes", MaxAreaLength+10, MaxAreaLength+10)
+	if itemDetail(t, v, "char_count") != wantSize || strings.HasSuffix(v.Title, "*") {
+		t.Fatalf("read-only oversized doc accepted draft override: title:%q size:%q",
+			v.Title, itemDetail(t, v, "char_count"))
 	}
 }

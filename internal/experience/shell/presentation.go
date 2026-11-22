@@ -66,11 +66,13 @@ type appView struct {
 
 	refreshing    bool
 	refreshQueued bool
+	draftSeq      uint64
 }
 
 type viewMsg struct {
 	id         windows.ID
 	epoch, seq uint64
+	draftSeq   uint64
 	version    int
 	data       sdk.View
 	err        error
@@ -100,6 +102,7 @@ type viewTickMsg struct {
 type viewCheckMsg struct {
 	id         windows.ID
 	epoch, seq uint64
+	draftSeq   uint64
 	apps       []appStatus
 	data       *sdk.View
 	version    int
@@ -208,25 +211,58 @@ func (m *Model) waitViewEvent(sub *ipc.ClientSubscription) tea.Cmd {
 	}
 }
 
+// liveValues returns a fresh copy of v's current drafts for fields marked Live
+// on a version-3+ presentation, or nil when no live fields exist.
+func (v *appView) liveValues() map[string]string {
+	if v.version < 3 {
+		return nil
+	}
+	var values map[string]string
+	for _, f := range v.data.Fields {
+		if !f.Live {
+			continue
+		}
+		if values == nil {
+			values = make(map[string]string)
+		}
+		values[f.ID] = v.values[f.ID]
+	}
+	return values
+}
+
+// queueLiveRefresh schedules a coalesced non-blocking view refresh after a
+// live field edit so snapshot metadata tracks the visible draft without
+// blocking typing or flashing a loading badge.
+func (m *Model) queueLiveRefresh(v *appView) tea.Cmd {
+	v.draftSeq++
+	if v.busy || v.refreshing {
+		v.refreshQueued = true
+		return nil
+	}
+	v.refreshQueued = false
+	return m.refreshView(v)
+}
+
 // refreshView refetches v's snapshot at the negotiated version in answer to
-// a version-3 invalidation push. Unlike the poll it skips app/list: liveness
-// keeps coming from the tick.
+// a version-3 invalidation push or live field edit. Unlike the poll it skips
+// app/list: liveness keeps coming from the tick.
 func (m *Model) refreshView(v *appView) tea.Cmd {
 	v.refreshing = true
-	epoch, seq, id, version := v.epoch, v.seq, v.id, v.version
+	epoch, seq, draftSeq, id, version := v.epoch, v.seq, v.draftSeq, v.id, v.version
+	values := v.liveValues()
 	ctx, client := m.ctx, m.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 		var data sdk.View
-		err := client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version}, &data)
+		err := client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version, Values: values}, &data)
 		if err == nil {
 			err = data.Validate()
 		}
 		if err == nil && data.Version > version {
 			err = fmt.Errorf("presentation: view stamped version %d exceeds requested %d", data.Version, version)
 		}
-		return viewMsg{id: windows.ID(id), epoch: epoch, seq: seq, version: version, data: data, err: err, refresh: true}
+		return viewMsg{id: windows.ID(id), epoch: epoch, seq: seq, draftSeq: draftSeq, version: version, data: data, err: err, refresh: true}
 	}
 }
 
@@ -249,13 +285,14 @@ func (m *Model) cancelViewAction(v *appView) tea.Cmd {
 }
 
 func (m *Model) checkView(v *appView) tea.Cmd {
-	epoch, seq, id, pid, busy, version := v.epoch, v.seq, v.id, v.pid, v.busy, v.version
+	epoch, seq, draftSeq, id, pid, busy, version := v.epoch, v.seq, v.draftSeq, v.id, v.pid, v.busy, v.version
+	values := v.liveValues()
 	negotiated := v.instance != ""
 	ctx, client := m.ctx, m.client
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		msg := viewCheckMsg{id: windows.ID(id), epoch: epoch, seq: seq}
+		msg := viewCheckMsg{id: windows.ID(id), epoch: epoch, seq: seq, draftSeq: draftSeq}
 		msg.err = client.Call(ctx, "app/list", nil, &msg.apps)
 		if msg.err == nil && !busy {
 			for _, a := range msg.apps {
@@ -271,7 +308,7 @@ func (m *Model) checkView(v *appView) tea.Cmd {
 						}
 					} else {
 						var data sdk.View
-						msg.viewErr = client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version}, &data)
+						msg.viewErr = client.Call(ctx, "app/"+id+"/view", sdk.ViewRequest{Version: version, Values: values}, &data)
 						if msg.viewErr == nil {
 							msg.viewErr = data.Validate()
 						}
@@ -435,6 +472,10 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			v.refreshing = false
 		}
 		if msg.epoch != v.epoch || msg.seq != v.seq {
+			if msg.epoch == v.epoch && v.refreshQueued && !v.busy && !v.refreshing {
+				v.refreshQueued = false
+				return m.refreshView(v)
+			}
 			return nil
 		}
 		if msg.action {
@@ -449,7 +490,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			if v.instance == "" {
 				v.data.State = sdk.ViewError
 			}
-		} else {
+		} else if !msg.refresh || msg.draftSeq == v.draftSeq || !v.refreshQueued {
 			v.version = msg.version
 			if v.version == 0 {
 				v.version = msg.data.Version
@@ -465,7 +506,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 		if msg.action && v.id == settingsAppID {
 			return m.fetchConfigCmd()
 		}
-		if v.refreshQueued && !v.busy {
+		if v.refreshQueued && !v.busy && !v.refreshing {
 			v.refreshQueued = false
 			return m.refreshView(v)
 		}
@@ -494,10 +535,10 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 		// A fresh app/list answer outranks an older process-derived state;
 		// the next accepted poll reconciles it again.
 		m.procApps = nil
-		if msg.seq == v.seq && msg.viewErr != nil {
+		if msg.seq == v.seq && msg.draftSeq == v.draftSeq && msg.viewErr != nil {
 			v.banner = safe(msg.viewErr.Error())
 		}
-		if msg.seq == v.seq && msg.data != nil {
+		if msg.seq == v.seq && msg.draftSeq == v.draftSeq && msg.data != nil {
 			if msg.version != 0 {
 				v.version = msg.version
 			}
@@ -777,7 +818,7 @@ func (m *Model) viewRun(v *appView, p sdk.ActionRequest) tea.Cmd {
 		p.Values[id] = value
 	}
 	v.seq++
-	v.request, v.busy, v.banner = p.RequestID, true, ""
+	v.request, v.busy, v.banner, v.refreshQueued = p.RequestID, true, "", false
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
 	v.cancel = cancel
 	epoch, seq, id, client := v.epoch, v.seq, v.id, m.client
@@ -918,7 +959,13 @@ func (m *Model) viewKey(v *appView, key tea.KeyPressMsg) tea.Cmd {
 			// multiline forms a submit chord that only a disambiguating
 			// terminal can name.
 			v.itemFocus, v.scroll = false, 0
-			v.values[fields[v.focus].ID] += "\n"
+			f := fields[v.focus]
+			if len(v.values[f.ID])+1 <= 32768 {
+				v.values[f.ID] += "\n"
+				if f.Live {
+					return m.queueLiveRefresh(v)
+				}
+			}
 			return nil
 		}
 		if key.IsRepeat {
@@ -953,7 +1000,8 @@ func (m *Model) viewKey(v *appView, key tea.KeyPressMsg) tea.Cmd {
 		f := fields[v.focus]
 		id := f.ID
 		v.itemFocus, v.scroll = false, 0
-		value := []rune(v.values[id])
+		prev := v.values[id]
+		value := []rune(prev)
 		limit := 4096
 		if f.Multiline {
 			limit = 32768 // matches the SDK maxAreaValue budget
@@ -976,7 +1024,11 @@ func (m *Model) viewKey(v *appView, key tea.KeyPressMsg) tea.Cmd {
 		case k.Mod.Contains(tea.ModCtrl) && k.Code == 'u':
 			value = nil
 		}
-		v.values[id] = string(value)
+		next := string(value)
+		v.values[id] = next
+		if f.Live && next != prev {
+			return m.queueLiveRefresh(v)
+		}
 	}
 	return nil
 }

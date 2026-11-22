@@ -489,7 +489,7 @@ manifest grants, handler concurrency, cancellation, and error rules.
 
 | Method (`app/<app-id>/...`) | Params | Result |
 |---|---|---|
-| `view` | `sdk.ViewRequest`: `{"version":N}` | complete `sdk.View` snapshot |
+| `view` | `sdk.ViewRequest`: `{"version":N,"values"?:{...}}` | complete `sdk.View` snapshot |
 | `action` | `sdk.ActionRequest`: `{version,instance,request_id,action,item_id?,cell_id?,values?}` | complete updated `sdk.View` |
 | `cancel` | `sdk.CancelRequest`: `{version,instance,request_id}` | `{"canceled":true}`, cancellation intent recorded |
 
@@ -518,16 +518,21 @@ a full replacement, including explicit empty values, not a patch. Its small
 concrete vocabulary is:
 
 - `sdk.Item`: stable local `id`, `label`, and textual `detail`.
-- `sdk.Field`: local `id`, `label`, initial text `value`, `required`, and
-  `multiline` (version 3). Ordinary fields are single-line text with a
-  4096-byte value budget; `multiline` fields accept newlines — Enter and
-  Shift-Enter insert a line break instead of invoking an action, Ctrl-Enter
-  fires the form action — and carry a 32768-byte value
-  budget so Notes/Compendium can edit whole documents in place. The shell
-  owns editing and focus either way; periodic snapshots preserve drafts for
-  surviving field IDs. To reset an input, change its ID or reopen the view.
-  Apps should not silently truncate oversized content into a multiline
-  field: surface a read-only status instead.
+- `sdk.Field`: local `id`, `label`, initial text `value`, `required`,
+  `multiline` (version 3), and `live` (version 3). Ordinary fields are
+  single-line text with a 4096-byte value budget; `multiline` fields accept
+  newlines — Enter and Shift-Enter insert a line break instead of invoking an
+  action, Ctrl-Enter fires the form action — and carry a 32768-byte value
+  budget so Notes/Compendium can edit whole documents in place. Setting `live`
+  on a version-3 field tells the shell to carry that field's current draft on
+  `view` requests (readable via `sdk.PresentationDraftValues(ctx)`) and issue
+  a coalesced non-blocking refresh when it changes, so snapshot metadata such
+  as unsaved indicators and size counters stay consistent with the visible
+  draft without mutating committed app state. The shell owns editing and focus
+  either way; periodic snapshots preserve drafts for surviving field IDs. To
+  reset an input, change its ID or reopen the view. Apps should not silently
+  truncate oversized content into a multiline field: surface a read-only status
+  instead.
 - `sdk.Action`: local `id`, `label`, and `disabled`.
 - `sdk.ViewState`: `ready`, `loading`, or `error`. An error state requires an
   error banner. `status` is informational text, not an IPC error.

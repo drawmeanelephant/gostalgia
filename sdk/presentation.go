@@ -67,13 +67,17 @@ type Item struct {
 // back to the app. The experience owns editing and focus. Fields are
 // single-line unless Multiline is set; a multiline field accepts newlines,
 // carries the larger maxAreaValue budget instead of the single-line 4096,
-// and exists only on version 3 and later.
+// and exists only on version 3 and later. Live marks fields whose edits
+// affect snapshot metadata (such as unsaved status or size); the experience
+// sends live field drafts on view requests and refreshes when a live field
+// changes. Live exists only on version 3 and later.
 type Field struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
 	Value     string `json:"value"`
 	Required  bool   `json:"required"`
 	Multiline bool   `json:"multiline,omitempty"`
+	Live      bool   `json:"live,omitempty"`
 }
 
 type Action struct {
@@ -181,7 +185,8 @@ type View struct {
 }
 
 type ViewRequest struct {
-	Version int `json:"version"`
+	Version int               `json:"version"`
+	Values  map[string]string `json:"values,omitempty"`
 }
 
 // ActionRequest carries semantic input only. RequestID identifies an in-flight
@@ -231,6 +236,17 @@ func PresentationRequestVersion(ctx context.Context) int {
 	return v
 }
 
+type requestValuesKey struct{}
+
+// PresentationDraftValues reports live field drafts supplied on a version-3
+// view request, keyed by field ID. View callbacks must treat the map as
+// read-only and reflect drafts without mutating committed app state. Outside
+// a view callback with drafts it returns nil.
+func PresentationDraftValues(ctx context.Context) map[string]string {
+	v, _ := ctx.Value(requestValuesKey{}).(map[string]string)
+	return v
+}
+
 // Validate bounds snapshots and rejects ambiguous IDs and unsupported states.
 // All text remains untrusted; the experience must strip terminal controls.
 func (v View) Validate() error {
@@ -258,15 +274,17 @@ func (v View) Validate() error {
 		return fmt.Errorf("presentation: blocks, meters, and grid require version 2")
 	}
 	hasMultiline := false
+	hasLive := false
 	for _, f := range v.Fields {
 		hasMultiline = hasMultiline || f.Multiline
+		hasLive = hasLive || f.Live
 	}
 	hasFocus := false
 	for _, block := range v.Blocks {
 		hasFocus = hasFocus || block.Focus != nil
 	}
-	if v.Version < 3 && (v.Region != nil || hasMultiline || hasFocus) {
-		return fmt.Errorf("presentation: multiline fields, the scroll region, and block focus require version 3")
+	if v.Version < 3 && (v.Region != nil || hasMultiline || hasFocus || hasLive) {
+		return fmt.Errorf("presentation: multiline fields, live fields, the scroll region, and block focus require version 3")
 	}
 	check := func(id, label string, seen map[string]bool) error {
 		if !entryPattern.MatchString(id) || len(id) > 64 || seen[id] ||
@@ -438,7 +456,13 @@ func (c *Context) Present(snapshot func(context.Context) (View, error), action f
 				Message: fmt.Sprintf("presentation: unsupported version %d", p.Version),
 			}
 		}
+		if err := validateViewValues(p.Version, p.Values); err != nil {
+			return nil, err
+		}
 		ctx = context.WithValue(ctx, requestVersionKey{}, p.Version)
+		if len(p.Values) > 0 {
+			ctx = context.WithValue(ctx, requestValuesKey{}, p.Values)
+		}
 		v, err := snapshot(ctx)
 		return finish(p.Version, v, err)
 	}); err != nil {
@@ -511,6 +535,27 @@ func (c *Context) Present(snapshot func(context.Context) (View, error), action f
 		}
 		return CancelResult{Canceled: true}, nil
 	})
+}
+
+func validateViewValues(version int, values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	if version < 3 {
+		return fmt.Errorf("presentation: view draft values require version 3")
+	}
+	if len(values) > maxViewFields {
+		return fmt.Errorf("presentation: view draft values exceed field limit")
+	}
+	for id, value := range values {
+		if !entryPattern.MatchString(id) || len(id) > 64 {
+			return fmt.Errorf("presentation: invalid draft field %q", id)
+		}
+		if len(value) > maxAreaValue {
+			return fmt.Errorf("presentation: draft field %q value exceeds limit", id)
+		}
+	}
+	return nil
 }
 
 func validateAction(v View, p ActionRequest) error {
