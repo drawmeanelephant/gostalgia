@@ -525,7 +525,7 @@ func (m *Model) promptLine(w int) (line string, x int, editable bool) {
 	case m.movingWindow():
 		prompt += m.kit.Muted(m.kit.Hint("Moving window. ←→↑↓ move it, Enter or Esc ends."))
 	case m.onWindows():
-		prompt += m.kit.Muted("Window owns focus. Esc goes back, Ctrl-W closes.")
+		prompt += m.kit.Muted(m.windowsPromptHint())
 	case m.taskView:
 		prompt += m.kit.Muted("Task Manager owns focus. Esc returns to prompt.")
 	case m.notifView:

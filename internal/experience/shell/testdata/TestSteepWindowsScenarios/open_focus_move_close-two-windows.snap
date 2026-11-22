@@ -3,22 +3,22 @@
 ┃  Home   Apps (3)   Prompt   Tasks   Notifications  [Windows (2)]             ┃
 ┃ ✓ ONLINE   guest · C: environment drive                                      ┃
 ┃                                                                              ┃
-┃ ┏━  Settings - Appearance & Theme━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[X]━┓ ┃
-┃ ┃S┏━› Notes - [Untitled]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[X]━┓ ┃ ┃
-┃ ┃T┃Notes - [Untitled]                                                    ┃ ┃ ┃
-┃ ┃›┃Tab focus · Enter/Shift-Enter newline · Ctrl-Enter action · ↑↓ item ·…┃…┃ ┃
-┃ ┃M┃› Document: [Untitled] [saved]                                        ┃ ┃ ┃
-┃ ┃M┃Disk Modified: Not saved to disk                                      ┃s┃ ┃
-┃ ┃H┃Size: 0 runes · 0 bytes                                               ┃…┃ ┃
-┃ ┃H┃› Path:                                                               ┃s┃ ┃
-┃ ┃›┃Content:                                                              ┃ ┃ ┃
-┃ ┃[┃                                                                      ┃ ┃ ┃
-┃ ┃[┃[Save]                                                                ┃ ┃ ┃
-┃ ┃[┃[Save As]                                                             ┃ ┃ ┃
-┃ ┃[┃Tab 1/6 · ↓2 more · Saved (up to date)                                ┃ ┃ ┃
-┃ ┃T┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛…┃ ┃
-┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
+┃ ┌─  Settings - Appearance & Theme──────────────────────────────────────[X]─┐ ┃
+┃ ┏━› Notes - [Untitled]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[X]━┓ │ ┃
+┃ ┃Notes - [Untitled]                                                      ┃ │ ┃
+┃ ┃Tab focus · Enter/Shift-Enter newline · Ctrl-Enter action · ↑↓ item · E…┃ │ ┃
+┃ ┃› Document: [Untitled] [saved]                                          ┃ │ ┃
+┃ ┃Disk Modified: Not saved to disk                                        ┃ │ ┃
+┃ ┃Size: 0 runes · 0 bytes                                                 ┃ │ ┃
+┃ ┃› Path:                                                                 ┃ │ ┃
+┃ ┃Content:                                                                ┃ │ ┃
+┃ ┃                                                                        ┃ │ ┃
+┃ ┃[Save]                                                                  ┃ │ ┃
+┃ ┃[Save As]                                                               ┃ │ ┃
+┃ ┃Tab 1/6 · ↓2 more · Saved (up to date)                                  ┃ │ ┃
+┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛ │ ┃
+┃ └──────────────────────────────────────────────────────────────────────────┘ ┃
 ┃                                                                              ┃
-┃ C:\users\guest> Window owns focus. Esc goes back, Ctrl-W closes.             ┃
+┃ C:\users\guest> F8 next: Settings - Appearance & Theme                       ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 Esc CANCEL/BACK · Ctrl-W CLOSE · Tab FOCUS · Enter ACTION · ↑↓ ITEM · F8 NEXT   

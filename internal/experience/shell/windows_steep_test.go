@@ -77,11 +77,11 @@ func steepBody(t *testing.T, h *steep.Harness) image.Rectangle {
 // corner at x, y in the body, focused or not, with no pointer on its title.
 func waitSteepWindow(t *testing.T, h *steep.Harness, body image.Rectangle, title string, x, y int, focused bool) {
 	t.Helper()
-	marker := " "
 	if focused {
-		marker = theme.Nostalgia().Focus.Marker
+		waitSteepCorner(t, h, body, "┏━"+theme.Nostalgia().Focus.Marker+" "+title, x, y)
+		return
 	}
-	waitSteepCorner(t, h, body, "┏━"+marker+" "+title, x, y)
+	waitSteepCorner(t, h, body, "┌─  "+title, x, y)
 }
 
 // waitSteepCorner waits until want starts at x, y in the body.
@@ -112,9 +112,9 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		h, client := newSteepWindowsRuntime(t, theme.Nostalgia())
 		steepOpenTwoWindows(t, h)
 		body := steepBody(t, h)
-		// Settings fills the body; Notes cascades from it.
+		// Settings fills the body; Notes aligns flush-left one row below.
 		waitSteepWindow(t, h, body, steepSettingsTitle, 0, 0, false)
-		waitSteepWindow(t, h, body, steepNotesTitle, 2, 1, true)
+		waitSteepWindow(t, h, body, steepNotesTitle, 0, 1, true)
 		steepSnapshot(h, "two-windows")
 		h.Mutate(func(m *Model) *Model {
 			if _, cmd := m.Update(struct{}{}); cmd != nil {
@@ -123,17 +123,18 @@ func TestSteepWindowsScenarios(t *testing.T) {
 			return m
 		})
 
-		// F8 focuses and raises Settings, and F8 again Notes.
+		// F8 focuses and raises Settings while keeping Notes discoverable in
+		// the prompt row, and F8 again raises Notes.
 		h.Key("f8")
 		waitSteepWindow(t, h, body, steepSettingsTitle, 0, 0, true)
-		h.WaitNot(steepNotesTitle)
+		h.Wait("F8 next: " + steepNotesTitle)
 		h.Key("f8")
-		waitSteepWindow(t, h, body, steepNotesTitle, 2, 1, true)
+		waitSteepWindow(t, h, body, steepNotesTitle, 0, 1, true)
 
-		// Alt-Left moves Notes a column; a drag on its title moves it on.
+		// Alt-Right moves Notes a column; a drag on its title moves it on.
 		// The pointer rests on the moved title, so its cue shows once the
 		// next message after the drag's last frame reaches the root.
-		h.Key("alt+left")
+		h.Key("alt+right")
 		waitSteepWindow(t, h, body, steepNotesTitle, 1, 1, true)
 		title := h.Locate(reel.Contains(steepNotesTitle))
 		h.LeftDrag(title.X+2, title.Y, title.X+1, title.Y+1)
@@ -169,21 +170,21 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		// Under the palette and under a confirmation, no window key or
 		// click reaches the windows.
 		h.Key("ctrl+p").Wait("COMMAND PALETTE")
-		h.Key("alt+left").Key("f8")
+		h.Key("alt+right").Key("f8")
 		settingsClose.LeftClick()
 		h.KeyEsc().WaitNot("COMMAND PALETTE")
 		h.Key("ctrl+p").Wait("COMMAND PALETTE")
 		h.Type("stop notes").Key("enter").Wait("Stop Notes?")
-		h.Key("alt+left").Key("f8").Key("ctrl+w")
+		h.Key("alt+right").Key("f8").Key("ctrl+w")
 		settingsClose.LeftClick()
 		// Esc cancels: Cancel has focus.
 		h.KeyEsc().WaitNot("Stop Notes?")
 		h.Wait("Windows (2)")
 		waitSteepWindow(t, h, body, steepSettingsTitle, 0, 0, false)
-		waitSteepWindow(t, h, body, steepNotesTitle, 2, 1, true)
+		waitSteepWindow(t, h, body, steepNotesTitle, 0, 1, true)
 		steepAppRunning(t, client, "com.gostalgia.notes", true)
 		// The windows take keys again once the modal is gone.
-		h.Key("alt+left")
+		h.Key("alt+right")
 		waitSteepWindow(t, h, body, steepNotesTitle, 1, 1, true)
 	})
 
@@ -195,13 +196,13 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		h.Resize(30, 10).Wait("[Windows (2)]").WaitNot(closeLabel)
 		h.Wait(steepNotesTitle)
 		steepSnapshot(h, "small")
-		h.Key("alt+left").Key("f8").Wait("Settings - Appea").WaitNot(steepNotesTitle)
+		h.Key("alt+right").Key("f8").Wait("Settings - Appea").WaitNot(steepNotesTitle)
 		h.Key("ctrl+w").Wait([]string{"[Windows (1)]", steepNotesTitle})
 		h.KeyEsc().WaitNot("[Windows (1)]")
 		h.Key("f8").Wait([]string{"[Windows (1)]", steepNotesTitle})
 		// Grown back, Notes floats where it was.
 		h.Resize(80, 24).Wait(closeLabel)
-		waitSteepWindow(t, h, steepBody(t, h), steepNotesTitle, 2, 1, true)
+		waitSteepWindow(t, h, steepBody(t, h), steepNotesTitle, 0, 1, true)
 	})
 
 	t.Run("compendium_minimum_size", func(t *testing.T) {
@@ -235,11 +236,33 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		h.Type("motion on").Key("enter").Wait("Reduced motion is now enabled")
 		steepOpenTwoWindows(t, h)
 		body := steepBody(t, h)
-		waitSteepWindow(t, h, body, steepNotesTitle, 2, 1, true)
+		waitSteepWindow(t, h, body, steepNotesTitle, 0, 1, true)
 		h.Key("alt+right")
-		waitSteepWindow(t, h, body, steepNotesTitle, 3, 1, true)
+		waitSteepWindow(t, h, body, steepNotesTitle, 1, 1, true)
 		h.Key("ctrl+w").Wait("Windows (1)")
 		steepNoFrames(t, h)
+	})
+
+	t.Run("dogcalc_compendium_100x32", func(t *testing.T) {
+		h, _ := newSteepWindowsRuntime(t, theme.Nostalgia())
+		h.Resize(100, 32).Wait("ONLINE")
+		h.Type("launch com.gostalgia.dogcalc").Key("enter").Wait("Launched com.gostalgia.dogcalc")
+		h.Type("launch com.gostalgia.compendium").Key("enter").Wait("Launched com.gostalgia.compendium")
+		h.Key("ctrl+p").Wait("COMMAND PALETTE")
+		h.Type("switch to dogcalc").Key("enter").Wait([]string{"Windows (1)", "Dogcalc"})
+		h.Key("ctrl+p").Wait("COMMAND PALETTE")
+		h.Type("switch to compendium").Key("enter").Wait([]string{"Windows (2)", "Compendium"})
+		body := steepBody(t, h)
+		waitSteepWindow(t, h, body, "Dogcalc", 0, 0, false)
+		waitSteepWindow(t, h, body, "Compendium", 0, 1, true)
+		h.Wait("F8 next: Dogcalc")
+		// The window chrome lands before the app's first view; wait for the
+		// loaded compendium content so the snapshot cannot race "Loading…".
+		h.Wait("No notes yet")
+		steepSnapshot(h, "dogcalc-compendium-100x32")
+		h.Key("f8")
+		waitSteepWindow(t, h, body, "Dogcalc", 0, 0, true)
+		h.Wait("F8 next: Compendium")
 	})
 }
 

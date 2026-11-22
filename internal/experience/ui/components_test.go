@@ -320,6 +320,46 @@ func TestComponentLabelsFilterTerminalControls(t *testing.T) {
 	}
 }
 
+func TestWindowStyleAndMutedChrome(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		th        theme.Theme
+		mode      ColorMode
+		focusedTL string
+		unfocusTL string
+	}{
+		{"nostalgia plain", theme.Nostalgia(), Plain, "┏", "┌"},
+		{"nostalgia ansi256", theme.Nostalgia(), ANSI256, "┏", "┌"},
+		{"midnight truecolor", theme.Midnight(), TrueColor, "┏", "┌"},
+		{"high-contrast ansi256", theme.HighContrast(), ANSI256, "┏", "┌"},
+		{"monochrome plain", theme.Monochrome(), Plain, "+", "+"},
+		{"monochrome ansi256", theme.Monochrome(), ANSI256, "+", "+"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := New(tc.th, tc.mode)
+			focused := k.WindowStyle(true).Render("hi")
+			unfocused := k.WindowStyle(false).Render("hi")
+			muted := k.WindowMuted("Alpha")
+			if tc.mode == Plain {
+				for _, s := range []string{focused, unfocused, muted} {
+					if strings.Contains(s, "\x1b") {
+						t.Fatalf("Plain emitted escapes: %q", s)
+					}
+				}
+			}
+			if got := ansi.Strip(focused); !strings.HasPrefix(got, tc.focusedTL) {
+				t.Fatalf("focused window top-left = %q, want prefix %q", got, tc.focusedTL)
+			}
+			if got := ansi.Strip(unfocused); !strings.HasPrefix(got, tc.unfocusTL) {
+				t.Fatalf("unfocused window top-left = %q, want prefix %q", got, tc.unfocusTL)
+			}
+			if tc.mode != Plain && focused == unfocused {
+				t.Fatal("focused and unfocused styles are identical in color mode")
+			}
+		})
+	}
+}
+
 func snapshot(t *testing.T, name, view string) {
 	t.Helper()
 	lines := strings.Split(view, "\n")
