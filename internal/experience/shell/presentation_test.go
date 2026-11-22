@@ -848,3 +848,129 @@ func TestPresentationV3SubscriptionLifecycle(t *testing.T) {
 		t.Fatal("failed subscribe left a stale subscription")
 	}
 }
+
+func TestPresentationV3LiveFieldRefreshAndCoalescing(t *testing.T) {
+	var requests []sdk.ViewRequest
+	makeView := func(draft string) sdk.View {
+		dirty := draft != ""
+		title, doc, status := "Notes - [Untitled]", "[Untitled] [saved]", "Saved (up to date)"
+		if dirty {
+			title = "Notes - [Untitled]*"
+			doc = "[Untitled] [modified]"
+			status = "Modified (unsaved changes)"
+		}
+		return sdk.View{
+			Version: 3, Instance: "launch", Title: title, State: sdk.ViewReady,
+			Items: []sdk.Item{
+				{ID: "doc_info", Label: "Document", Detail: doc},
+				{ID: "char_count", Label: "Size", Detail: fmt.Sprintf("%d runes · %d bytes", len([]rune(draft)), len(draft))},
+			},
+			Fields: []sdk.Field{
+				{ID: "path_1", Label: "Path", Value: ""},
+				{ID: "content_1", Label: "Content", Value: "", Multiline: true, Live: true},
+			},
+			Actions: []sdk.Action{{ID: "save", Label: "Save"}},
+			Status:  status,
+		}
+	}
+	m := New(context.Background(), callerFunc(func(ctx context.Context, method string, params, out any) error {
+		if method == "app/list" {
+			return writeJSON(out, []appStatus{screenStatus()})
+		}
+		req := params.(sdk.ViewRequest)
+		requests = append(requests, req)
+		return writeJSON(out, makeView(req.Values["content_1"]))
+	}), nil)
+	m.openWindow(screenStatus())
+	settleFiniteMotion(m)
+	epoch := m.focusedView().epoch
+	m.Update(viewMsg{id: screenID, epoch: epoch, version: 3, data: makeView("")})
+	v := m.focusedView()
+
+	// Typing into the non-live path field triggers no refresh.
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "/tmp/note.txt"}); cmd != nil {
+		t.Fatal("non-live field edit triggered a refresh")
+	}
+	if len(requests) != 0 || v.refreshing {
+		t.Fatalf("unexpected refresh on non-live field: requests=%d refreshing=%v", len(requests), v.refreshing)
+	}
+
+	// Tab to the live multiline content field and type: one non-blocking
+	// refresh starts immediately without blocking typing.
+	m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	_, cmd1 := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "hi"})
+	if cmd1 == nil || v.busy || !v.refreshing {
+		t.Fatalf("live edit state = cmd:%v busy:%v refreshing:%v", cmd1 != nil, v.busy, v.refreshing)
+	}
+	// Editing again while the first refresh is in flight stays responsive and
+	// coalesces into one queued follow-up.
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		t.Fatal("concurrent live newline launched an overlapping refresh")
+	}
+	if _, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyExtended, Text: "there"}); cmd != nil {
+		t.Fatal("concurrent live edit launched an overlapping refresh")
+	}
+	if !v.refreshQueued || v.values["content_1"] != "hi\nthere" {
+		t.Fatalf("coalesced draft = %q queued=%v", v.values["content_1"], v.refreshQueued)
+	}
+
+	// Capture a stale poll that was started before the latest edit.
+	stalePoll := viewCheckMsg{
+		id: screenID, epoch: epoch, seq: v.seq, draftSeq: v.draftSeq - 1,
+		apps:    []appStatus{screenStatus()},
+		version: 3,
+		data:    func() *sdk.View { d := makeView(""); return &d }(),
+	}
+
+	// First refresh finishes and immediately drains the queued follow-up.
+	_, cmd2 := m.Update(cmd1())
+	if cmd2 == nil || !v.refreshing || v.refreshQueued {
+		t.Fatalf("queued live refresh did not drain: cmd2:%v refreshing:%v queued:%v", cmd2 != nil, v.refreshing, v.refreshQueued)
+	}
+	// While superseded, the transient "hi" snapshot was not applied.
+	if v.data.Title != "Notes - [Untitled]" {
+		t.Fatalf("superseded refresh flickered title to %q", v.data.Title)
+	}
+	m.Update(cmd2())
+	if v.refreshing || v.refreshQueued {
+		t.Fatalf("refresh state did not settle: refreshing=%v queued=%v", v.refreshing, v.refreshQueued)
+	}
+	if v.data.Title != "Notes - [Untitled]*" || v.data.Status != "Modified (unsaved changes)" ||
+		v.data.Items[0].Detail != "[Untitled] [modified]" || v.data.Items[1].Detail != "8 runes · 8 bytes" {
+		t.Fatalf("unexpected live view after edits: title=%q status=%q items=%+v", v.data.Title, v.data.Status, v.data.Items)
+	}
+	if v.values["path_1"] != "/tmp/note.txt" || v.values["content_1"] != "hi\nthere" {
+		t.Fatalf("live refresh lost drafts: %+v", v.values)
+	}
+	if len(requests) != 2 || requests[0].Values["content_1"] != "hi" || requests[1].Values["content_1"] != "hi\nthere" {
+		t.Fatalf("unexpected live refresh requests: %+v", requests)
+	}
+	if _, hasPath := requests[1].Values["path_1"]; hasPath {
+		t.Fatalf("non-live path field was sent on view request: %+v", requests[1].Values)
+	}
+
+	// A stale poll started before the latest edit must not revert the view,
+	// while a fresh poll carries the live draft and keeps metadata consistent.
+	_, tickCmd := m.Update(stalePoll)
+	if tickCmd == nil {
+		t.Fatal("stale poll did not re-arm view tick")
+	}
+	if v.data.Title != "Notes - [Untitled]*" || v.data.Status != "Modified (unsaved changes)" {
+		t.Fatalf("stale poll reverted live view: title=%q status=%q", v.data.Title, v.data.Status)
+	}
+	m.Update(m.checkView(v)())
+	if v.data.Title != "Notes - [Untitled]*" || v.data.Items[1].Detail != "8 runes · 8 bytes" {
+		t.Fatalf("fresh poll lost live metadata: title=%q items=%+v", v.data.Title, v.data.Items)
+	}
+
+	// Clearing the draft back to empty reverts status, title, and size.
+	_, clearCmd := m.Update(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
+	if clearCmd == nil {
+		t.Fatal("ctrl+u on live field did not refresh")
+	}
+	m.Update(clearCmd())
+	if v.data.Title != "Notes - [Untitled]" || v.data.Status != "Saved (up to date)" ||
+		v.data.Items[0].Detail != "[Untitled] [saved]" || v.data.Items[1].Detail != "0 runes · 0 bytes" {
+		t.Fatalf("clearing draft did not revert view: title=%q status=%q items=%+v", v.data.Title, v.data.Status, v.data.Items)
+	}
+}

@@ -125,6 +125,10 @@ func TestPresentationValidation(t *testing.T) {
 			v.Version = 2
 			v.Fields = []Field{{ID: "text", Label: "Text", Multiline: true}}
 		},
+		func(v *View) {
+			v.Version = 2
+			v.Fields = []Field{{ID: "text", Label: "Text", Live: true}}
+		},
 		func(v *View) { v.Region = &Region{ID: "bad id", Text: "x"} },
 		func(v *View) { v.Region = &Region{ID: "log", Label: strings.Repeat("x", 257)} },
 		func(v *View) { v.Region = &Region{ID: "log", Text: strings.Repeat("x", 65537)} },
@@ -468,6 +472,91 @@ func TestPresentationV3ElementsAndAreaInput(t *testing.T) {
 		Values: map[string]string{"body": "a\nb\n"}}
 	if _, err := invokePresentation(t, routes["action"], p); err != nil || last.Values["body"] != "a\nb\n" {
 		t.Fatalf("multiline value lost its newlines: %v, %q", err, last.Values["body"])
+	}
+}
+
+func TestPresentationV3LiveDraftValues(t *testing.T) {
+	if PresentationDraftValues(context.Background()) != nil {
+		t.Fatal("draft values leaked outside a callback")
+	}
+	var seenDraft map[string]string
+	routes := presentTest(t, func(ctx context.Context) (View, error) {
+		seenDraft = PresentationDraftValues(ctx)
+		v := areaView()
+		v.Fields[0].Live = true
+		if draft, ok := seenDraft["body"]; ok {
+			if len(draft) <= 64 {
+				v.Status = "draft:" + draft
+			} else {
+				v.Status = "draft:large"
+			}
+		}
+		return v, nil
+	}, func(ctx context.Context, p ActionRequest) (View, error) {
+		v := areaView()
+		v.Fields[0].Live = true
+		return v, nil
+	})
+
+	out, err := invokePresentation(t, routes["view"], ViewRequest{Version: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := out.(View)
+	if !v.Fields[0].Live || seenDraft != nil || v.Status != "" {
+		t.Fatalf("plain v3 view got unexpected draft state: live=%v draft=%v status=%q", v.Fields[0].Live, seenDraft, v.Status)
+	}
+
+	out, err = invokePresentation(t, routes["view"], ViewRequest{
+		Version: 3,
+		Values:  map[string]string{"body": "hello\nworld"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v = out.(View)
+	if v.Status != "draft:hello\nworld" {
+		t.Fatalf("v3 draft view status = %q, want %q", v.Status, "draft:hello\nworld")
+	}
+
+	// Action pre-validation snapshot receives no view draft values.
+	seenDraft = map[string]string{"stale": "x"}
+	if _, err := invokePresentation(t, routes["action"], ActionRequest{
+		Version:   3,
+		Instance:  v.Instance,
+		RequestID: "r1",
+		Action:    "save",
+		Values:    map[string]string{"body": "saved"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seenDraft != nil {
+		t.Fatalf("action validation snapshot observed view drafts: %v", seenDraft)
+	}
+
+	// Exact maxAreaValue draft is accepted.
+	if _, err := invokePresentation(t, routes["view"], ViewRequest{
+		Version: 3,
+		Values:  map[string]string{"body": strings.Repeat("x", maxAreaValue)},
+	}); err != nil {
+		t.Fatalf("maxAreaValue draft rejected: %v", err)
+	}
+
+	// Below v3, invalid field IDs, oversized drafts, and too many fields are rejected.
+	tooMany := make(map[string]string, maxViewFields+1)
+	for i := range maxViewFields + 1 {
+		tooMany[string(rune('a'+i))] = "x"
+	}
+	for _, req := range []ViewRequest{
+		{Version: 1, Values: map[string]string{"body": "x"}},
+		{Version: 2, Values: map[string]string{"body": "x"}},
+		{Version: 3, Values: map[string]string{"bad id": "x"}},
+		{Version: 3, Values: map[string]string{"body": strings.Repeat("x", maxAreaValue+1)}},
+		{Version: 3, Values: tooMany},
+	} {
+		if _, err := invokePresentation(t, routes["view"], req); err == nil {
+			t.Fatalf("accepted invalid view request: %+v", req)
+		}
 	}
 }
 

@@ -216,3 +216,92 @@ func TestSteepWindowsScenarios(t *testing.T) {
 		steepNoFrames(t, h)
 	})
 }
+
+// TestSteepNotesLiveDraftStatus exercises Issue #293 end to end in a 100×32
+// terminal against a real runtime and Notes process: typing into the multiline
+// Content field updates the unsaved markers, footer, and rune/byte size live
+// without activating Save, and reverts cleanly on edit-back or Save.
+func TestSteepNotesLiveDraftStatus(t *testing.T) {
+	rt, client, err := bootShellTestRuntime(t.TempDir(), runtime.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rt.Shutdown("steep notes live draft cleanup") })
+	t.Cleanup(func() { client.Close() })
+
+	m := NewWithThemeAndNotifs(context.Background(), client, rt.Done(), theme.Nostalgia(), ui.ANSI256, notifications.NewManager(100, 3, 8))
+	m.motion.startupPhase = startupConsumed
+	m.setMode(modePrompt)
+	h := steep.NewHarness(t, m,
+		steep.WithWindowSize(100, 32),
+		steep.WithTimeout(30*time.Second),
+		steep.WithColor(steep.ColorANSI256),
+	)
+	h.Wait("Services: 15")
+
+	// Launch Notes and open its window.
+	h.Type("launch com.gostalgia.notes").Key("enter").Wait("Launched com.gostalgia.notes")
+	h.Key("ctrl+p").Wait("COMMAND PALETTE")
+	h.Type("switch to notes").Key("enter").Wait([]string{"Windows (1)", steepNotesTitle, "Saved (up to date)"})
+
+	// Enter a path and type multiline content without activating Save.
+	docPath := "/users/guest/documents/draft.txt"
+	h.Type(docPath)
+	h.Key("tab")
+	h.Type("Hello").Key("enter").Type("world")
+
+	h.Wait([]string{
+		"Notes - [Untitled]*",
+		"[Untitled] [modified]",
+		"Size: 11 runes · 11 bytes",
+		"Modified (unsaved changes)",
+	}).WaitNot([]string{"[saved]", "Saved (up to date)", "0 runes · 0 bytes"})
+
+	// Clearing the draft reverts the untitled view cleanly.
+	h.Key("ctrl+u").Wait([]string{
+		"[Untitled] [saved]",
+		"Size: 0 runes · 0 bytes",
+		"Saved (up to date)",
+	}).WaitNot([]string{"Notes - [Untitled]*", "[modified]", "Modified (unsaved changes)"})
+
+	// Grant write access, save a document, then edit and revert back to the saved text.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Call(ctx, "fs/grant", map[string]any{
+		"app_id":    "com.gostalgia.notes",
+		"path":      "/users/guest/documents",
+		"access":    "read-write",
+		"recursive": true,
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	h.Type("Saved note").Wait([]string{
+		"Notes - [Untitled]*",
+		"[Untitled] [modified]",
+		"Size: 10 runes · 10 bytes",
+		"Modified (unsaved changes)",
+	})
+	h.Key("tab").Key("enter").Wait([]string{
+		"Notes - draft.txt",
+		docPath + " [saved]",
+		"Size: 10 runes · 10 bytes",
+		"Saved " + docPath + " (10 bytes)",
+	}).WaitNot("Notes - draft.txt*")
+
+	// Editing the saved document immediately marks it modified and drops the Saved footer.
+	h.Key("shift+tab").Type("!").Wait([]string{
+		"Notes - draft.txt*",
+		docPath + " [modified]",
+		"Size: 11 runes · 11 bytes",
+		"Modified (unsaved changes)",
+	}).WaitNot([]string{docPath + " [saved]", "Saved " + docPath})
+
+	// Backspacing the edit reverts cleanly to saved state.
+	h.Key("backspace").Wait([]string{
+		"Notes - draft.txt",
+		docPath + " [saved]",
+		"Size: 10 runes · 10 bytes",
+		"Saved " + docPath + " (10 bytes)",
+	}).WaitNot([]string{"Notes - draft.txt*", "[modified]", "Modified (unsaved changes)"})
+}

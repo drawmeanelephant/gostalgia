@@ -342,6 +342,7 @@ func (n *Notes) saveLocked(ctx context.Context, targetPath string, content strin
 	}
 	if targetPath == "" {
 		n.dirty = true
+		n.lastStatus = ""
 		return fmt.Errorf("save: path is required (enter path or use Save As)")
 	}
 	if len(n.content) > MaxDocumentSize {
@@ -358,6 +359,7 @@ func (n *Notes) saveLocked(ctx context.Context, targetPath string, content strin
 	if statErr == nil {
 		if statOut.IsDir {
 			n.dirty = true
+			n.lastStatus = ""
 			return fmt.Errorf("save %s: destination is a directory", targetPath)
 		}
 		// If the file exists and was previously loaded, check if modified externally on disk.
@@ -366,6 +368,7 @@ func (n *Notes) saveLocked(ctx context.Context, targetPath string, content strin
 			n.conflictDiskModTime = statOut.ModTime
 			n.lastError = fmt.Sprintf("save conflict: file %s was modified externally on disk", targetPath)
 			n.dirty = true
+			n.lastStatus = ""
 			return fmt.Errorf("save conflict: file %s was modified externally", targetPath)
 		}
 	}
@@ -378,6 +381,7 @@ func (n *Notes) saveLocked(ctx context.Context, targetPath string, content strin
 	}, nil)
 	if saveErr != nil {
 		n.dirty = true // dirty state remains untouched on save failure!
+		n.lastStatus = ""
 		return fmt.Errorf("save %s: %w", targetPath, saveErr)
 	}
 
@@ -425,6 +429,7 @@ func (n *Notes) newLocked(ctx context.Context, force bool) error {
 // editLocked updates the in-memory content and synchronizes dirty/recovery state.
 func (n *Notes) editLocked(ctx context.Context, text string) error {
 	n.content = text
+	n.lastStatus = ""
 	if n.content != n.diskContent {
 		n.dirty = true
 		_ = n.stageRecoveryLocked(ctx)
@@ -440,10 +445,10 @@ func (n *Notes) view(ctx context.Context) (sdk.View, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.ensureRecoveryCheckedLocked(ctx)
-	return n.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
+	return n.viewLocked(sdk.PresentationRequestVersion(ctx), sdk.PresentationDraftValues(ctx)), nil
 }
 
-func (n *Notes) viewLocked(version int) sdk.View {
+func (n *Notes) viewLocked(version int, draft map[string]string) sdk.View {
 	dirtyMarker := ""
 	if n.dirty {
 		dirtyMarker = "*"
@@ -516,14 +521,32 @@ func (n *Notes) viewLocked(version int) sdk.View {
 		}
 
 	default:
-		title := fmt.Sprintf("Notes - %s%s", n.docDisplayName(), dirtyMarker)
+		viewContent := n.content
+		viewDirty := n.dirty
+		statusText := n.lastStatus
+		if version >= 3 && len(n.content) <= MaxAreaLength {
+			if draftContent, ok := draft[n.contentFieldID()]; ok && draftContent != n.content {
+				viewContent = draftContent
+				statusText = ""
+				if viewContent != n.diskContent {
+					viewDirty = true
+				} else if n.content != n.diskContent {
+					viewDirty = false
+				}
+			}
+		}
+
+		viewDirtyMarker := ""
+		if viewDirty {
+			viewDirtyMarker = "*"
+		}
+		title := fmt.Sprintf("Notes - %s%s", n.docDisplayName(), viewDirtyMarker)
 		docDetail := fmt.Sprintf("%s [saved]", n.docIdentity())
-		if n.dirty {
+		if viewDirty {
 			docDetail = fmt.Sprintf("%s [modified]", n.docIdentity())
 		}
-		statusText := n.lastStatus
 		if statusText == "" {
-			if n.dirty {
+			if viewDirty {
 				statusText = "Modified (unsaved changes)"
 			} else {
 				statusText = "Saved (up to date)"
@@ -538,7 +561,7 @@ func (n *Notes) viewLocked(version int) sdk.View {
 			// Contract v3 edits real documents in place: the multiline field
 			// carries the whole buffer instead of the single-line preview.
 			fields = append(fields, sdk.Field{
-				ID: n.contentFieldID(), Label: "Content", Value: n.content, Multiline: true,
+				ID: n.contentFieldID(), Label: "Content", Value: n.content, Multiline: true, Live: true,
 			})
 		case version >= 3:
 			// Larger than the multiline budget stays a read-only summary
@@ -556,7 +579,7 @@ func (n *Notes) viewLocked(version int) sdk.View {
 			Items: []sdk.Item{
 				{ID: "doc_info", Label: "Document", Detail: docDetail},
 				{ID: "mod_time", Label: "Disk Modified", Detail: nonBlank(n.loadedModTime, "Not saved to disk")},
-				{ID: "char_count", Label: "Size", Detail: fmt.Sprintf("%d runes · %d bytes", utf8.RuneCountInString(n.content), len(n.content))},
+				{ID: "char_count", Label: "Size", Detail: fmt.Sprintf("%d runes · %d bytes", utf8.RuneCountInString(viewContent), len(viewContent))},
 			},
 			Fields: fields,
 			Actions: []sdk.Action{
@@ -593,6 +616,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 	if n.prompt == PromptNone {
 		if hasContent && newContent != n.content {
 			n.content = newContent
+			n.lastStatus = ""
 			if n.content != n.diskContent {
 				n.dirty = true
 				_ = n.stageRecoveryLocked(ctx)
@@ -735,7 +759,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 		return sdk.View{}, fmt.Errorf("unknown action %q", p.Action)
 	}
 
-	return n.viewLocked(sdk.PresentationRequestVersion(ctx)), nil
+	return n.viewLocked(sdk.PresentationRequestVersion(ctx), nil), nil
 }
 
 // Programmatic IPC route handlers
