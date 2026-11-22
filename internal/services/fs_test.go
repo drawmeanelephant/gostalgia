@@ -603,3 +603,81 @@ func TestScopedGrantsOverIPC(t *testing.T) {
 		t.Fatalf("expected error mentioning revoked, got: %s", resp.Error)
 	}
 }
+
+func TestFSServiceSessionBoundGrantAndScope(t *testing.T) {
+	env := newTestEnv(t)
+	admin := security.AdminCapabilities()
+	appCaps := security.NewCapabilities(security.CapIPC, security.CapFileRead, security.CapFileWrite)
+	appPrincipal := security.Principal{Kind: security.PrincipalKindApp, AppID: "com.gostalgia.notes"}
+
+	resp := env.call(context.Background(), admin, "fs/grant", map[string]any{
+		"app_id":        "com.gostalgia.notes",
+		"path":          "/users/guest/documents/test-note.txt",
+		"access":        "read-write",
+		"recursive":     false,
+		"session_bound": true,
+	})
+	if !resp.OK {
+		t.Fatalf("issue session grant failed: %s", resp.Error)
+	}
+	var grantOut struct {
+		Grant struct {
+			ID           string `json:"id"`
+			Path         string `json:"path"`
+			Access       string `json:"access"`
+			Recursive    bool   `json:"recursive"`
+			SessionBound bool   `json:"session_bound"`
+		} `json:"grant"`
+	}
+	must(t, json.Unmarshal(resp.Data, &grantOut))
+	if !grantOut.Grant.SessionBound || grantOut.Grant.Recursive || grantOut.Grant.Path != "/users/guest/documents/test-note.txt" || grantOut.Grant.Access != "read-write" {
+		t.Fatalf("unexpected session grant: %+v", grantOut.Grant)
+	}
+
+	// App can save the granted file, but not a sibling in the same directory.
+	payload := base64.StdEncoding.EncodeToString([]byte("hello scoped world"))
+	resp = env.callAs(context.Background(), appPrincipal, appCaps, "fs/save", map[string]any{
+		"path":        "/users/guest/documents/test-note.txt",
+		"data_base64": payload,
+	})
+	if !resp.OK {
+		t.Fatalf("save to granted path failed: %s", resp.Error)
+	}
+
+	resp = env.callAs(context.Background(), appPrincipal, appCaps, "fs/save", map[string]any{
+		"path":        "/users/guest/documents/sibling.txt",
+		"data_base64": payload,
+	})
+	if resp.OK {
+		t.Fatal("save to sibling path should have been denied")
+	}
+
+	// Revoking app session grants revokes the session-bound grant immediately.
+	env.ctx.VFS.(*vfs.VFS).Grants().RevokeAppSession("com.gostalgia.notes")
+	resp = env.callAs(context.Background(), appPrincipal, appCaps, "fs/save", map[string]any{
+		"path":        "/users/guest/documents/test-note.txt",
+		"data_base64": payload,
+	})
+	if resp.OK {
+		t.Fatal("save after RevokeAppSession should have been denied")
+	}
+
+	// Ungrantable paths (profile trash, other app private storage) fail closed.
+	for _, badPath := range []string{
+		"/users/guest/.trash/evil.txt",
+		"/apps/data/com.gostalgia.echo/secret.txt",
+		"/apps/data",
+		"/",
+	} {
+		resp = env.call(context.Background(), admin, "fs/grant", map[string]any{
+			"app_id":        "com.gostalgia.notes",
+			"path":          badPath,
+			"access":        "read-write",
+			"recursive":     false,
+			"session_bound": true,
+		})
+		if resp.OK {
+			t.Fatalf("session grant unexpectedly succeeded for ungrantable path %q", badPath)
+		}
+	}
+}

@@ -162,6 +162,19 @@ type Region struct {
 	Text  string `json:"text"`
 }
 
+// PathGrantRequest is a declarative request from an app's presentation view
+// asking the experience to seek explicit operator approval for a single-path
+// VFS grant and retry the named action on approval. Recursive directory grants
+// are intentionally unrepresentable here: the experience always confirms with
+// the operator and issues a non-recursive, session-bound grant through operator
+// IPC only on approval. Version 3 and later.
+type PathGrantRequest struct {
+	Path   string `json:"path"`
+	Access string `json:"access"`
+	Action string `json:"action"`
+	Reason string `json:"reason,omitempty"`
+}
+
 // View is a complete snapshot, not a patch or a tree of speculative widgets.
 // Present supplies Version and Instance; Instance changes on every launch.
 // Blocks, meters, and grid are additive version-2 elements; a version-1
@@ -169,19 +182,20 @@ type Region struct {
 // additive version-3 elements; a snapshot stamped below version 3 must not
 // carry them.
 type View struct {
-	Version  int       `json:"version"`
-	Instance string    `json:"instance"`
-	Title    string    `json:"title"`
-	State    ViewState `json:"state"`
-	Items    []Item    `json:"items"`
-	Fields   []Field   `json:"fields"`
-	Actions  []Action  `json:"actions"`
-	Blocks   []Block   `json:"blocks,omitempty"`
-	Meters   []Meter   `json:"meters,omitempty"`
-	Grid     *Grid     `json:"grid,omitempty"`
-	Region   *Region   `json:"region,omitempty"`
-	Status   string    `json:"status"`
-	Error    string    `json:"error"`
+	Version      int               `json:"version"`
+	Instance     string            `json:"instance"`
+	Title        string            `json:"title"`
+	State        ViewState         `json:"state"`
+	Items        []Item            `json:"items"`
+	Fields       []Field           `json:"fields"`
+	Actions      []Action          `json:"actions"`
+	Blocks       []Block           `json:"blocks,omitempty"`
+	Meters       []Meter           `json:"meters,omitempty"`
+	Grid         *Grid             `json:"grid,omitempty"`
+	Region       *Region           `json:"region,omitempty"`
+	GrantRequest *PathGrantRequest `json:"grant_request,omitempty"`
+	Status       string            `json:"status"`
+	Error        string            `json:"error"`
 }
 
 type ViewRequest struct {
@@ -283,8 +297,8 @@ func (v View) Validate() error {
 	for _, block := range v.Blocks {
 		hasFocus = hasFocus || block.Focus != nil
 	}
-	if v.Version < 3 && (v.Region != nil || hasMultiline || hasFocus || hasLive) {
-		return fmt.Errorf("presentation: multiline fields, live fields, the scroll region, and block focus require version 3")
+	if v.Version < 3 && (v.Region != nil || hasMultiline || hasFocus || hasLive || v.GrantRequest != nil) {
+		return fmt.Errorf("presentation: multiline fields, live fields, the scroll region, block focus, and grant requests require version 3")
 	}
 	check := func(id, label string, seen map[string]bool) error {
 		if !entryPattern.MatchString(id) || len(id) > 64 || seen[id] ||
@@ -379,7 +393,43 @@ func (v View) Validate() error {
 			return fmt.Errorf("presentation: region %q exceeds line or size budget", r.ID)
 		}
 	}
+	if g := v.GrantRequest; g != nil {
+		if !validGrantRequestPath(g.Path) {
+			return fmt.Errorf("presentation: invalid grant request path %q", g.Path)
+		}
+		if g.Access != "read" && g.Access != "read-write" {
+			return fmt.Errorf("presentation: invalid grant request access %q", g.Access)
+		}
+		if !entryPattern.MatchString(g.Action) || len(g.Action) > 64 || len(g.Reason) > 512 {
+			return fmt.Errorf("presentation: invalid grant request action or reason")
+		}
+		found := false
+		for _, a := range v.Actions {
+			if a.ID == g.Action && !a.Disabled {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("presentation: grant request action %q is not an enabled action", g.Action)
+		}
+	}
 	return nil
+}
+
+func validGrantRequestPath(p string) bool {
+	if p == "" || len(p) > 1024 || !strings.HasPrefix(p, "/") || p == "/" || strings.HasSuffix(p, "/") {
+		return false
+	}
+	if strings.ContainsRune(p, '\\') || strings.ContainsRune(p, 0) {
+		return false
+	}
+	for _, seg := range strings.Split(p[1:], "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // focusTextStable reports whether the experience sanitizer leaves text

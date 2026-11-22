@@ -23,8 +23,11 @@ const (
 	// ID is the reverse-DNS identifier for Notes.
 	ID = "com.gostalgia.notes"
 
+	// AppPrivateDir is Notes' own app-private storage directory.
+	AppPrivateDir = "/apps/data/" + ID
+
 	// AppPrivateRecoveryPath is the recovery staging path in app-private storage.
-	AppPrivateRecoveryPath = "/apps/data/com.gostalgia.notes/recovery.json"
+	AppPrivateRecoveryPath = AppPrivateDir + "/recovery.json"
 
 	// MaxContentLength is the maximum presentation field length supported in version 1.
 	MaxContentLength = 4096
@@ -101,8 +104,9 @@ type Notes struct {
 	conflictDiskModTime string // external disk mod time on conflict
 
 	// Banners and status
-	lastError  string
-	lastStatus string
+	lastError    string
+	lastStatus   string
+	pendingGrant *sdk.PathGrantRequest
 }
 
 // Factory constructs a fresh, uninitialized Notes instance.
@@ -440,6 +444,178 @@ func (n *Notes) editLocked(ctx context.Context, text string) error {
 	return nil
 }
 
+type saveDenialKind int
+
+const (
+	saveDenialNone saveDenialKind = iota
+	saveDenialNeedsGrant
+	saveDenialReadOnlyGrant
+	saveDenialUngrantable
+	saveDenialRevoked
+	saveDenialReadOnlyMount
+	saveDenialMissingCap
+	saveDenialOtherPermission
+)
+
+func cleanGrantPath(raw string) (string, bool) {
+	if raw == "" || len(raw) > 1024 || !strings.HasPrefix(raw, "/") || raw == "/" || strings.HasSuffix(raw, "/") {
+		return "", false
+	}
+	if strings.ContainsRune(raw, '\\') || strings.ContainsRune(raw, 0) {
+		return "", false
+	}
+	for _, seg := range strings.Split(raw[1:], "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return "", false
+		}
+	}
+	return raw, true
+}
+
+func isProfileTrashPath(p string) bool {
+	trimmed := strings.TrimPrefix(p, "/")
+	parts := strings.Split(trimmed, "/")
+	return len(parts) >= 3 && parts[0] == "users" && parts[2] == ".trash"
+}
+
+func isForbiddenPrivatePath(p string) bool {
+	trimmed := strings.Trim(p, "/")
+	if trimmed == "apps/data" {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "apps/data/") {
+		owner := strings.SplitN(strings.TrimPrefix(trimmed, "apps/data/"), "/", 2)[0]
+		return owner != "" && owner != ID
+	}
+	return false
+}
+
+func extractPermissionCause(err error) string {
+	msg := err.Error()
+	if idx := strings.Index(msg, "permission denied: "); idx >= 0 {
+		msg = msg[idx+len("permission denied: "):]
+	} else if strings.HasPrefix(msg, "vfs: ") {
+		if parts := strings.SplitN(msg, ": ", 3); len(parts) == 3 {
+			msg = parts[2]
+		}
+	}
+	return strings.TrimSpace(msg)
+}
+
+func classifySaveDenial(targetPath string, err error) (saveDenialKind, string, string) {
+	if err == nil {
+		return saveDenialNone, "", ""
+	}
+	code := sdk.ErrorCode(err)
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	isPerm := code == sdk.CodePermissionDenied || code == sdk.CodeReadOnly || code == sdk.CodePolicyDenied ||
+		(code == "" && strings.Contains(lower, "permission denied"))
+	if !isPerm {
+		return saveDenialNone, "", ""
+	}
+	cause := extractPermissionCause(err)
+	if strings.Contains(lower, "cannot access profile trash") || isProfileTrashPath(targetPath) {
+		return saveDenialUngrantable, "", cause
+	}
+	if strings.Contains(lower, "cross-app access to private storage") ||
+		strings.Contains(lower, "cannot access app private storage root") ||
+		isForbiddenPrivatePath(targetPath) || targetPath == "/" {
+		return saveDenialUngrantable, "", cause
+	}
+	if strings.Contains(lower, "grant revoked") {
+		return saveDenialRevoked, "", cause
+	}
+	if strings.Contains(lower, "missing capability") {
+		return saveDenialMissingCap, "", cause
+	}
+	if strings.Contains(lower, "shared host mount is read-only") || code == sdk.CodePolicyDenied {
+		return saveDenialReadOnlyMount, "", cause
+	}
+	if code == sdk.CodeReadOnly || strings.Contains(lower, "granted read-only") {
+		if clean, ok := cleanGrantPath(targetPath); ok {
+			return saveDenialReadOnlyGrant, clean, cause
+		}
+		return saveDenialUngrantable, "", cause
+	}
+	if strings.Contains(lower, "outside app-private storage and has no grant") {
+		if clean, ok := cleanGrantPath(targetPath); ok {
+			return saveDenialNeedsGrant, clean, cause
+		}
+		return saveDenialUngrantable, "", cause
+	}
+	return saveDenialOtherPermission, "", cause
+}
+
+func formatSaveRouteError(targetPath string, err error) error {
+	kind, _, _ := classifySaveDenial(targetPath, err)
+	switch kind {
+	case saveDenialNeedsGrant:
+		return fmt.Errorf("%w; grant write access for this path or save under %s/", err, AppPrivateDir)
+	case saveDenialReadOnlyGrant:
+		return fmt.Errorf("%w; grant read-write access for this path or save to another path", err)
+	case saveDenialUngrantable:
+		return fmt.Errorf("%w; this path cannot be granted, choose a file in /users/guest/documents/ or %s/", err, AppPrivateDir)
+	case saveDenialRevoked:
+		return fmt.Errorf("%w; choose another path or re-grant access to this file", err)
+	default:
+		return err
+	}
+}
+
+func (n *Notes) recordSaveErrorLocked(targetPath, retryAction string, err error) {
+	n.pendingGrant = nil
+	kind, cleanPath, cause := classifySaveDenial(targetPath, err)
+	switch kind {
+	case saveDenialNeedsGrant:
+		n.lastError = fmt.Sprintf("Permission denied: Notes has no write grant for %s. Select Save to allow access to this file, or save under %s/.", cleanPath, AppPrivateDir)
+		if retryAction != "" {
+			n.pendingGrant = &sdk.PathGrantRequest{
+				Path:   cleanPath,
+				Access: "read-write",
+				Action: retryAction,
+				Reason: fmt.Sprintf("Save document to %s", cleanPath),
+			}
+		}
+	case saveDenialReadOnlyGrant:
+		n.lastError = fmt.Sprintf("Permission denied: %s is read-only for Notes. Select Save to allow writing to this file, or use Save As for another path.", cleanPath)
+		if retryAction != "" {
+			n.pendingGrant = &sdk.PathGrantRequest{
+				Path:   cleanPath,
+				Access: "read-write",
+				Action: retryAction,
+				Reason: fmt.Sprintf("Allow writing changes to %s", cleanPath),
+			}
+		}
+	case saveDenialUngrantable:
+		n.lastError = fmt.Sprintf("Permission denied for %s: %s. This path cannot be granted; choose a file in /users/guest/documents/ or %s/.", targetPath, cause, AppPrivateDir)
+	case saveDenialRevoked:
+		n.lastError = fmt.Sprintf("Permission denied for %s: access grant was revoked. Choose another path or ask an operator to re-grant access to this file.", targetPath)
+	case saveDenialReadOnlyMount:
+		n.lastError = fmt.Sprintf("Permission denied for %s: %s. Choose a writable path or update the shared folder policy.", targetPath, cause)
+	case saveDenialMissingCap:
+		n.lastError = fmt.Sprintf("Permission denied for %s: %s. Notes lacks the required write permission.", targetPath, cause)
+	case saveDenialOtherPermission:
+		n.lastError = fmt.Sprintf("Permission denied for %s: %s. Choose another path or save under %s/.", targetPath, cause, AppPrivateDir)
+	default:
+		n.lastError = err.Error()
+	}
+}
+
+func attachGrantRequest(v sdk.View, version int, req *sdk.PathGrantRequest) sdk.View {
+	if version < 3 || req == nil {
+		return v
+	}
+	for _, a := range v.Actions {
+		if a.ID == req.Action && !a.Disabled {
+			copyReq := *req
+			v.GrantRequest = &copyReq
+			return v
+		}
+	}
+	return v
+}
+
 // view constructs an sdk.View snapshot corresponding to the current state.
 func (n *Notes) view(ctx context.Context) (sdk.View, error) {
 	n.mu.Lock()
@@ -630,6 +806,8 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 		}
 	}
 
+	n.pendingGrant = nil
+
 	switch p.Action {
 	case "restore":
 		if n.recoveryDraft != nil {
@@ -656,7 +834,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 			target = newPath
 		}
 		if err := n.saveLocked(ctx, target, n.content, false, true); err != nil {
-			n.lastError = err.Error()
+			n.recordSaveErrorLocked(target, "save_and_proceed", err)
 		} else {
 			op, tgt := n.pendingAction, n.pendingPath
 			n.pendingAction, n.pendingPath = "", ""
@@ -694,7 +872,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 			target = newPath
 		}
 		if err := n.saveLocked(ctx, target, n.content, true, true); err != nil {
-			n.lastError = err.Error()
+			n.recordSaveErrorLocked(target, "force_save", err)
 		} else {
 			n.prompt = PromptNone
 			n.lastError = ""
@@ -706,7 +884,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 			target = newPath
 		}
 		if err := n.saveLocked(ctx, target, n.content, false, true); err != nil {
-			n.lastError = err.Error()
+			n.recordSaveErrorLocked(target, "save", err)
 		} else {
 			n.lastError = ""
 		}
@@ -720,7 +898,7 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 			n.lastError = "save as: path is required"
 		} else {
 			if err := n.saveLocked(ctx, target, n.content, false, true); err != nil {
-				n.lastError = err.Error()
+				n.recordSaveErrorLocked(target, "save_as", err)
 			} else {
 				n.lastError = ""
 			}
@@ -759,7 +937,10 @@ func (n *Notes) act(ctx context.Context, p sdk.ActionRequest) (sdk.View, error) 
 		return sdk.View{}, fmt.Errorf("unknown action %q", p.Action)
 	}
 
-	return n.viewLocked(sdk.PresentationRequestVersion(ctx), nil), nil
+	version := sdk.PresentationRequestVersion(ctx)
+	grantReq := n.pendingGrant
+	n.pendingGrant = nil
+	return attachGrantRequest(n.viewLocked(version, nil), version, grantReq), nil
 }
 
 // Programmatic IPC route handlers
@@ -837,7 +1018,7 @@ func (n *Notes) saveRoute(ctx context.Context, raw json.RawMessage) (any, error)
 	}
 
 	if err := n.saveLocked(ctx, target, content, p.Force, overwrite); err != nil {
-		return nil, err
+		return nil, formatSaveRouteError(target, err)
 	}
 
 	return map[string]any{
@@ -876,7 +1057,7 @@ func (n *Notes) saveAsRoute(ctx context.Context, raw json.RawMessage) (any, erro
 	}
 
 	if err := n.saveLocked(ctx, p.Path, content, false, overwrite); err != nil {
-		return nil, err
+		return nil, formatSaveRouteError(p.Path, err)
 	}
 
 	return map[string]any{

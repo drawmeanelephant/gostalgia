@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"gostalgia/internal/experience/theme"
 	"gostalgia/internal/experience/ui"
 	"gostalgia/internal/experience/windows"
@@ -70,14 +71,23 @@ type appView struct {
 }
 
 type viewMsg struct {
+	id           windows.ID
+	epoch, seq   uint64
+	draftSeq     uint64
+	version      int
+	data         sdk.View
+	err          error
+	action       bool
+	actionReq    sdk.ActionRequest
+	retriedGrant bool
+	refresh      bool
+}
+
+type grantPathMsg struct {
 	id         windows.ID
 	epoch, seq uint64
-	draftSeq   uint64
-	version    int
-	data       sdk.View
+	retry      sdk.ActionRequest
 	err        error
-	action     bool
-	refresh    bool
 }
 
 // viewSubscribedMsg carries the event subscription the shell opens once per
@@ -274,6 +284,9 @@ func (m *Model) cancelViewAction(v *appView) tea.Cmd {
 	v.busy = false
 	v.seq++
 	v.banner = "Canceled. Work already committed cannot be undone."
+	if v.request == "" {
+		return nil
+	}
 	params := sdk.CancelRequest{Version: v.version, Instance: v.instance, RequestID: v.request}
 	ctx, client, id := context.WithoutCancel(m.ctx), m.client, v.id
 	return func() tea.Msg {
@@ -485,6 +498,7 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 				v.cancel = nil
 			}
 		}
+		var cmds []tea.Cmd
 		if msg.err != nil {
 			v.banner = safe(msg.err.Error())
 			if v.instance == "" {
@@ -502,14 +516,36 @@ func (m *Model) updatePresentation(msg tea.Msg) tea.Cmd {
 			m.windows.Retitle(msg.id, viewText(v.data.Title))
 			m.pruneGridHover()
 			v.banner = ""
+			if msg.action && !msg.retriedGrant && msg.data.GrantRequest != nil {
+				if cmd := m.openGrantConfirm(v, msg.actionReq, *msg.data.GrantRequest); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+			}
 		}
 		if msg.action && v.id == settingsAppID {
-			return m.fetchConfigCmd()
-		}
-		if v.refreshQueued && !v.busy && !v.refreshing {
+			cmds = append(cmds, m.fetchConfigCmd())
+		} else if v.refreshQueued && !v.busy && !v.refreshing {
 			v.refreshQueued = false
-			return m.refreshView(v)
+			cmds = append(cmds, m.refreshView(v))
 		}
+		if len(cmds) > 0 {
+			return tea.Batch(cmds...)
+		}
+	case grantPathMsg:
+		v := m.views[msg.id]
+		if v == nil || msg.epoch != v.epoch || msg.seq != v.seq {
+			return nil
+		}
+		v.busy = false
+		if v.cancel != nil {
+			v.cancel()
+			v.cancel = nil
+		}
+		if msg.err != nil {
+			v.banner = safe(msg.err.Error())
+			return nil
+		}
+		return m.dispatchViewAction(v, msg.retry, true)
 	case viewTickMsg:
 		if v := m.views[msg.id]; v != nil && msg.epoch == v.epoch {
 			return m.checkView(v)
@@ -629,7 +665,7 @@ func (v *appView) scrollBlock(delta int) {
 // meters, and the focus-windowed secondary flow. A narrow body keeps controls
 // whole and leaves the block to the inspection route.
 func (m *Model) viewPanes(v *appView, width, height int) presentationPanes {
-	visible := max(1, height-len(m.viewHeader(v, width))-1)
+	visible := max(1, height-len(m.viewHeader(v, width, height))-1)
 	block := v.focalBlock()
 	if block == nil {
 		return presentationPanes{secondary: visible}
@@ -811,12 +847,16 @@ func (v *appView) moveCell(dcol, drow int) {
 // Callers set Action, CellID, and ItemID; the request picks up the negotiated
 // version, instance, a bounded request ID, and current field values.
 func (m *Model) viewRun(v *appView, p sdk.ActionRequest) tea.Cmd {
-	p.Version, p.Instance = v.version, v.instance
-	p.RequestID = "r" + strings.ToLower(rand.Text())
 	p.Values = make(map[string]string, len(v.values))
 	for id, value := range v.values {
 		p.Values[id] = value
 	}
+	return m.dispatchViewAction(v, p, false)
+}
+
+func (m *Model) dispatchViewAction(v *appView, p sdk.ActionRequest, retriedGrant bool) tea.Cmd {
+	p.Version, p.Instance = v.version, v.instance
+	p.RequestID = "r" + strings.ToLower(rand.Text())
 	v.seq++
 	v.request, v.busy, v.banner, v.refreshQueued = p.RequestID, true, "", false
 	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
@@ -840,7 +880,55 @@ func (m *Model) viewRun(v *appView, p sdk.ActionRequest) tea.Cmd {
 			}, nil)
 			stop()
 		}
-		return viewMsg{id: windows.ID(id), epoch: epoch, seq: seq, version: p.Version, data: data, err: err, action: true}
+		return viewMsg{
+			id: windows.ID(id), epoch: epoch, seq: seq, version: p.Version,
+			data: data, err: err, action: true, actionReq: p, retriedGrant: retriedGrant,
+		}
+	}
+}
+
+// grantPathAndRetry issues a single-path, non-recursive, session-bound VFS
+// grant approved by the operator and then retries the original app action.
+func (m *Model) grantPathAndRetry(c confirmation) tea.Cmd {
+	v := m.views[c.grantWindow]
+	if v == nil || v.epoch != c.grantEpoch {
+		return nil
+	}
+	v.seq++
+	v.request, v.busy, v.banner = "", true, ""
+	ctx, cancel := context.WithTimeout(m.ctx, 10*time.Second)
+	v.cancel = cancel
+	epoch, seq, client := v.epoch, v.seq, m.client
+	return func() tea.Msg {
+		defer cancel()
+		if c.grantAccess == "read-write" {
+			var statOut struct {
+				IsDir bool `json:"is_dir"`
+			}
+			if statErr := client.Call(ctx, "fs/stat", map[string]string{"path": c.grantPath}, &statOut); statErr == nil && statOut.IsDir {
+				return grantPathMsg{
+					id:    c.grantWindow,
+					epoch: epoch,
+					seq:   seq,
+					err:   fmt.Errorf("cannot grant file write access to directory %s: include a file name (e.g. %s/note.txt)", c.grantPath, strings.TrimSuffix(c.grantPath, "/")),
+				}
+			}
+		}
+		if err := client.Call(ctx, "fs/grant", map[string]any{
+			"app_id":        c.appID,
+			"path":          c.grantPath,
+			"access":        c.grantAccess,
+			"recursive":     false,
+			"session_bound": true,
+		}, nil); err != nil {
+			return grantPathMsg{
+				id:    c.grantWindow,
+				epoch: epoch,
+				seq:   seq,
+				err:   fmt.Errorf("could not grant %s access to %s: %w", c.grantAccess, c.grantPath, err),
+			}
+		}
+		return grantPathMsg{id: c.grantWindow, epoch: epoch, seq: seq, retry: c.grantReq}
 	}
 }
 
@@ -1109,8 +1197,32 @@ func (m *Model) activateViewTarget(v *appView, t viewTarget) tea.Cmd {
 
 func viewText(s string) string { return strings.ReplaceAll(safe(s), "\n", " ") }
 
+// wrapErrorLines word-wraps an error or banner string to width cells across at
+// most maxLines lines so causes and next steps remain readable without pushing
+// interactive controls off screen.
+func (m *Model) wrapErrorLines(text string, width, maxLines int) []string {
+	clean := viewText(text)
+	if clean == "" {
+		return nil
+	}
+	if width <= 0 {
+		return []string{m.kit.StatusText(clean, theme.Error)}
+	}
+	wrapped := ui.Wrap(ansi.Wrap(clean, width, ""), width)
+	parts := strings.Split(wrapped, "\n")
+	if maxLines > 0 && len(parts) > maxLines {
+		parts = parts[:maxLines]
+		parts[maxLines-1] = m.kit.Truncate(parts[maxLines-1]+m.kit.Hint("…"), width)
+	}
+	out := make([]string, 0, len(parts))
+	for _, line := range parts {
+		out = append(out, m.kit.StatusText(line, theme.Error))
+	}
+	return out
+}
+
 // viewHeader is v's title, key hints and state lines, width cells wide.
-func (m *Model) viewHeader(v *appView, width int) []string {
+func (m *Model) viewHeader(v *appView, width, height int) []string {
 	hints := "Tab focus · Enter action · ↑↓ item · Esc cancel/back"
 	switch {
 	case v.grid() != nil && v.region() != nil:
@@ -1140,11 +1252,15 @@ func (m *Model) viewHeader(v *appView, width int) []string {
 	if v.busy || v.data.State == sdk.ViewLoading {
 		lines = append(lines, m.kit.Badge(m.kit.Hint("Loading…"), theme.Busy, max(0, width)))
 	}
+	maxErrLines := 6
+	if height > 0 {
+		maxErrLines = max(1, min(6, height-4))
+	}
 	if v.banner != "" {
-		lines = append(lines, m.kit.StatusText(viewText(v.banner), theme.Error))
+		lines = append(lines, m.wrapErrorLines(v.banner, width, maxErrLines)...)
 	}
 	if v.data.Error != "" {
-		lines = append(lines, m.kit.StatusText(viewText(v.data.Error), theme.Error))
+		lines = append(lines, m.wrapErrorLines(v.data.Error, width, maxErrLines)...)
 	}
 	return lines
 }
@@ -1154,7 +1270,7 @@ func (m *Model) viewHeader(v *appView, width int) []string {
 // bubbles/viewport (issue #185); regionPinned means "stay at the tail", so
 // GotoBottom is the pin.
 func (m *Model) regionWindow(v *appView, width, height int) (window, top int) {
-	visible := max(1, height-len(m.viewHeader(v, width))-1)
+	visible := max(1, height-len(m.viewHeader(v, width, height))-1)
 	window = min(20, max(4, visible/2))
 	if p := m.viewPanes(v, width, height); p.primary > 0 {
 		// Beside a focal block the region lives in the independently
@@ -1208,7 +1324,7 @@ func (m *Model) inspectLayout(v *appView, width, height int) []string {
 // navigation clears it and returns to the control window, while Enter still
 // reaches the focused action so the same key can toggle a panel shut.
 func (m *Model) surfaceLayout(v *appView, width, height int) []string {
-	lines := m.viewHeader(v, width)
+	lines := m.viewHeader(v, width, height)
 	contentRows := max(1, height-len(lines)-1)
 	label := viewText(v.region().Label)
 	if label != "" && contentRows > 1 {
@@ -1238,7 +1354,7 @@ func (m *Model) viewLayout(v *appView, width, height int) ([]string, []viewTarge
 	if v.surface != "" && v.region() != nil && v.region().ID == v.surface {
 		return m.surfaceLayout(v, width, height), nil
 	}
-	lines := m.viewHeader(v, width)
+	lines := m.viewHeader(v, width, height)
 	var rows []string
 	// rowTargets holds the targets on each row, by its index in rows.
 	rowTargets := map[int][]viewTarget{}

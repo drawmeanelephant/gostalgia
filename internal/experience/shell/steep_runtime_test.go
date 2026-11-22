@@ -3,6 +3,7 @@ package shell
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -629,4 +630,63 @@ func finalSGRResetsPen(out []byte) (last string, ok bool) {
 		}
 	}
 	return string(final[0]), true
+}
+
+func TestSteepNotesScopedSaveFlow(t *testing.T) {
+	h, client := newSteepRuntime(t, steep.WithWindowSize(100, 32))
+
+	const docPath = "/users/guest/documents/test-note.txt"
+	const docBody = "hello steep note"
+
+	// Reproduce Issue #292 step-by-step in a real 100x32 terminal:
+	// Open Apps, filter for notes, launch it, then F4 to view it.
+	h.Key("f2").Wait("SEARCH: type to filter apps...")
+	h.Type("com.gostalgia.notes").Wait("Enter launches Notes")
+	h.Key("enter").Wait("Notes is LIVE")
+	steepAppRunning(t, client, "com.gostalgia.notes", true)
+	h.Key("f4").Wait("Notes - [Untitled]")
+
+	// Enter path, tab to content, type content, tab to Save, press Enter.
+	h.Type(docPath).Key("tab").Type(docBody).Key("tab").Key("enter")
+	h.Wait([]string{"Allow Notes file access?", docPath, "Only this path is granted."})
+
+	// Declining with Esc keeps document modified and shows full cause + next step without truncation.
+	h.KeyEsc().WaitNot("Allow Notes file access?")
+	h.Wait([]string{"no write grant", "/apps/data/com.gostalgia.notes/."})
+
+	// Selecting Save again and approving (Tab -> Enter) grants single-path session access and saves.
+	h.Key("enter").Wait("Allow Notes file access?")
+	h.Key("tab").Key("enter").Wait("Saved " + docPath)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	var readOut struct {
+		DataBase64 string `json:"data_base64"`
+	}
+	if err := client.Call(ctx, "fs/read", map[string]string{"path": docPath}, &readOut); err != nil {
+		t.Fatalf("fs/read saved note: %v", err)
+	}
+	got, err := base64.StdEncoding.DecodeString(readOut.DataBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != docBody {
+		t.Fatalf("saved note = %q, want %q", string(got), docBody)
+	}
+
+	var grantsOut struct {
+		Grants []struct {
+			Path         string `json:"path"`
+			Access       string `json:"access"`
+			Recursive    bool   `json:"recursive"`
+			SessionBound bool   `json:"session_bound"`
+		} `json:"grants"`
+	}
+	if err := client.Call(ctx, "fs/grant/list", map[string]string{"app_id": "com.gostalgia.notes"}, &grantsOut); err != nil {
+		t.Fatalf("fs/grant/list: %v", err)
+	}
+	if len(grantsOut.Grants) != 1 || grantsOut.Grants[0].Path != docPath || grantsOut.Grants[0].Access != "read-write" ||
+		grantsOut.Grants[0].Recursive || !grantsOut.Grants[0].SessionBound {
+		t.Fatalf("expected single minimal session-bound grant, got %+v", grantsOut.Grants)
+	}
 }

@@ -870,3 +870,177 @@ func TestLiveDraftPreviewReflectsUnsavedStatusAndSize(t *testing.T) {
 			v.Title, itemDetail(t, v, "char_count"))
 	}
 }
+
+func TestSavePermissionDenialsAndGrantRequests(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("missing grant requests scoped path grant and clears on view poll", func(t *testing.T) {
+		h := setupNotesTest(t)
+		target := "/users/guest/documents/test-note.txt"
+		h.vfs.saveFail = &sdk.Error{
+			Code:    sdk.CodePermissionDenied,
+			Message: fmt.Sprintf(`vfs: save %s: permission denied: path %q is outside app-private storage and has no grant for app %q`, target, target, ID),
+		}
+
+		v, err := h.act(ctx, "save", map[string]string{
+			h.notes.pathFieldID():    target,
+			h.notes.contentFieldID(): "hello notes",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := v.Validate(); err != nil {
+			t.Fatalf("view invalid: %v", err)
+		}
+		if !h.notes.dirty {
+			t.Fatal("expected document to stay dirty on denied save")
+		}
+		if v.GrantRequest == nil {
+			t.Fatal("expected scoped GrantRequest on missing-grant save")
+		}
+		if v.GrantRequest.Path != target || v.GrantRequest.Access != "read-write" || v.GrantRequest.Action != "save" {
+			t.Fatalf("unexpected GrantRequest: %+v", v.GrantRequest)
+		}
+		if !strings.Contains(v.Error, "no write grant") || !strings.Contains(v.Error, AppPrivateDir) {
+			t.Fatalf("error lacks cause or next step: %q", v.Error)
+		}
+
+		// Subsequent view poll must not re-emit the one-shot GrantRequest.
+		polled, err := h.handlers["view"](ctx, json.RawMessage(`{"version":3}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if polled.(sdk.View).GrantRequest != nil {
+			t.Fatalf("view poll unexpectedly kept GrantRequest: %+v", polled.(sdk.View).GrantRequest)
+		}
+	})
+
+	t.Run("read-only grant requests read-write upgrade", func(t *testing.T) {
+		h := setupNotesTest(t)
+		target := "/users/guest/documents/existing.txt"
+		h.vfs.saveFail = &sdk.Error{
+			Code:    sdk.CodeReadOnly,
+			Message: fmt.Sprintf(`vfs: save %s: permission denied: path %q granted read-only, write access requires read-write grant`, target, target),
+		}
+
+		v, err := h.act(ctx, "save_as", map[string]string{
+			h.notes.pathFieldID():    target,
+			h.notes.contentFieldID(): "edited",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.GrantRequest == nil || v.GrantRequest.Path != target || v.GrantRequest.Access != "read-write" || v.GrantRequest.Action != "save_as" {
+			t.Fatalf("unexpected GrantRequest: %+v", v.GrantRequest)
+		}
+		if !strings.Contains(v.Error, "read-only") || !strings.Contains(v.Error, "Save") {
+			t.Fatalf("error lacks cause or next step: %q", v.Error)
+		}
+	})
+
+	t.Run("ungrantable paths never emit grant request and explain why", func(t *testing.T) {
+		cases := []struct {
+			name    string
+			path    string
+			errMsg  string
+			wantSub string
+		}{
+			{
+				name:    "profile trash",
+				path:    "/users/guest/.trash/info/1.json",
+				errMsg:  `vfs: save /users/guest/.trash/info/1.json: permission denied: cannot access profile trash`,
+				wantSub: "cannot access profile trash",
+			},
+			{
+				name:    "other app private storage",
+				path:    "/apps/data/com.gostalgia.echo/secret.txt",
+				errMsg:  `vfs: save /apps/data/com.gostalgia.echo/secret.txt: permission denied: cross-app access to private storage of "com.gostalgia.echo" is forbidden`,
+				wantSub: "cross-app access",
+			},
+			{
+				name:    "revoked grant",
+				path:    "/users/guest/documents/revoked.txt",
+				errMsg:  `vfs: save /users/guest/documents/revoked.txt: permission denied: grant revoked`,
+				wantSub: "revoked",
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				h := setupNotesTest(t)
+				h.vfs.saveFail = &sdk.Error{Code: sdk.CodePermissionDenied, Message: tc.errMsg}
+				v, err := h.act(ctx, "save", map[string]string{
+					h.notes.pathFieldID():    tc.path,
+					h.notes.contentFieldID(): "nope",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := v.Validate(); err != nil {
+					t.Fatalf("view invalid: %v", err)
+				}
+				if v.GrantRequest != nil {
+					t.Fatalf("unexpected GrantRequest for %s: %+v", tc.name, v.GrantRequest)
+				}
+				if !strings.Contains(strings.ToLower(v.Error), tc.wantSub) {
+					t.Fatalf("error = %q, want substring %q", v.Error, tc.wantSub)
+				}
+				if strings.Count(strings.ToLower(v.Error), "cannot be granted") > 1 {
+					t.Fatalf("error duplicated guidance: %q", v.Error)
+				}
+			})
+		}
+	})
+
+	t.Run("v1 action omits GrantRequest while preserving clear error", func(t *testing.T) {
+		h := setupNotesTest(t)
+		target := "/users/guest/documents/v1.txt"
+		h.vfs.saveFail = &sdk.Error{
+			Code:    sdk.CodePermissionDenied,
+			Message: fmt.Sprintf(`vfs: save %s: permission denied: path %q is outside app-private storage and has no grant for app %q`, target, target, ID),
+		}
+		currView, err := h.view(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(sdk.ActionRequest{
+			Version:   1,
+			Instance:  currView.Instance,
+			RequestID: "v1_save",
+			Action:    "save",
+			Values: map[string]string{
+				h.notes.pathFieldID():    target,
+				h.notes.contentFieldID(): "v1 text",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		res, err := h.handlers["action"](ctx, raw)
+		if err != nil {
+			t.Fatalf("v1 action failed: %v", err)
+		}
+		v := res.(sdk.View)
+		if v.GrantRequest != nil {
+			t.Fatalf("v1 view must not carry GrantRequest: %+v", v.GrantRequest)
+		}
+		if !strings.Contains(v.Error, "no write grant") {
+			t.Fatalf("v1 error missing cause: %q", v.Error)
+		}
+	})
+
+	t.Run("non-interactive save route returns cause and next step", func(t *testing.T) {
+		h := setupNotesTest(t)
+		target := "/users/guest/documents/direct.txt"
+		h.vfs.saveFail = &sdk.Error{
+			Code:    sdk.CodePermissionDenied,
+			Message: fmt.Sprintf(`vfs: save %s: permission denied: path %q is outside app-private storage and has no grant for app %q`, target, target, ID),
+		}
+		_, err := h.notes.saveRoute(ctx, json.RawMessage(`{"path":"/users/guest/documents/direct.txt","content":"hi"}`))
+		if err == nil {
+			t.Fatal("expected saveRoute error")
+		}
+		if !strings.Contains(err.Error(), "has no grant") || !strings.Contains(err.Error(), AppPrivateDir) {
+			t.Fatalf("saveRoute error lacks cause or next step: %v", err)
+		}
+	})
+}
