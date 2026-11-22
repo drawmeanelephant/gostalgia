@@ -421,7 +421,7 @@ func TestNotesScopedSaveInFreshWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		client.Close()
+		_ = client.Close()
 		rt.Shutdown("notes scoped save test")
 	})
 
