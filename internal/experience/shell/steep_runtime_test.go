@@ -300,8 +300,9 @@ func TestSteepRuntimeScenarios(t *testing.T) {
 		h, client := newSteepRuntime(t)
 		h.Key("f2").Wait("SEARCH: type to filter apps...")
 		h.Type("dog").Wait("com.gostalgia.dogcalc")
-		// "dog" matches Calculator's description first; Down selects Dogcalc.
-		h.Key("down").Wait("Enter launches Dogcalc")
+		// Dogcalc's name-prefix match ranks ahead of Calculator's description
+		// match, so it is already selected.
+		h.Wait("Enter launches Dogcalc")
 		steepAppRunning(t, client, "com.gostalgia.dogcalc", false)
 		// First Enter launches Dogcalc and makes its window visible.
 		h.Key("enter").Wait([]string{"Windows (1)", "Dogcalc", "BOOP ="})
